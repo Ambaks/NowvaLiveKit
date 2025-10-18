@@ -1,0 +1,106 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Session files (contains encryption keys - DO NOT COMMIT)
+.session.dat
+.session.key
+session.dat
+session.key
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+migrations/versions/*.pyc
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# Testing
+.pytest_cache/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Media files (recordings, temp audio/video)
+*.wav
+*.mp3
+*.mp4
+*.avi
+*.pdf
+recordings/
+uploads/
+
+# LiveKit specific
+.livekit/
+*.room
+
+# AI/ML models (if storing locally)
+models/*.pt
+models/*.pth
+models/*.h5
+models/*.pkl
+checkpoints/
+*.ckpt
+
+# User data (ensure no sensitive data is committed)
+user_data/
+downloads/

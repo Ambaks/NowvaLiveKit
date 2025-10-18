@@ -1,0 +1,36 @@
+# LiveKit Voice Agent Requirements - Updated versions
+
+# Core LiveKit packages
+livekit>=0.11.0
+livekit-agents>=0.8.0
+
+# Plugin packages
+livekit-plugins-openai>=0.6.0      # OpenAI integration (STT/LLM/TTS)
+livekit-plugins-deepgram>=0.5.0    # Optional: High-quality STT
+livekit-plugins-silero>=0.5.0      # VAD (Voice Activity Detection)
+
+# Alternative plugins (optional - uncomment if needed)
+# livekit-plugins-elevenlabs>=0.4.0  # Alternative TTS
+# livekit-plugins-cartesia>=0.2.0    # Alternative low-latency TTS
+# livekit-plugins-azure>=0.5.0       # Azure STT/TTS
+# livekit-plugins-google>=0.5.0      # Google STT/TTS
+
+# Audio processing
+numpy>=1.24.0
+sounddevice>=0.4.6
+
+# Async support
+aiohttp>=3.9.0
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Optional: For Redis-based conversation memory
+# redis>=5.0.0
+numpy
+livekit-agents
+livekit-plugins-openai
+livekit-plugins-silero
+chatterbox-tts
+torch
+cryptography
