@@ -21,6 +21,9 @@ pip-delete-this-directory.txt
 session.dat
 session.key
 
+# Agent state files (user-specific data)
+.agent_state_*.json
+
 # Database
 *.db
 *.sqlite

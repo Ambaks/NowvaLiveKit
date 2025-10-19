@@ -6,7 +6,7 @@ Simple test to verify UNIX socket communication works
 
 import time
 import threading
-from ipc_communication import IPCServer, IPCClient
+from core.ipc_communication import IPCServer, IPCClient
 
 
 def test_ipc():

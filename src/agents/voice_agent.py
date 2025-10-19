@@ -1,6 +1,6 @@
 """
-Onboarding Voice Agent with Function Calling
-Handles new user onboarding with voice conversation using structured tool use
+Nova Voice Agent - Mode-Aware Voice Assistant
+Handles onboarding, main menu, and workout modes with function calling
 """
 
 import asyncio
@@ -13,37 +13,57 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, openai, silero, inworld
+from livekit.plugins import openai
+# Note: Realtime API handles STT+LLM+TTS - no separate plugins needed
 
 # User management imports
 from auth.user_management import create_user_account
 
+# State management imports
+from core.agent_state import AgentState
 
-# Shared data store for onboarding
-onboarding_data = {
-    'first_name': None,
-    'email': None,
-    'completed': False
-}
+# IPC communication
+from core.ipc_communication import IPCClient
 
 
-class OnboardingAgent(Agent):
-    """Agent specifically for onboarding new users using function calling"""
+class NovaVoiceAgent(Agent):
+    """Mode-aware voice agent that handles all user interactions"""
 
-    def __init__(self) -> None:
-        # Track what has been captured
+    def __init__(self, state: AgentState = None, ipc_client: IPCClient = None) -> None:
+        # State management
+        self.state = state if state else AgentState()
+        self.ipc_client = ipc_client  # IPC to communicate with main.py
+
+        # Onboarding-specific tracking
         self.temp_first_name = None
         self.temp_email = None
         self.first_name_confirmed = False
         self.email_confirmed = False
-
-        # Track retry attempts
         self.first_name_retry_count = 0
         self.email_retry_count = 0
         self.max_retries = 3
 
-        super().__init__(
-            instructions="""
+        # Get initial instructions based on mode
+        instructions = self._get_instructions_for_mode()
+
+        super().__init__(instructions=instructions)
+
+    def _get_instructions_for_mode(self) -> str:
+        """Get instructions based on current mode"""
+        mode = self.state.get_mode()
+
+        if mode == "onboarding":
+            return self._get_onboarding_instructions()
+        elif mode == "main_menu":
+            return self._get_main_menu_instructions()
+        elif mode == "workout":
+            return self._get_workout_instructions()
+        else:
+            return self._get_onboarding_instructions()
+
+    def _get_onboarding_instructions(self) -> str:
+        """Instructions for onboarding mode"""
+        return """
 You are Nova, a friendly AI fitness coach helping onboard a new user to the Nowva smart squat rack system.
 
 IMPORTANT RULES:
@@ -94,13 +114,88 @@ CRITICAL RULES:
 - Let the user express confirmation/rejection naturally - understand context and intent
 - Call the appropriate confirmation or retry function based on what they actually mean
 """
-        )
+
+    def _get_main_menu_instructions(self) -> str:
+        """Instructions for main menu mode"""
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        return f"""
+You are Nova, a friendly AI fitness coach for the Nowva smart squat rack system.
+
+The user's name is {name}. You are in MAIN MENU mode.
+
+IMPORTANT RULES:
+- Keep responses SHORT: Maximum 1-2 sentences
+- Be warm, helpful, and conversational
+- Listen for what the user wants to do
+
+AVAILABLE OPTIONS:
+1. Start a workout - User says things like "start workout", "let's train", "I'm ready to lift"
+   → Call start_workout() function
+
+2. View progress - User asks about stats, progress, history
+   → Call view_progress() function
+
+3. Update profile - User wants to change settings, update info
+   → Call update_profile() function
+
+CRITICAL RULES:
+- Always use the appropriate function when user requests an action
+- If unclear what they want, ask a clarifying question
+- Be encouraging and motivating
+"""
+
+    def _get_workout_instructions(self) -> str:
+        """Instructions for workout mode"""
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        return f"""
+You are Nova, a friendly AI fitness coach for the Nowva smart squat rack system.
+
+The user's name is {name}. You are in WORKOUT mode.
+
+IMPORTANT RULES:
+- Keep responses SHORT: Maximum 1-2 sentences
+- Be energetic, motivating, and supportive
+- You are actively coaching them through their workout
+
+DURING WORKOUT:
+- Provide real-time form feedback based on pose estimation data
+- Count reps and encourage them
+- Alert them to form issues immediately
+- Celebrate good sets
+- If they want to stop: call end_workout() function
+
+CRITICAL RULES:
+- Stay focused on the current workout
+- Be positive but correct form issues quickly
+- Keep them safe and motivated
+"""
 
     async def on_enter(self):
-        """Entry point - start welcome message"""
-        await self.session.generate_reply(
-            instructions="Start the onboarding. Say: 'Hey! I'm Nova, your AI coach for the Nowva smart rack. I'll track your form and help build programs. What's your first name?'"
-        )
+        """Entry point - generate appropriate greeting based on mode"""
+        mode = self.state.get_mode()
+
+        if mode == "onboarding":
+            await self.session.generate_reply(
+                instructions="Start the onboarding. Say: 'Hey! It's great to meet you, I'm Nova, your AI coach for the Nowva smart rack. What's your first name?'"
+            )
+        elif mode == "main_menu":
+            # Main menu mode - greet returning users
+            user = self.state.get_user()
+            name = user.get("name", "there")
+
+            await self.session.generate_reply(
+                instructions=f"Welcome {name} back to the main menu. Say: 'Hey {name}, welcome back! Ready to start a workout or check your progress?' Keep it friendly and brief."
+            )
+        elif mode == "workout":
+            user = self.state.get_user()
+            name = user.get("name", "there")
+            await self.session.generate_reply(
+                instructions=f"Start the workout mode. Say: 'Alright {name}, let's do this! I'm tracking your form and counting reps. When you're ready, step up to the rack.'"
+            )
 
     # Tool 1: Capture first name
     @function_tool
@@ -219,24 +314,45 @@ CRITICAL RULES:
 
         print(f"[DEBUG] Email '{self.temp_email}' confirmed by user!")
 
-        # Save the data
-        global onboarding_data
-        onboarding_data['first_name'] = self.temp_first_name
-        onboarding_data['email'] = self.temp_email
-        onboarding_data['completed'] = True
-
         # Create user account in database
+        user_id = None
+        username = None
         try:
             user, username = create_user_account(self.temp_first_name, self.temp_email)
+            user_id = str(user.id)
             print(f"ONBOARDING_USERNAME: {username}")
-            print(f"ONBOARDING_USER_ID: {user.id}")
+            print(f"ONBOARDING_USER_ID: {user_id}")
+
+            # Update state with user information
+            self.state.update_user(
+                id=user_id,
+                name=self.temp_first_name,
+                email=self.temp_email,
+                username=username
+            )
+
+            # Mark onboarding complete in state
+            # DON'T mark main_menu as visited yet - let on_enter handle first greeting
+            self.state.switch_mode("main_menu")
+            self.state.save_state()
+
+            print("\n[ONBOARDING] User account created successfully")
+            print("[ONBOARDING] State updated - ready for main menu")
+
         except Exception as e:
             print(f"[ERROR] User account creation failed: {str(e)}")
             # Continue even if database creation fails
 
+        # Output markers for main.py to capture
+        print(f"ONBOARDING_FIRST_NAME: {self.temp_first_name}")
+        print(f"ONBOARDING_EMAIL: {self.temp_email}")
+        print(f"ONBOARDING_COMPLETE")
 
-        # Return instruction to the LLM
-        return None, "Onboarding is complete! Give them a warm acknowledgment and say you're ready to get started. Keep it brief and enthusiastic."
+        # Return instruction to the LLM - welcome + brief feature intro in ONE message
+        # After this returns, the agent will speak and then we can exit
+        result = None, f"Say warmly and enthusiastically: 'Welcome aboard, {self.temp_first_name}! You're all set up. [breathe] I'm Nova, your AI fitness coach. I'll track your form, count your reps, and help you build custom programs. Ready to get started?' Keep it energetic but natural."
+
+        return result
 
     # Tool 6: Email was incorrect - retry OR correct with new email
     @function_tool
@@ -290,48 +406,168 @@ CRITICAL RULES:
 
             return None, "The user said their email was not correct. Say 'No worries!' and ask for their email again."
 
+    # ===== MAIN MENU TOOLS =====
+
+    @function_tool
+    async def start_workout(self, context: RunContext):
+        """
+        Call this when the user wants to start a workout.
+        User might say: "start workout", "let's train", "I'm ready", "begin workout"
+        """
+        print("[MAIN MENU] User requested to start workout")
+
+        # Switch to workout mode (main.py monitors state file)
+        self.state.switch_mode("workout")
+        self.state.save_state()
+        print("[STATE] Switched to workout mode - main.py will detect and start pose estimation")
+
+        # Return instruction to transition to workout mode
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        return None, f"The user wants to start a workout. Say enthusiastically: 'Alright {name}, let's do this! I'm tracking your form and counting reps. When you're ready, step up to the rack.' Keep it energetic."
+
+    @function_tool
+    async def view_progress(self, context: RunContext):
+        """
+        Call this when the user wants to view their progress, stats, or history.
+        User might say: "show my progress", "how am I doing", "view stats", "my history"
+        """
+        print("[MAIN MENU] User requested to view progress")
+
+        # TODO: Fetch actual progress data from database
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # For now, placeholder response
+        return None, f"The user wants to see their progress. Say: '{name}, you're doing great! This feature is coming soon - I'll be able to show you your workout history, personal records, and progress charts.' Keep it encouraging."
+
+    @function_tool
+    async def update_profile(self, context: RunContext):
+        """
+        Call this when the user wants to update their profile or settings.
+        User might say: "update profile", "change settings", "edit my info"
+        """
+        print("[MAIN MENU] User requested to update profile")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # For now, placeholder response
+        return None, f"The user wants to update their profile. Say: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
+
+    # ===== WORKOUT TOOLS =====
+
+    @function_tool
+    async def end_workout(self, context: RunContext):
+        """
+        Call this when the user wants to end/stop their workout.
+        User might say: "stop workout", "I'm done", "end session", "finish"
+        """
+        print("[WORKOUT] User requested to end workout")
+
+        # Switch back to main menu mode (main.py monitors state file)
+        self.state.switch_mode("main_menu")
+        self.state.set("workout.active", False)
+        self.state.save_state()
+        print("[STATE] Switched to main_menu mode - main.py will detect and stop pose estimation")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        return None, f"The user wants to end the workout. Say: 'Great work today, {name}! You crushed it. Returning to the main menu.' Keep it celebratory."
+
 
 async def entrypoint(ctx: agents.JobContext):
-    """Main entry point for onboarding agent"""
+    """Main entry point for Nova voice agent"""
 
-    # Initialize agent session
-    session = AgentSession(
-        stt=deepgram.STT(
-            model="nova-3",
-            language="en",
-            smart_format=True,
-        ),
-        llm=openai.LLM(
-            model=os.getenv("LLM_CHOICE", "gpt-4o-mini"),
-            temperature=0.7,
-        ),
-        tts=inworld.TTS(
-            voice="Dennis",
-            model="inworld-tts-1-max",
-            temperature=0.8,
-            pitch=0,
-        ),
-        vad=silero.VAD.load(
-            min_speech_duration=0.1,
-            min_silence_duration=0.3,
-        ),
+    # Initialize state management
+    # Check if user_id is provided in room metadata (for returning users)
+    user_id = ctx.room.metadata.get('user_id') if ctx.room.metadata else None
+
+    # If no user_id from metadata, try to find the most recent state file
+    # (for console mode where metadata isn't available)
+    if not user_id:
+        import glob
+        state_files = glob.glob('.agent_state_*.json')
+        if state_files:
+            # Get most recently modified state file
+            latest_state = max(state_files, key=os.path.getmtime)
+            # Extract user_id from filename
+            user_id = latest_state.replace('.agent_state_', '').replace('.json', '')
+            print(f"[NOVA] Found recent state file for user: {user_id}")
+
+    state = AgentState(user_id=user_id)
+
+    print(f"[NOVA] Starting with mode: {state.get_mode()}")
+    if user_id:
+        print(f"[NOVA] Loaded existing user: {user_id}")
+
+    # IPC is not needed - state file is used for communication with main.py
+    ipc_client = None
+
+    # Initialize OpenAI Realtime API model
+    # Replaces separate STT (Deepgram) + LLM (OpenAI) + TTS (Inworld)
+    realtime_model = openai.realtime.RealtimeModel(
+        voice=os.getenv("REALTIME_VOICE", "alloy"),
+        temperature=float(os.getenv("REALTIME_TEMPERATURE", "0.8")),
+        turn_detection={
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": 500,
+        },
+        modalities=["audio", "text"],
     )
 
-    # Create agent - tools are automatically registered via @function_tool decorators
-    agent = OnboardingAgent()
+    # Initialize agent session with Realtime model
+    session = AgentSession(
+        llm=realtime_model,
+    )
+
+    # Create agent with state management and IPC - tools are automatically registered via @function_tool decorators
+    agent = NovaVoiceAgent(state=state, ipc_client=ipc_client)
 
     await session.start(
         room=ctx.room,
         agent=agent,
     )
 
-    print(f"Onboarding agent started in room: {ctx.room.name}")
+    print(f"Nova voice agent started in room: {ctx.room.name}")
+    print(f"Agent state: {state}")
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
+
+    # Flag to track if we're shutting down
+    shutting_down = False
+
+    def signal_handler(signum, frame):
+        """Handle shutdown signals gracefully"""
+        global shutting_down
+        if not shutting_down:
+            shutting_down = True
+            print("\n[SHUTDOWN] Gracefully shutting down agent...")
+            sys.exit(0)
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # Run the agent
-    agents.cli.run_app(
-        agents.WorkerOptions(
-            entrypoint_fnc=entrypoint,
+    try:
+        agents.cli.run_app(
+            agents.WorkerOptions(
+                entrypoint_fnc=entrypoint,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        print("\n[SHUTDOWN] Agent stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        # Suppress termios errors during shutdown
+        if "termios" not in str(e).lower():
+            print(f"[ERROR] {e}")
+        sys.exit(0)

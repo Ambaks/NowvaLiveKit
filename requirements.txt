@@ -5,9 +5,10 @@ livekit>=0.11.0
 livekit-agents>=0.8.0
 
 # Plugin packages
-livekit-plugins-openai>=0.6.0      # OpenAI integration (STT/LLM/TTS)
-livekit-plugins-deepgram>=0.5.0    # Optional: High-quality STT
-livekit-plugins-silero>=0.5.0      # VAD (Voice Activity Detection)
+livekit-plugins-openai>=0.6.0      # OpenAI integration (includes Realtime API)
+# Note: Deepgram and TTS plugins no longer needed - Realtime API handles STT+LLM+TTS
+# livekit-plugins-deepgram>=0.5.0  # Not needed with Realtime API
+# livekit-plugins-silero>=0.5.0    # Not needed - Realtime has built-in VAD
 
 # Alternative plugins (optional - uncomment if needed)
 # livekit-plugins-elevenlabs>=0.4.0  # Alternative TTS
@@ -30,7 +31,7 @@ python-dotenv>=1.0.0
 numpy
 livekit-agents
 livekit-plugins-openai
-livekit-plugins-silero
-chatterbox-tts
+# livekit-plugins-silero  # Not needed with Realtime API
+# chatterbox-tts  # Not needed with Realtime API
 torch
 cryptography

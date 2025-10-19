@@ -8,11 +8,11 @@ import os
 import time
 from pathlib import Path
 
-# Add biomechanics to path
-sys.path.insert(0, str(Path(__file__).parent / 'biomechanics' / 'week2_stereo'))
-sys.path.insert(0, str(Path(__file__).parent / 'biomechanics' / 'week1_pose'))
+# Add biomechanics to path (go up one level to src, then into biomechanics)
+sys.path.insert(0, str(Path(__file__).parent.parent / 'biomechanics' / 'week2_stereo'))
+sys.path.insert(0, str(Path(__file__).parent.parent / 'biomechanics' / 'week1_pose'))
 
-from ipc_communication import IPCClient
+from core.ipc_communication import IPCClient
 
 
 def run_pose_estimation_with_ipc(cam0_id: int = 0, cam1_id: int = 1):

@@ -62,20 +62,23 @@ class SessionManager:
             print(f"Error loading session: {e}")
             return None
 
-    def save_session(self, user_id: int, username: str, email: str) -> bool:
+    def save_session(self, user_id, username: str, email: str) -> bool:
         """
         Encrypt and save session to file
 
         Args:
-            user_id: Database user ID
+            user_id: Database user ID (can be int, str, or UUID)
             username: Username
             email: User email
 
         Returns:
             True if successful, False otherwise
         """
+        # Convert user_id to string to handle UUID objects
+        user_id_str = str(user_id)
+
         session = {
-            "user_id": user_id,
+            "user_id": user_id_str,
             "username": username,
             "email": email,
             "created_at": datetime.now().isoformat()
@@ -113,8 +116,8 @@ class SessionManager:
             print(f"Error clearing session: {e}")
             return False
 
-    def get_user_id(self) -> Optional[int]:
-        """Get user ID from current session"""
+    def get_user_id(self) -> Optional[str]:
+        """Get user ID from current session (returns as string to handle UUIDs)"""
         session = self.load_session()
         return session.get("user_id") if session else None
 

@@ -9,20 +9,25 @@ import os
 import sys
 import threading
 import subprocess
+import logging
 from pathlib import Path
 
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from session_manager import SessionManager
-from ipc_communication import IPCServer
+from core.session_manager import SessionManager
+from core.ipc_communication import IPCServer
 from db import init_db, get_db
 from db.models import User
-from console_voice_onboarding import run_console_voice_onboarding
+from agents.console_launcher import run_console_voice_onboarding
+from auth.user_management import create_user_account
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Suppress SQLAlchemy INFO logs
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 
 class NowvaApp:
@@ -54,41 +59,33 @@ class NowvaApp:
             'email': session.get('email')
         }
 
-    def create_user(self, username: str, email: str):
+    def create_user(self, first_name: str, email: str):
         """
-        Create new user in database
+        Create new user in database using auth system
 
         Args:
-            username: User's username
+            first_name: User's first name
             email: User's email
 
         Returns:
-            user_id if successful, None otherwise
+            tuple of (user_id, username) if successful, (None, None) otherwise
         """
         try:
-            db = next(get_db())
+            # Use the auth system's create_user_account which handles:
+            # - Duplicate checking
+            # - Username generation
+            # - Password creation
+            user, username = create_user_account(first_name, email)
 
-            # Check if user already exists
-            existing_user = db.query(User).filter(
-                (User.username == username) | (User.email == email)
-            ).first()
+            if user:
+                print(f"User account ready: {username} (ID: {user.id})")
+                return user.id, username
 
-            if existing_user:
-                print(f"User with username '{username}' or email '{email}' already exists")
-                return existing_user.id
-
-            # Create new user
-            new_user = User(username=username, email=email)
-            db.add(new_user)
-            db.commit()
-            db.refresh(new_user)
-
-            print(f"Created new user: {username} (ID: {new_user.id})")
-            return new_user.id
+            return None, None
 
         except Exception as e:
             print(f"Error creating user: {e}")
-            return None
+            return None, None
 
     def start_ipc_server(self):
         """Start IPC server in a separate thread"""
@@ -131,7 +128,7 @@ class NowvaApp:
         print("\nStarting pose estimation process...")
 
         # Start pose estimation as subprocess
-        pose_script = Path(__file__).parent / 'pose_estimation_process.py'
+        pose_script = Path(__file__).parent / 'pose' / 'pose_estimation_process.py'
 
         self.pose_process = subprocess.Popen(
             [sys.executable, str(pose_script), str(cam0_id), str(cam1_id)],
@@ -156,7 +153,7 @@ class NowvaApp:
         Run voice-based onboarding flow
 
         Returns:
-            True if successful, False otherwise
+            Tuple of (success: bool, agent_process: subprocess.Popen or None)
         """
         print("\n" + "="*50)
         print("VOICE ONBOARDING")
@@ -168,10 +165,11 @@ class NowvaApp:
         print("3. Ask for your name")
         print("4. Ask for your email")
         print("5. Confirm your information")
+        print("6. Transition to main menu")
         print("\nYou can also use text onboarding by pressing Ctrl+C\n")
 
         try:
-            # Run voice onboarding
+            # Run voice onboarding - returns (first_name, email, process)
             result = await run_console_voice_onboarding()
 
             if not result:
@@ -180,10 +178,11 @@ class NowvaApp:
                 choice = input().strip().lower()
 
                 if choice == 'y':
-                    return self._run_text_onboarding()
-                return False
+                    success = self._run_text_onboarding()
+                    return (success, None)
+                return (False, None)
 
-            username, email = result
+            first_name, email, agent_process = result
 
         except KeyboardInterrupt:
             print("\n\nVoice onboarding cancelled.")
@@ -191,26 +190,43 @@ class NowvaApp:
             choice = input().strip().lower()
 
             if choice == 'y':
-                return self._run_text_onboarding()
-            return False
+                success = self._run_text_onboarding()
+                return (success, None)
+            return (False, None)
 
-        # Create user in database
-        user_id = self.create_user(username, email)
-        if not user_id:
-            print("Failed to create user")
-            return False
+        # Note: User is already created by voice_agent
+        # We just need to retrieve the user from the database and save the session
+        # The first_name from onboarding is the user's first name
+        # We need to get the actual username from the database
+        try:
+            from db import get_db
+            from db.models import User
+
+            db = next(get_db())
+            user = db.query(User).filter(User.email == email).first()
+
+            if not user:
+                print("Failed to retrieve user after onboarding")
+                return (False, agent_process)
+
+            user_id = str(user.id)
+            actual_username = user.username
+
+        except Exception as e:
+            print(f"Error retrieving user: {e}")
+            return (False, agent_process)
 
         # Save session
-        if self.session_manager.save_session(user_id, username, email):
+        if self.session_manager.save_session(user_id, actual_username, email):
             self.current_user = {
                 'user_id': user_id,
-                'username': username,
+                'username': actual_username,
                 'email': email
             }
-            print(f"\n✓ Onboarding complete! Welcome, {username}!")
-            return True
+            print(f"\n✓ Onboarding complete! Agent continuing in main menu mode...")
+            return (True, agent_process)
 
-        return False
+        return (False, agent_process)
 
     def _run_text_onboarding(self):
         """Fallback text-based onboarding"""
@@ -218,16 +234,16 @@ class NowvaApp:
         print("TEXT ONBOARDING")
         print("="*50)
 
-        # Get username and email from console
-        username = input("\nEnter your name: ").strip()
+        # Get first name and email from console
+        first_name = input("\nEnter your first name: ").strip()
         email = input("Enter your email: ").strip()
 
-        if not username or not email:
+        if not first_name or not email:
             print("Name and email are required!")
             return False
 
         # Create user in database
-        user_id = self.create_user(username, email)
+        user_id, username = self.create_user(first_name, email)
         if not user_id:
             print("Failed to create user")
             return False
@@ -244,35 +260,9 @@ class NowvaApp:
 
         return False
 
-    def show_main_menu(self):
-        """
-        Show main menu
-
-        NOTE: In the full implementation, the voice agent handles this.
-        For now, we'll use a simple text menu.
-        """
-        print("\n" + "="*50)
-        print("MAIN MENU")
-        print("="*50)
-        print("\nOptions:")
-        print("1. Start workout")
-        print("2. Ask a question (coming soon)")
-        print("3. Exit")
-
-        choice = input("\nEnter choice (1-3): ").strip()
-
-        if choice == '1':
-            return 'workout'
-        elif choice == '2':
-            return 'question'
-        elif choice == '3':
-            return 'exit'
-        else:
-            print("Invalid choice")
-            return None
 
     async def run(self):
-        """Main application loop"""
+        """Main application loop with voice agent coordination"""
         print("\n" + "="*60)
         print("NOWVA - AI-Powered Smart Squat Rack")
         print("="*60)
@@ -281,63 +271,154 @@ class NowvaApp:
         print("\nInitializing database...")
         init_db()
 
+        voice_agent_process = None
+        state = None
+
         # Check for existing session
         if self.check_session():
             self.current_user = self.load_user_from_session()
-            # Skip to main menu
+            print("\n" + "="*50)
+            print("RETURNING USER")
+            print("="*50)
+            print(f"\nWelcome back, {self.current_user['username']}!")
+            print("\nStarting voice agent in main menu mode...\n")
+
+            # Load existing user's state
+            from core.agent_state import AgentState
+            state = AgentState(user_id=self.current_user['user_id'])
+
+            # For returning users, always reset to main_menu mode on startup
+            # (they might have been in workout mode when app closed)
+            current_mode = state.get_mode()
+            if current_mode != "main_menu":
+                print(f"[STATE] Returning user was in '{current_mode}' mode - resetting to main_menu")
+                state.switch_mode("main_menu")
+                state.set("workout.active", False)
+                state.save_state()
+
+            # Small delay to ensure state file is written before voice agent loads it
+            await asyncio.sleep(0.5)
+
+            # Start voice agent for returning user
+            from agents.console_launcher import run_console_voice_agent
+            voice_agent_process = await run_console_voice_agent(user_id=self.current_user['user_id'])
+
         else:
-            # Run onboarding
-            if not await self.run_onboarding():
+            # Run onboarding - returns (success, agent_process)
+            success, voice_agent_process = await self.run_onboarding()
+
+            if not success:
                 print("Onboarding failed. Exiting.")
                 return
 
-        # Main application loop
-        while True:
-            action = self.show_main_menu()
+            # Load state for new user
+            from core.agent_state import AgentState
+            state = AgentState(user_id=self.current_user['user_id'])
 
-            if action == 'workout':
-                # Start IPC server
-                ipc_thread = self.start_ipc_server()
+        if not voice_agent_process:
+            print("Error: Voice agent failed to start. Exiting.")
+            return
 
-                # Wait a moment for server to start
-                await asyncio.sleep(1)
+        print("\n" + "="*50)
+        print("SYSTEM READY")
+        print("="*50)
+        print("\nVoice agent is running and listening...")
+        print("Speak to Nova to interact!")
+        print("\nMonitoring for state changes...")
+        print("Press Ctrl+C to exit.\n")
 
-                # Start pose estimation
-                self.start_pose_estimation()
+        # Main monitoring loop - watches state and controls pose estimation
+        pose_running = False
+        last_mode = state.get_mode()
 
-                print("\n" + "="*50)
-                print("WORKOUT MODE")
-                print("="*50)
-                print("\nPose estimation is running with IPC enabled.")
-                print("Check the pose estimation window for visual feedback.")
-                print("IPC messages will appear here.\n")
-                print("Press Ctrl+C to stop workout and return to menu.\n")
+        try:
+            while True:
+                # Check if voice agent is still running
+                if voice_agent_process.poll() is not None:
+                    print("\n[SYSTEM] Voice agent terminated")
+                    break
 
-                try:
-                    # Keep main thread alive
-                    while self.pose_process and self.pose_process.poll() is None:
+                # Reload state to check for changes
+                state.reload_state()
+                current_mode = state.get_mode()
+
+                # Detect mode changes
+                if current_mode != last_mode:
+                    print(f"\n[STATE CHANGE] {last_mode} → {current_mode}")
+                    last_mode = current_mode
+
+                # Handle workout mode
+                if current_mode == "workout" and not pose_running:
+                    print("\n" + "="*50)
+                    print("STARTING WORKOUT SESSION")
+                    print("="*50)
+
+                    # Start IPC server for pose estimation communication
+                    if not self.ipc_server:
+                        print("[IPC] Starting IPC server...")
+
+                        def ipc_message_handler(message: dict):
+                            """Handle messages from pose estimation"""
+                            msg_type = message.get('type')
+
+                            if msg_type == 'rep_count':
+                                value = message.get('value')
+                                print(f"[IPC] Rep count: {value}")
+                            elif msg_type == 'feedback':
+                                value = message.get('value')
+                                print(f"[IPC] Form feedback: {value}")
+                            elif msg_type == 'status':
+                                value = message.get('value')
+                                print(f"[IPC] Status: {value}")
+                            elif msg_type == 'error':
+                                value = message.get('value')
+                                print(f"[IPC] Error: {value}")
+
+                        ipc_thread = self.start_ipc_server()
+                        self.ipc_server.message_callback = ipc_message_handler
                         await asyncio.sleep(1)
-                except KeyboardInterrupt:
-                    print("\n\nStopping workout...")
+                        print("[IPC] Server ready")
 
-                # Cleanup
-                if self.pose_process:
-                    self.pose_process.terminate()
-                    self.pose_process.wait()
-                if self.ipc_server:
-                    self.ipc_server.stop()
+                    self.start_pose_estimation()
+                    pose_running = True
+                    print("[POSE] Pose estimation started")
 
-                print("Workout stopped. Returning to main menu.\n")
+                elif current_mode != "workout" and pose_running:
+                    print("\n" + "="*50)
+                    print("ENDING WORKOUT SESSION")
+                    print("="*50)
+                    if self.pose_process:
+                        self.pose_process.terminate()
+                        self.pose_process.wait()
+                    pose_running = False
+                    print("[POSE] Pose estimation stopped")
 
-            elif action == 'question':
-                print("\nQuestion mode coming soon!")
-                await asyncio.sleep(1)
+                # Sleep briefly to avoid busy loop
+                await asyncio.sleep(0.5)
 
-            elif action == 'exit':
-                print("\nGoodbye!")
-                break
-            else:
-                continue
+        except KeyboardInterrupt:
+            print("\n\n" + "="*50)
+            print("SHUTTING DOWN")
+            print("="*50)
+
+        # Cleanup
+        print("\nCleaning up...")
+
+        if voice_agent_process:
+            print("Stopping voice agent...")
+            voice_agent_process.terminate()
+            voice_agent_process.wait()
+
+        if pose_running and self.pose_process:
+            print("Stopping pose estimation...")
+            self.pose_process.terminate()
+            self.pose_process.wait()
+
+        if self.ipc_server:
+            print("Stopping IPC server...")
+            self.ipc_server.stop()
+
+        print("\nGoodbye!")
 
 
 async def main():
