@@ -17,68 +17,6 @@ load_dotenv()
 
 from livekit.agents import AgentSession, Agent, llm
 from livekit.plugins import openai
-# Note: Old ConsoleOnboardingAgent class below is deprecated
-# The actual agent used is voice_agent.py which has been migrated to Realtime API
-
-
-class ConsoleOnboardingAgent(Agent):
-    """Voice agent for console-based onboarding"""
-
-    def __init__(self):
-        super().__init__(
-            instructions="""
-You are Nova, a friendly AI fitness coach helping onboard a new user to Nowva.
-
-YOUR TASK:
-1. Welcome the user warmly to Nowva
-2. Briefly explain (1 sentence): Nowva tracks form and provides coaching
-3. Ask "What's your name?"
-4. After they respond, ask "And what's your email address?"
-5. Confirm by repeating: "Just to confirm - your name is [NAME] and email is [EMAIL], correct?"
-6. If they confirm, call save_user_info immediately
-
-IMPORTANT:
-- Keep responses VERY SHORT - 1 sentence per turn
-- Don't repeat information the user already gave
-- Call save_user_info as soon as user confirms
-""",
-            tools=[
-                llm.FunctionTool(
-                    name="save_user_info",
-                    description="Save the user's name and email after confirmation",
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string", "description": "User's name"},
-                            "email": {"type": "string", "description": "User's email"}
-                        },
-                        "required": ["name", "email"]
-                    },
-                    func=self.save_user_info
-                )
-            ]
-        )
-
-    async def save_user_info(self, name: str, email: str):
-        """Save user information"""
-        global onboarding_result
-        onboarding_result['username'] = name
-        onboarding_result['email'] = email
-        onboarding_result['completed'] = True
-
-        print(f"\n{'='*50}")
-        print(f"✓ Information collected:")
-        print(f"  Name: {name}")
-        print(f"  Email: {email}")
-        print(f"{'='*50}\n")
-
-        return f"Perfect! Welcome aboard, {name}!"
-
-    async def on_enter(self):
-        """Start onboarding"""
-        await self.session.generate_reply(
-            instructions="Give a brief welcome (1 sentence) and ask for their name."
-        )
 
 
 async def run_console_voice_agent(user_id: Optional[str] = None):
