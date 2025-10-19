@@ -436,22 +436,22 @@ class NovaVoiceAgent(Agent):
             if not has_height and not has_weight:
                 # Need both
                 print("[PROGRAM] User missing both height and weight - asking for height first")
-                return None, f"The user needs to provide height and weight. Say: '{name}, to create the best program for you, I need a couple of quick details. First, what's your height? You can tell me in feet and inches, or centimeters.' Keep it conversational."
+                return None, f"The user needs to provide height and weight. Say something like: '{name}, to create the best program for you, I need a couple of quick details. First, what's your height? You can tell me in feet and inches, or centimeters.' Keep it conversational."
 
             elif not has_height:
                 # Need only height
                 print("[PROGRAM] User missing height - asking for it")
-                return None, f"The user has weight but needs height. Say: '{name}, I have your weight on file, but I need your height to create your program. What's your height? You can tell me in feet and inches, or centimeters.' Keep it friendly."
+                return None, f"The user has weight but needs height. Say something like: '{name}, I have your weight on file, but I need your height to create your program. What's your height? You can tell me in feet and inches, or centimeters.' Keep it friendly."
 
             elif not has_weight:
                 # Need only weight
                 print("[PROGRAM] User missing weight - asking for it")
-                return None, f"The user has height but needs weight. Say: '{name}, I have your height on file, but I need your current weight. What's your weight? You can tell me in pounds or kilograms.' Keep it supportive."
+                return None, f"The user has height but needs weight. Say something like: '{name}, I have your height on file, but I need your current weight. What's your weight? You can tell me in pounds or kilograms.' Keep it supportive."
 
             else:
-                # Have both - proceed to goal collection
-                print(f"[PROGRAM] User has height ({db_user.height_cm} cm) and weight ({db_user.weight_kg} kg) - proceeding to goal")
-                return None, f"The user has all required info. Say: '{name}, perfect! I have your stats. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging and wait for their response, then call capture_goal()."
+                # Have both - proceed with program creation
+                print(f"[PROGRAM] User has height ({db_user.height_cm} cm) and weight ({db_user.weight_kg} kg) - proceeding")
+                return None, f"The user has all required info. Say: '{name}, perfect! I have your stats. Now let's talk about your goals. What are you looking to achieve with this program? Strength, muscle gain, endurance, or something else?' Keep it engaging."
 
         except Exception as e:
             print(f"[ERROR] Failed to check user stats: {e}")
@@ -502,9 +502,9 @@ class NovaVoiceAgent(Agent):
                     if db_user.weight_kg is None:
                         return None, f"Height captured successfully ({height_cm} cm). Say: 'Got it, {name}! Now, what's your current weight? You can tell me in pounds or kilograms.' Keep it supportive."
                     else:
-                        # Have both now - proceed to goal collection
+                        # Have both now - proceed
                         self.state.set("program_creation.weight_kg", float(db_user.weight_kg))
-                        return None, f"Height captured ({height_cm} cm). User has all stats. Say: 'Perfect! I've got your stats. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging and wait for their response, then call capture_goal()."
+                        return None, f"Height captured ({height_cm} cm). User has all stats. Say: 'Perfect! I've got your stats. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging."
 
             finally:
                 db.close()
@@ -606,9 +606,9 @@ class NovaVoiceAgent(Agent):
                     if db_user.height_cm is None:
                         return None, f"Weight captured successfully ({weight_kg} kg). Say: 'Great! Now I need your height. What's your height? You can tell me in feet and inches, or centimeters.' Keep it friendly."
                     else:
-                        # Have both now - proceed to goal collection
+                        # Have both now - proceed
                         self.state.set("program_creation.height_cm", float(db_user.height_cm))
-                        return None, f"Weight captured ({weight_kg} kg). User has all stats. Say: 'Awesome, {name}! I've got everything I need. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging and wait for their response, then call capture_goal()."
+                        return None, f"Weight captured ({weight_kg} kg). User has all stats. Say: 'Awesome, {name}! I've got everything I need. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging."
 
             finally:
                 db.close()
@@ -647,198 +647,6 @@ class NovaVoiceAgent(Agent):
                 return num
 
         return None
-
-    @function_tool
-    async def capture_goal(self, context: RunContext, goal_description: str):
-        """
-        Call this when the user describes their fitness goal.
-        Accepts free-form input and categorizes it into power, strength, or hypertrophy focus.
-
-        Args:
-            goal_description: The user's goal as they described it (e.g., "I want to look good for summer", "get stronger", "improve my vertical jump")
-        """
-        print(f"[PROGRAM] Capturing goal: {goal_description}")
-
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
-
-        # Categorize the goal
-        goal_category = self._categorize_goal(goal_description)
-
-        # Store raw description and category in state
-        self.state.set("program_creation.goal_raw", goal_description)
-        self.state.set("program_creation.goal_category", goal_category)
-
-        print(f"[PROGRAM] Goal categorized as: {goal_category}")
-
-        # Create confirmation message based on category
-        if goal_category == "power":
-            confirmation = "explosiveness and athletic performance"
-        elif goal_category == "strength":
-            confirmation = "building maximum strength"
-        else:  # hypertrophy
-            confirmation = "building muscle and aesthetics"
-
-        return None, f"Goal captured: '{goal_description}' → {goal_category}. Say: 'Got it! So it sounds like you're focused on {confirmation}. Now, how long would you like this program to run? I'd recommend {self._get_recommended_duration(goal_category)} weeks for {confirmation}, but you can choose what works best for you.' Keep it conversational."
-
-    def _categorize_goal(self, goal_text: str) -> str:
-        """Categorize user's goal into power, strength, or hypertrophy"""
-        goal_lower = goal_text.lower()
-
-        # Power keywords
-        power_keywords = [
-            "explosive", "power", "athletic", "speed", "jump", "vertical",
-            "sprint", "agility", "quick", "fast", "sport", "performance"
-        ]
-
-        # Strength keywords
-        strength_keywords = [
-            "strong", "strength", "lift heavy", "max", "powerlifting",
-            "deadlift", "squat", "bench", "1rm", "pr", "personal record"
-        ]
-
-        # Hypertrophy keywords
-        hypertrophy_keywords = [
-            "muscle", "size", "big", "aesthetic", "look good", "beach",
-            "summer", "bodybuilding", "bulk", "mass", "tone", "definition",
-            "shredded", "ripped", "physique", "gains"
-        ]
-
-        # Count keyword matches
-        power_score = sum(1 for kw in power_keywords if kw in goal_lower)
-        strength_score = sum(1 for kw in strength_keywords if kw in goal_lower)
-        hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in goal_lower)
-
-        # Return category with highest score
-        if power_score > strength_score and power_score > hypertrophy_score:
-            return "power"
-        elif strength_score > hypertrophy_score:
-            return "strength"
-        else:
-            # Default to hypertrophy if unclear or tied
-            return "hypertrophy"
-
-    def _get_recommended_duration(self, goal_category: str) -> int:
-        """Get recommended program duration based on goal"""
-        if goal_category == "power":
-            return 6
-        elif goal_category == "strength":
-            return 10
-        else:  # hypertrophy
-            return 12
-
-    @function_tool
-    async def capture_program_duration(self, context: RunContext, duration_weeks: int):
-        """
-        Call this when the user specifies how long they want their program to be.
-
-        Args:
-            duration_weeks: Number of weeks for the program (e.g., 8, 12, 16)
-        """
-        print(f"[PROGRAM] Capturing program duration: {duration_weeks} weeks")
-
-        user = self.state.get_user()
-        name = user.get("name", "there")
-
-        # Validate duration
-        if duration_weeks < 2 or duration_weeks > 52:
-            return None, f"Invalid duration. Say: 'Hmm, {duration_weeks} weeks seems a bit off. Most programs work best between 4 and 16 weeks. How long would you like your program to be?' Keep it helpful."
-
-        # Store in state
-        self.state.set("program_creation.duration_weeks", duration_weeks)
-
-        print(f"[PROGRAM] Duration set to: {duration_weeks} weeks")
-
-        return None, f"Duration captured: {duration_weeks} weeks. Say: 'Perfect! A {duration_weeks}-week program is a great choice. Now, how many days per week can you train? Most people see great results with 3 to 5 days per week.' Keep it encouraging."
-
-    @function_tool
-    async def capture_training_frequency(self, context: RunContext, days_per_week: int):
-        """
-        Call this when the user specifies how many days per week they can train.
-
-        Args:
-            days_per_week: Number of training days per week (e.g., 3, 4, 5)
-        """
-        print(f"[PROGRAM] Capturing training frequency: {days_per_week} days/week")
-
-        user = self.state.get_user()
-        name = user.get("name", "there")
-
-        # Validate frequency
-        if days_per_week < 1 or days_per_week > 7:
-            return None, f"Invalid frequency. Say: 'That doesn't sound quite right. How many days per week can you realistically train? Something between 2 and 6 days works best for most people.' Keep it supportive."
-
-        # Store in state
-        self.state.set("program_creation.days_per_week", days_per_week)
-
-        print(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
-
-        return None, f"Frequency captured: {days_per_week} days/week. Say: 'Awesome! {days_per_week} days per week is solid. Last question: how would you describe your fitness level? Are you a beginner, intermediate, or advanced?' Keep it non-judgmental."
-
-    @function_tool
-    async def capture_fitness_level(self, context: RunContext, fitness_level: str):
-        """
-        Call this when the user describes their fitness level.
-        Normalize to beginner, intermediate, or advanced.
-
-        Args:
-            fitness_level: The user's fitness level (e.g., "beginner", "intermediate", "I've been lifting for 2 years")
-        """
-        print(f"[PROGRAM] Capturing fitness level: {fitness_level}")
-
-        user = self.state.get_user()
-        name = user.get("name", "there")
-
-        # Normalize fitness level
-        normalized_level = self._normalize_fitness_level(fitness_level)
-
-        # Store in state
-        self.state.set("program_creation.fitness_level", normalized_level)
-
-        print(f"[PROGRAM] Fitness level normalized to: {normalized_level}")
-
-        # Get all collected data
-        height_cm = self.state.get("program_creation.height_cm")
-        weight_kg = self.state.get("program_creation.weight_kg")
-        goal_category = self.state.get("program_creation.goal_category")
-        goal_raw = self.state.get("program_creation.goal_raw")
-        duration_weeks = self.state.get("program_creation.duration_weeks")
-        days_per_week = self.state.get("program_creation.days_per_week")
-
-        # Print summary to console
-        print("\n" + "="*60)
-        print("[PROGRAM CREATION] All parameters collected:")
-        print(f"  User: {name} (ID: {user.get('id')})")
-        print(f"  Height: {height_cm} cm")
-        print(f"  Weight: {weight_kg} kg")
-        print(f"  Goal Category: {goal_category}")
-        print(f"  Goal Description: \"{goal_raw}\"")
-        print(f"  Duration: {duration_weeks} weeks")
-        print(f"  Training Frequency: {days_per_week} days/week")
-        print(f"  Fitness Level: {normalized_level}")
-        print("="*60 + "\n")
-
-        return None, f"All parameters collected! Say: 'Perfect, {name}! I'm going to create a {duration_weeks}-week {goal_category} program with {days_per_week} training days per week, tailored for your {normalized_level} level. This is going to be awesome!' Keep it enthusiastic."
-
-    def _normalize_fitness_level(self, level_str: str) -> str:
-        """Normalize fitness level to beginner, intermediate, or advanced"""
-        level_lower = level_str.lower()
-
-        # Beginner indicators
-        beginner_keywords = ["beginner", "new", "just starting", "never", "first time", "noob"]
-
-        # Advanced indicators
-        advanced_keywords = ["advanced", "experienced", "years", "competitive", "athlete", "expert"]
-
-        # Check for matches
-        if any(kw in level_lower for kw in beginner_keywords):
-            return "beginner"
-        elif any(kw in level_lower for kw in advanced_keywords):
-            return "advanced"
-        else:
-            # Default to intermediate
-            return "intermediate"
 
     # ===== WORKOUT TOOLS =====
 
