@@ -6,7 +6,12 @@ Handles onboarding, main menu, and workout modes with function calling
 import asyncio
 import os
 import re
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Add parent directory (src/) to path when running as subprocess
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 load_dotenv()
 

@@ -7,6 +7,7 @@ Orchestrates voice agent and pose estimation with IPC communication
 import asyncio
 import os
 import sys
+import signal
 import threading
 import subprocess
 import logging
@@ -38,6 +39,25 @@ class NowvaApp:
         self.ipc_server = None
         self.pose_process = None
         self.current_user = None
+        self.state = None  # Track state for cleanup
+
+        # Setup signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals by resetting state"""
+        print("\n[SIGNAL] Received shutdown signal - cleaning up state...")
+        if self.state:
+            try:
+                self.state.switch_mode("main_menu")
+                self.state.set("workout.active", False)
+                self.state.save_state()
+                print("[SIGNAL] State reset to main_menu")
+            except Exception as e:
+                print(f"[SIGNAL] Error resetting state: {e}")
+        # Re-raise to allow normal shutdown
+        raise KeyboardInterrupt
 
     def check_session(self):
         """Check if user has an existing session"""
@@ -52,7 +72,6 @@ class NowvaApp:
         user_id = session.get('user_id')
         username = session.get('username')
 
-        print(f"\nWelcome back, {username}!")
         return {
             'user_id': user_id,
             'username': username,
@@ -165,34 +184,16 @@ class NowvaApp:
         print("3. Ask for your name")
         print("4. Ask for your email")
         print("5. Confirm your information")
-        print("6. Transition to main menu")
-        print("\nYou can also use text onboarding by pressing Ctrl+C\n")
+        print("6. Transition to main menu\n")
 
-        try:
-            # Run voice onboarding - returns (first_name, email, process)
-            result = await run_console_voice_onboarding()
+        # Run voice onboarding - returns (first_name, email, process)
+        result = await run_console_voice_onboarding()
 
-            if not result:
-                print("\nVoice onboarding failed or was cancelled.")
-                print("Would you like to use text-based onboarding instead? (y/n)")
-                choice = input().strip().lower()
-
-                if choice == 'y':
-                    success = self._run_text_onboarding()
-                    return (success, None)
-                return (False, None)
-
-            first_name, email, agent_process = result
-
-        except KeyboardInterrupt:
-            print("\n\nVoice onboarding cancelled.")
-            print("Would you like to use text-based onboarding instead? (y/n)")
-            choice = input().strip().lower()
-
-            if choice == 'y':
-                success = self._run_text_onboarding()
-                return (success, None)
+        if not result:
+            print("\nVoice onboarding failed. Exiting.")
             return (False, None)
+
+        first_name, email, agent_process = result
 
         # Note: User is already created by voice_agent
         # We just need to retrieve the user from the database and save the session
@@ -228,38 +229,6 @@ class NowvaApp:
 
         return (False, agent_process)
 
-    def _run_text_onboarding(self):
-        """Fallback text-based onboarding"""
-        print("\n" + "="*50)
-        print("TEXT ONBOARDING")
-        print("="*50)
-
-        # Get first name and email from console
-        first_name = input("\nEnter your first name: ").strip()
-        email = input("Enter your email: ").strip()
-
-        if not first_name or not email:
-            print("Name and email are required!")
-            return False
-
-        # Create user in database
-        user_id, username = self.create_user(first_name, email)
-        if not user_id:
-            print("Failed to create user")
-            return False
-
-        # Save session
-        if self.session_manager.save_session(user_id, username, email):
-            self.current_user = {
-                'user_id': user_id,
-                'username': username,
-                'email': email
-            }
-            print(f"\n✓ Onboarding complete! Welcome, {username}!")
-            return True
-
-        return False
-
 
     async def run(self):
         """Main application loop with voice agent coordination"""
@@ -272,7 +241,6 @@ class NowvaApp:
         init_db()
 
         voice_agent_process = None
-        state = None
 
         # Check for existing session
         if self.check_session():
@@ -285,16 +253,15 @@ class NowvaApp:
 
             # Load existing user's state
             from core.agent_state import AgentState
-            state = AgentState(user_id=self.current_user['user_id'])
+            self.state = AgentState(user_id=self.current_user['user_id'])
 
-            # For returning users, always reset to main_menu mode on startup
-            # (they might have been in workout mode when app closed)
-            current_mode = state.get_mode()
-            if current_mode != "main_menu":
-                print(f"[STATE] Returning user was in '{current_mode}' mode - resetting to main_menu")
-                state.switch_mode("main_menu")
-                state.set("workout.active", False)
-                state.save_state()
+            # ALWAYS reset to main_menu mode on startup for safety
+            # (prevents "ready to squat" if app crashed during workout)
+            current_mode = self.state.get_mode()
+            print(f"[STATE] Previous mode was '{current_mode}' - resetting to main_menu for safety")
+            self.state.switch_mode("main_menu")
+            self.state.set("workout.active", False)
+            self.state.save_state()
 
             # Small delay to ensure state file is written before voice agent loads it
             await asyncio.sleep(0.5)
@@ -313,7 +280,7 @@ class NowvaApp:
 
             # Load state for new user
             from core.agent_state import AgentState
-            state = AgentState(user_id=self.current_user['user_id'])
+            self.state = AgentState(user_id=self.current_user['user_id'])
 
         if not voice_agent_process:
             print("Error: Voice agent failed to start. Exiting.")
@@ -329,7 +296,7 @@ class NowvaApp:
 
         # Main monitoring loop - watches state and controls pose estimation
         pose_running = False
-        last_mode = state.get_mode()
+        last_mode = self.state.get_mode()
 
         try:
             while True:
@@ -339,8 +306,8 @@ class NowvaApp:
                     break
 
                 # Reload state to check for changes
-                state.reload_state()
-                current_mode = state.get_mode()
+                self.state.reload_state()
+                current_mode = self.state.get_mode()
 
                 # Detect mode changes
                 if current_mode != last_mode:
@@ -403,6 +370,13 @@ class NowvaApp:
 
         # Cleanup
         print("\nCleaning up...")
+
+        # Reset state to main_menu before shutdown for safety
+        if self.state:
+            print("Resetting state to main_menu...")
+            self.state.switch_mode("main_menu")
+            self.state.set("workout.active", False)
+            self.state.save_state()
 
         if voice_agent_process:
             print("Stopping voice agent...")

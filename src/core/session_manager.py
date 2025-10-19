@@ -22,8 +22,10 @@ class SessionManager:
             session_file: Path to encrypted session file (relative to src/)
             key_file: Path to encryption key file (relative to src/)
         """
-        self.session_file = Path(__file__).parent / session_file
-        self.key_file = Path(__file__).parent / key_file
+        # Store in src/ directory (parent of core/)
+        src_dir = Path(__file__).parent.parent
+        self.session_file = src_dir / session_file
+        self.key_file = src_dir / key_file
 
         # Load or generate encryption key
         if self.key_file.exists():
