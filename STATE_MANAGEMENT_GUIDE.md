@@ -8,9 +8,9 @@ The Nova AI agent now features a comprehensive state management system that supp
 
 ### Core Components
 
-1. **`agent_state.py`** - State management class
-2. **`mode_handlers.py`** - Mode transition handlers and routing
-3. **`onboarding_agent.py`** - Updated with state integration
+1. **[src/core/agent_state.py](src/core/agent_state.py)** - State management class
+2. **[src/agents/voice_agent.py](src/agents/voice_agent.py)** - Mode-aware voice agent with GPT-4 Realtime
+3. **[src/main.py](src/main.py)** - Main orchestrator that monitors state changes
 
 ### State Structure
 
@@ -107,10 +107,10 @@ Workout session begins...
 
 ## Key Functions
 
-### State Management (`agent_state.py`)
+### State Management (`src/core/agent_state.py`)
 
 ```python
-from agent_state import AgentState
+from core.agent_state import AgentState
 
 # Create new state (defaults to onboarding mode)
 state = AgentState()
@@ -134,51 +134,51 @@ state.save_state()
 state.load_state("user_123")
 ```
 
-### Mode Handlers (`mode_handlers.py`)
+### Voice Agent Integration (`src/agents/voice_agent.py`)
+
+The voice agent automatically handles mode transitions using function calling:
 
 ```python
-from mode_handlers import (
-    handle_mode_switch,
-    handle_main_menu,
-    handle_workout,
-    complete_onboarding,
-    transition_to_workout,
-    return_to_main_menu
-)
+# Voice agent functions
+@function_tool()
+async def transition_to_main_menu():
+    """Called after onboarding completes"""
+    self.state.switch_mode("main_menu")
+    self.state.save_state()
+    return "Transitioning to main menu"
 
-# Route to appropriate handler based on current mode
-await handle_mode_switch(state, session)
+@function_tool()
+async def start_workout():
+    """Called when user wants to start workout"""
+    self.state.switch_mode("workout")
+    self.state.set("workout.active", True)
+    self.state.save_state()
+    return "Starting workout mode"
 
-# Specific handlers
-await handle_main_menu(state, session)
-await handle_workout(state, session)
-
-# Transitions
-await complete_onboarding(
-    state=state,
-    name="John",
-    email="john@example.com",
-    username="john",
-    user_id="user_123",
-    session=session
-)
-
-await transition_to_workout(state, session)
-await return_to_main_menu(state, session)
+@function_tool()
+async def end_workout():
+    """Called when user wants to end workout"""
+    self.state.switch_mode("main_menu")
+    self.state.set("workout.active", False)
+    self.state.save_state()
+    return "Ending workout, returning to main menu"
 ```
 
-### Onboarding Integration
+### Voice Agent Integration
 
-The `OnboardingAgent` class now accepts state and session parameters:
+The voice agent automatically loads state based on user_id:
 
 ```python
-from agent_state import AgentState
+from core.agent_state import AgentState
+from agents.voice_agent import NovaVoiceAgent
 
-# Initialize state
-state = AgentState()
+# For new user (onboarding)
+state = AgentState()  # Defaults to onboarding mode
+agent = NovaVoiceAgent(state=state)
 
-# Create agent with state
-agent = OnboardingAgent(state=state, session_ref=session)
+# For existing user
+state = AgentState(user_id="user_123")  # Loads saved state
+agent = NovaVoiceAgent(state=state)
 ```
 
 ## Smooth Transitions
@@ -186,32 +186,36 @@ agent = OnboardingAgent(state=state, session_ref=session)
 ### How It Works
 
 1. **Onboarding Completion**:
-   ```python
-   # In confirm_email_correct():
-   # 1. Create user account
-   # 2. Update state with user info
-   # 3. Schedule async transition (2 second delay)
-   # 4. Play completion message
-   # 5. Transition executes → calls complete_onboarding()
-   # 6. Main menu handler plays first-time greeting
-   ```
+   - Voice agent collects name and email via function calling
+   - `confirm_user_info()` function creates account in database
+   - `transition_to_main_menu()` function switches state to main_menu
+   - Agent naturally transitions conversation to main menu
+   - No delays needed - agent handles flow naturally
 
-2. **No Silence/Gaps**:
-   - Final onboarding message plays immediately
-   - 2-second delay allows message to complete
-   - Main menu greeting starts seamlessly
-   - User experiences continuous conversation
+2. **Continuous Conversation**:
+   - GPT-4 Realtime handles seamless voice transitions
+   - Agent changes instructions based on current mode
+   - User experiences one continuous conversation
+   - No process restarts or silent gaps
 
-### Timing Configuration
+### State-Based Control
 
-Adjust transition delay in `onboarding_agent.py`:
+The main.py orchestrator monitors state file for changes:
 
 ```python
-async def _transition_to_main_menu(self, user_id: str, username: str):
-    # Adjust this delay based on typical message length
-    await asyncio.sleep(2.0)  # Default: 2 seconds
+# In main.py monitoring loop
+self.state.reload_state()
+current_mode = self.state.get_mode()
 
-    await complete_onboarding(...)
+if current_mode == "workout" and not pose_running:
+    # Start pose estimation automatically
+    self.start_pose_estimation()
+    pose_running = True
+
+elif current_mode != "workout" and pose_running:
+    # Stop pose estimation automatically
+    self.pose_process.terminate()
+    pose_running = False
 ```
 
 ## State Persistence
@@ -220,7 +224,7 @@ async def _transition_to_main_menu(self, user_id: str, username: str):
 
 State is automatically saved to JSON files:
 - Format: `.agent_state_{user_id}.json`
-- Location: Project root directory
+- Location: `src/` directory
 - Content: Full state dictionary
 
 ### Loading Saved State
@@ -269,51 +273,71 @@ When you're ready, step up to the rack."
 
 ## Testing
 
-### Test Mode Transitions
+### Test Voice Agent
 
-Run the built-in test:
-
-```bash
-python src/mode_handlers.py
-```
-
-This will simulate:
-1. Onboarding completion
-2. Transition to main menu (first-time greeting)
-3. Transition to workout
-4. Return to main menu (returning user greeting)
-
-### Test Onboarding Flow
+Run the voice agent standalone:
 
 ```bash
-python src/onboarding_agent.py
+cd src/agents
+python voice_agent.py console
 ```
 
-This will start the full onboarding agent with state management.
+This will:
+1. Start voice agent in console mode
+2. Default to onboarding if no user state found
+3. Allow full conversation testing
+4. Demonstrate mode transitions
+
+### Test Complete Flow
+
+```bash
+cd src
+python main.py
+```
+
+This tests:
+1. Session management
+2. State loading/creation
+3. Voice agent integration
+4. Mode-based process control
 
 ## Integration with Main App
 
-### In `main.py`
+### In `src/main.py`
 
 ```python
-from agent_state import AgentState
-from mode_handlers import handle_mode_switch
+from core.agent_state import AgentState
+from agents.console_launcher import run_console_voice_agent
 
-async def run_app():
+async def run():
     # Check for existing session
     user_id = session_manager.get_user_id()
 
     if user_id:
-        # Returning user
+        # Returning user - load state
         state = AgentState(user_id=user_id)
-        state.switch_mode("main_menu")
-    else:
-        # New user
-        state = AgentState()
-        state.switch_mode("onboarding")
 
-    # Start appropriate mode
-    await handle_mode_switch(state, session)
+        # Safety: Reset to main_menu on startup
+        state.switch_mode("main_menu")
+        state.set("workout.active", False)
+        state.save_state()
+
+        # Start voice agent for returning user
+        voice_agent_process = await run_console_voice_agent(user_id=user_id)
+    else:
+        # New user - run onboarding
+        success, voice_agent_process = await self.run_onboarding()
+
+    # Monitor state for changes
+    while True:
+        state.reload_state()
+        current_mode = state.get_mode()
+
+        # Control pose estimation based on mode
+        if current_mode == "workout":
+            # Start pose estimation
+        elif current_mode != "workout":
+            # Stop pose estimation
 ```
 
 ## Best Practices
@@ -350,6 +374,7 @@ async def run_app():
 ## Support
 
 For questions or issues with state management, see:
-- [onboarding_agent.py](src/onboarding_agent.py) - Implementation details
-- [agent_state.py](src/agent_state.py) - State class documentation
-- [mode_handlers.py](src/mode_handlers.py) - Handler examples
+- [src/agents/voice_agent.py](src/agents/voice_agent.py) - Voice agent implementation
+- [src/core/agent_state.py](src/core/agent_state.py) - State class documentation
+- [src/main.py](src/main.py) - State monitoring and control
+- [MAIN_APP_README.md](MAIN_APP_README.md) - Complete architecture guide

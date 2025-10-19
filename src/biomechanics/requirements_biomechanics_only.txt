@@ -1,5 +1,6 @@
 # Core Biomechanics Implementation - Requirements
 # Python 3.10 recommended
+# Recommended to install these in a conda environment using Python 3.10
 
 # Core dependencies
 torch>=2.0.0

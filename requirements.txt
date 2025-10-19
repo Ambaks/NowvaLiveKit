@@ -1,37 +1,89 @@
-# LiveKit Voice Agent Requirements - Updated versions
+# Nowva AI Smart Squat Rack - Complete Requirements
+# Python 3.11.2 recommended
 
-# Core LiveKit packages
-livekit>=0.11.0
-livekit-agents>=0.8.0
+# =============================================================================
+# VOICE AGENT - GPT-4 Realtime API
+# =============================================================================
+livekit>=0.17.0
+livekit-agents>=0.10.0
+livekit-plugins-openai>=0.7.0          # GPT-4 Realtime API (handles STT+LLM+TTS)
 
-# Plugin packages
-livekit-plugins-openai>=0.6.0      # OpenAI integration (includes Realtime API)
-# Note: Deepgram and TTS plugins no longer needed - Realtime API handles STT+LLM+TTS
-# livekit-plugins-deepgram>=0.5.0  # Not needed with Realtime API
-# livekit-plugins-silero>=0.5.0    # Not needed - Realtime has built-in VAD
+# Note: These are no longer needed with Realtime API:
+# - livekit-plugins-deepgram (STT handled by Realtime)
+# - livekit-plugins-silero (VAD built into Realtime)
+# - pyaudio (audio routing handled by LiveKit)
 
-# Alternative plugins (optional - uncomment if needed)
-# livekit-plugins-elevenlabs>=0.4.0  # Alternative TTS
-# livekit-plugins-cartesia>=0.2.0    # Alternative low-latency TTS
-# livekit-plugins-azure>=0.5.0       # Azure STT/TTS
-# livekit-plugins-google>=0.5.0      # Google STT/TTS
+# =============================================================================
+# DATABASE & SESSION MANAGEMENT
+# =============================================================================
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0                 # PostgreSQL adapter
+pydantic>=2.0.0                        # Data validation
+cryptography>=41.0.0                   # Session encryption
 
-# Audio processing
+# =============================================================================
+# POSE ESTIMATION & BIOMECHANICS
+# =============================================================================
+# Computer Vision
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# MMPose (install via: mim install mmengine "mmcv>=2.0.0" "mmdet>=3.0.0" "mmpose>=1.0.0")
+openmim>=0.3.0
+
+# Numerical Computing
 numpy>=1.24.0
-sounddevice>=0.4.6
+scipy>=1.10.0
+pandas>=2.0.0
 
-# Async support
-aiohttp>=3.9.0
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
 
-# Utilities
-python-dotenv>=1.0.0
+# =============================================================================
+# UTILITIES
+# =============================================================================
+python-dotenv>=1.0.0                   # Environment variables
+aiohttp>=3.9.0                         # Async HTTP
+tqdm>=4.65.0                           # Progress bars
+websockets>=12.0                       # WebSocket support
 
-# Optional: For Redis-based conversation memory
-# redis>=5.0.0
-numpy
-livekit-agents
-livekit-plugins-openai
-# livekit-plugins-silero  # Not needed with Realtime API
-# chatterbox-tts  # Not needed with Realtime API
-torch
-cryptography
+# =============================================================================
+# OPTIONAL - DEVELOPMENT & TESTING
+# =============================================================================
+# jupyter>=1.0.0                       # Jupyter notebooks
+# ipykernel>=6.23.0                    # Jupyter kernel
+# pytest>=7.3.0                        # Testing
+# black>=23.0.0                        # Code formatting
+# flake8>=6.0.0                        # Linting
+
+# =============================================================================
+# OPTIONAL - WEB DASHBOARD (if needed)
+# =============================================================================
+# dash>=2.14.0                         # Interactive web dashboard
+# plotly>=5.17.0                       # Plotly for visualizations
+
+# =============================================================================
+# INSTALLATION NOTES
+# =============================================================================
+# 1. Install base requirements:
+#    pip install -r requirements.txt
+#
+# 2. Install MMPose (required for pose estimation):
+#    mim install mmengine "mmcv>=2.0.0" "mmdet>=3.0.0" "mmpose>=1.0.0"
+#
+# 3. For M1/M2/M3 Macs, PyTorch may need special installation:
+#    pip install torch torchvision torchaudio
+#
+# 4. If you need OpenSim (for advanced biomechanics - Week 6-7):
+#    conda install -c opensim-org opensim
+#    (Note: Not required for basic functionality)
+#
+# 5. For audio device testing (optional):
+#    brew install portaudio  # macOS
+#    pip install sounddevice
