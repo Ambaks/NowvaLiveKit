@@ -21,7 +21,7 @@ from livekit.plugins import openai
 
 async def run_console_voice_agent(user_id: Optional[str] = None):
     """
-    Run voice agent in console mode - doesn't terminate, runs continuously
+    Run voice agent in console mode - monitors output synchronously on main thread
 
     Args:
         user_id: Optional user ID for existing users, None for new onboarding
@@ -49,19 +49,6 @@ async def run_console_voice_agent(user_id: Optional[str] = None):
             text=True,
             bufsize=1
         )
-
-        # Monitor output in background thread
-        def print_output():
-            try:
-                for line in iter(process.stdout.readline, ''):
-                    if not line:
-                        break
-                    print(line, end='')
-            except Exception as e:
-                print(f"[VOICE AGENT] Output stream error: {e}")
-
-        output_thread = threading.Thread(target=print_output, daemon=True)
-        output_thread.start()
 
         return process
 

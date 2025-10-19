@@ -33,6 +33,10 @@ from core.ipc_communication import IPCClient
 # Prompt imports
 from agents.prompts import ONBOARDING_PROMPT, get_main_menu_prompt, get_workout_prompt
 
+# Database imports
+from db.database import SessionLocal
+from db.program_utils import has_any_programs
+
 
 class NovaVoiceAgent(Agent):
     """Mode-aware voice agent that handles all user interactions"""
@@ -101,7 +105,7 @@ class NovaVoiceAgent(Agent):
             name = user.get("name", "there")
 
             await self.session.generate_reply(
-                instructions=f"Welcome {name} back to the main menu. Say: 'Hey {name}, welcome back! Ready to start a workout or check your progress?' Keep it friendly and brief."
+                instructions=f"Welcome {name} back to the main menu. Say: 'Hey {name}, welcome back! You can start a workout, create or update a program, check your progress, or update your profile. What would you like to do?' Keep it friendly and conversational."
             )
         elif mode == "workout":
             user = self.state.get_user()
@@ -368,6 +372,473 @@ class NovaVoiceAgent(Agent):
 
         # For now, placeholder response
         return None, f"The user wants to update their profile. Say: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
+
+    @function_tool
+    async def create_or_update_program(self, context: RunContext):
+        """
+        Call this when the user wants to create a new program or update an existing one.
+        User might say: "create a program", "make a workout plan", "build a program", "update my program"
+        """
+        print("[MAIN MENU] User requested to create or update program")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # Check if user has any existing programs
+        db = SessionLocal()
+        try:
+            has_programs = has_any_programs(db, user_id)
+
+            if not has_programs:
+                # No programs - inform user and proceed to creation
+                print("[PROGRAM] User has no programs - proceeding to creation")
+                return None, f"The user has no programs yet. Say: '{name}, looks like you don't have any programs yet. Let's create your first one! I'll ask you a few questions to build a custom program just for you.' Then call create_program() to start the creation process. Keep it encouraging."
+            else:
+                # Has programs - ask if they want to create new or update existing
+                print("[PROGRAM] User has existing programs")
+                return None, f"The user has existing programs. Say: '{name}, you already have some programs. Would you like to create a new one or update an existing program?' Keep it helpful and wait for their response."
+
+        except Exception as e:
+            print(f"[ERROR] Failed to check user programs: {e}")
+            return None, f"There was an error checking your programs. Say: '{name}, I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
+        finally:
+            db.close()
+
+    @function_tool
+    async def create_program(self, context: RunContext):
+        """
+        Call this to start the program creation process.
+        Checks if user has height and weight in database, and asks for missing values.
+        """
+        print("[PROGRAM] Starting program creation")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # Query database to check if user has height and weight
+        db = SessionLocal()
+        try:
+            from db.models import User
+            db_user = db.query(User).filter(User.id == user_id).first()
+
+            if not db_user:
+                return None, f"Error: Could not find user in database. Say: '{name}, I'm having trouble accessing your profile. Let's try again in a moment.'"
+
+            has_height = db_user.height_cm is not None
+            has_weight = db_user.weight_kg is not None
+
+            # Store in state temporarily for this session
+            self.state.set("program_creation.height_cm", float(db_user.height_cm) if has_height else None)
+            self.state.set("program_creation.weight_kg", float(db_user.weight_kg) if has_weight else None)
+
+            if not has_height and not has_weight:
+                # Need both
+                print("[PROGRAM] User missing both height and weight - asking for height first")
+                return None, f"The user needs to provide height and weight. Say: '{name}, to create the best program for you, I need a couple of quick details. First, what's your height? You can tell me in feet and inches, or centimeters.' Keep it conversational."
+
+            elif not has_height:
+                # Need only height
+                print("[PROGRAM] User missing height - asking for it")
+                return None, f"The user has weight but needs height. Say: '{name}, I have your weight on file, but I need your height to create your program. What's your height? You can tell me in feet and inches, or centimeters.' Keep it friendly."
+
+            elif not has_weight:
+                # Need only weight
+                print("[PROGRAM] User missing weight - asking for it")
+                return None, f"The user has height but needs weight. Say: '{name}, I have your height on file, but I need your current weight. What's your weight? You can tell me in pounds or kilograms.' Keep it supportive."
+
+            else:
+                # Have both - proceed to goal collection
+                print(f"[PROGRAM] User has height ({db_user.height_cm} cm) and weight ({db_user.weight_kg} kg) - proceeding to goal")
+                return None, f"The user has all required info. Say: '{name}, perfect! I have your stats. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging and wait for their response, then call capture_goal()."
+
+        except Exception as e:
+            print(f"[ERROR] Failed to check user stats: {e}")
+            return None, f"Database error. Say: '{name}, I'm having trouble accessing your profile right now. Let's try again in a moment.' Keep it apologetic."
+        finally:
+            db.close()
+
+    # ===== PROGRAM CREATION HELPER TOOLS =====
+
+    @function_tool
+    async def capture_height(self, context: RunContext, height_value: str):
+        """
+        Call this when the user provides their height.
+        Accepts various formats: "5 feet 9 inches", "5'9\"", "175 cm", "1.75 m", "5 foot 9", etc.
+        Normalizes to centimeters and saves to database.
+
+        Args:
+            height_value: The height as spoken by the user (e.g., "five nine", "175", "5 feet 9 inches")
+        """
+        print(f"[PROGRAM] Capturing height: {height_value}")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        try:
+            # Normalize the height to centimeters
+            height_cm = self._normalize_height_to_cm(height_value)
+
+            if height_cm is None or height_cm < 50 or height_cm > 300:
+                # Invalid height
+                return None, f"That height doesn't seem right. Say: 'Hmm, that doesn't sound quite right. Can you tell me your height again? For example, you could say five foot nine, or 175 centimeters.' Keep it friendly."
+
+            # Save to database
+            db = SessionLocal()
+            try:
+                from db.models import User
+                db_user = db.query(User).filter(User.id == user_id).first()
+                if db_user:
+                    db_user.height_cm = height_cm
+                    db.commit()
+                    print(f"[PROGRAM] Saved height: {height_cm} cm")
+
+                    # Store in state
+                    self.state.set("program_creation.height_cm", height_cm)
+
+                    # Check if we also need weight
+                    if db_user.weight_kg is None:
+                        return None, f"Height captured successfully ({height_cm} cm). Say: 'Got it, {name}! Now, what's your current weight? You can tell me in pounds or kilograms.' Keep it supportive."
+                    else:
+                        # Have both now - proceed to goal collection
+                        self.state.set("program_creation.weight_kg", float(db_user.weight_kg))
+                        return None, f"Height captured ({height_cm} cm). User has all stats. Say: 'Perfect! I've got your stats. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging and wait for their response, then call capture_goal()."
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            print(f"[ERROR] Failed to capture height: {e}")
+            return None, f"Error capturing height. Say: '{name}, I had trouble understanding that. Can you tell me your height again? For example, five foot nine, or 175 centimeters.' Keep it patient."
+
+    def _normalize_height_to_cm(self, height_str: str) -> float:
+        """Convert various height formats to centimeters"""
+        import re
+
+        height_str = height_str.lower().strip()
+
+        # Pattern: X cm or X centimeters
+        cm_match = re.search(r'(\d+\.?\d*)\s*(cm|centimeter)', height_str)
+        if cm_match:
+            return float(cm_match.group(1))
+
+        # Pattern: X.XX m or X.XX meters
+        m_match = re.search(r'(\d+\.?\d*)\s*(m|meter)', height_str)
+        if m_match:
+            return float(m_match.group(1)) * 100
+
+        # Pattern: X feet Y inches OR X foot Y inches OR X'Y"
+        feet_inches_match = re.search(r"(\d+)\s*(?:feet|foot|ft|')\s*(\d+)\s*(?:inches?|in|\")?", height_str)
+        if feet_inches_match:
+            feet = int(feet_inches_match.group(1))
+            inches = int(feet_inches_match.group(2))
+            total_inches = (feet * 12) + inches
+            return total_inches * 2.54
+
+        # Pattern: Just feet (e.g., "6 feet" or "5 foot")
+        feet_only_match = re.search(r'(\d+)\s*(?:feet|foot|ft)', height_str)
+        if feet_only_match:
+            feet = int(feet_only_match.group(1))
+            return feet * 12 * 2.54
+
+        # Pattern: Just inches
+        inches_match = re.search(r'(\d+)\s*(?:inches?|in)', height_str)
+        if inches_match:
+            inches = int(inches_match.group(1))
+            return inches * 2.54
+
+        # Pattern: Just a number - try to infer
+        number_match = re.search(r'(\d+\.?\d*)', height_str)
+        if number_match:
+            num = float(number_match.group(1))
+            # If < 10, likely meters (e.g., 1.75)
+            if num < 10:
+                return num * 100
+            # If between 50-300, likely cm
+            elif 50 <= num <= 300:
+                return num
+            # If > 300, likely inches
+            elif num > 300:
+                return num * 2.54
+
+        return None
+
+    @function_tool
+    async def capture_weight(self, context: RunContext, weight_value: str):
+        """
+        Call this when the user provides their weight.
+        Accepts various formats: "150 lbs", "68 kg", "150 pounds", "68 kilograms", etc.
+        Normalizes to kilograms and saves to database.
+
+        Args:
+            weight_value: The weight as spoken by the user (e.g., "150", "68 kg", "150 pounds")
+        """
+        print(f"[PROGRAM] Capturing weight: {weight_value}")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        try:
+            # Normalize the weight to kilograms
+            weight_kg = self._normalize_weight_to_kg(weight_value)
+
+            if weight_kg is None or weight_kg < 20 or weight_kg > 300:
+                # Invalid weight
+                return None, f"That weight doesn't seem right. Say: 'Hmm, that doesn't sound quite right. Can you tell me your weight again? For example, you could say 150 pounds, or 68 kilograms.' Keep it supportive."
+
+            # Save to database
+            db = SessionLocal()
+            try:
+                from db.models import User
+                db_user = db.query(User).filter(User.id == user_id).first()
+                if db_user:
+                    db_user.weight_kg = weight_kg
+                    db.commit()
+                    print(f"[PROGRAM] Saved weight: {weight_kg} kg")
+
+                    # Store in state
+                    self.state.set("program_creation.weight_kg", weight_kg)
+
+                    # Check if we also need height
+                    if db_user.height_cm is None:
+                        return None, f"Weight captured successfully ({weight_kg} kg). Say: 'Great! Now I need your height. What's your height? You can tell me in feet and inches, or centimeters.' Keep it friendly."
+                    else:
+                        # Have both now - proceed to goal collection
+                        self.state.set("program_creation.height_cm", float(db_user.height_cm))
+                        return None, f"Weight captured ({weight_kg} kg). User has all stats. Say: 'Awesome, {name}! I've got everything I need. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging and wait for their response, then call capture_goal()."
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            print(f"[ERROR] Failed to capture weight: {e}")
+            return None, f"Error capturing weight. Say: '{name}, I had trouble understanding that. Can you tell me your weight again? For example, 150 pounds, or 68 kilograms.' Keep it patient."
+
+    def _normalize_weight_to_kg(self, weight_str: str) -> float:
+        """Convert various weight formats to kilograms"""
+        import re
+
+        weight_str = weight_str.lower().strip()
+
+        # Pattern: X kg or X kilograms
+        kg_match = re.search(r'(\d+\.?\d*)\s*(?:kg|kilogram)', weight_str)
+        if kg_match:
+            return float(kg_match.group(1))
+
+        # Pattern: X lbs or X pounds
+        lbs_match = re.search(r'(\d+\.?\d*)\s*(?:lbs?|pounds?)', weight_str)
+        if lbs_match:
+            return float(lbs_match.group(1)) * 0.453592
+
+        # Pattern: Just a number - try to infer
+        number_match = re.search(r'(\d+\.?\d*)', weight_str)
+        if number_match:
+            num = float(number_match.group(1))
+            # If < 200, likely kg (most people)
+            # If >= 200, likely lbs
+            if num >= 200:
+                return num * 0.453592
+            else:
+                # Could be either - default to kg for safety
+                # Most adult weights in kg are 40-150
+                return num
+
+        return None
+
+    @function_tool
+    async def capture_goal(self, context: RunContext, goal_description: str):
+        """
+        Call this when the user describes their fitness goal.
+        Accepts free-form input and categorizes it into power, strength, or hypertrophy focus.
+
+        Args:
+            goal_description: The user's goal as they described it (e.g., "I want to look good for summer", "get stronger", "improve my vertical jump")
+        """
+        print(f"[PROGRAM] Capturing goal: {goal_description}")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # Categorize the goal
+        goal_category = self._categorize_goal(goal_description)
+
+        # Store raw description and category in state
+        self.state.set("program_creation.goal_raw", goal_description)
+        self.state.set("program_creation.goal_category", goal_category)
+
+        print(f"[PROGRAM] Goal categorized as: {goal_category}")
+
+        # Create confirmation message based on category
+        if goal_category == "power":
+            confirmation = "explosiveness and athletic performance"
+        elif goal_category == "strength":
+            confirmation = "building maximum strength"
+        else:  # hypertrophy
+            confirmation = "building muscle and aesthetics"
+
+        return None, f"Goal captured: '{goal_description}' → {goal_category}. Say: 'Got it! So it sounds like you're focused on {confirmation}. Now, how long would you like this program to run? I'd recommend {self._get_recommended_duration(goal_category)} weeks for {confirmation}, but you can choose what works best for you.' Keep it conversational."
+
+    def _categorize_goal(self, goal_text: str) -> str:
+        """Categorize user's goal into power, strength, or hypertrophy"""
+        goal_lower = goal_text.lower()
+
+        # Power keywords
+        power_keywords = [
+            "explosive", "power", "athletic", "speed", "jump", "vertical",
+            "sprint", "agility", "quick", "fast", "sport", "performance"
+        ]
+
+        # Strength keywords
+        strength_keywords = [
+            "strong", "strength", "lift heavy", "max", "powerlifting",
+            "deadlift", "squat", "bench", "1rm", "pr", "personal record"
+        ]
+
+        # Hypertrophy keywords
+        hypertrophy_keywords = [
+            "muscle", "size", "big", "aesthetic", "look good", "beach",
+            "summer", "bodybuilding", "bulk", "mass", "tone", "definition",
+            "shredded", "ripped", "physique", "gains"
+        ]
+
+        # Count keyword matches
+        power_score = sum(1 for kw in power_keywords if kw in goal_lower)
+        strength_score = sum(1 for kw in strength_keywords if kw in goal_lower)
+        hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in goal_lower)
+
+        # Return category with highest score
+        if power_score > strength_score and power_score > hypertrophy_score:
+            return "power"
+        elif strength_score > hypertrophy_score:
+            return "strength"
+        else:
+            # Default to hypertrophy if unclear or tied
+            return "hypertrophy"
+
+    def _get_recommended_duration(self, goal_category: str) -> int:
+        """Get recommended program duration based on goal"""
+        if goal_category == "power":
+            return 6
+        elif goal_category == "strength":
+            return 10
+        else:  # hypertrophy
+            return 12
+
+    @function_tool
+    async def capture_program_duration(self, context: RunContext, duration_weeks: int):
+        """
+        Call this when the user specifies how long they want their program to be.
+
+        Args:
+            duration_weeks: Number of weeks for the program (e.g., 8, 12, 16)
+        """
+        print(f"[PROGRAM] Capturing program duration: {duration_weeks} weeks")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Validate duration
+        if duration_weeks < 2 or duration_weeks > 52:
+            return None, f"Invalid duration. Say: 'Hmm, {duration_weeks} weeks seems a bit off. Most programs work best between 4 and 16 weeks. How long would you like your program to be?' Keep it helpful."
+
+        # Store in state
+        self.state.set("program_creation.duration_weeks", duration_weeks)
+
+        print(f"[PROGRAM] Duration set to: {duration_weeks} weeks")
+
+        return None, f"Duration captured: {duration_weeks} weeks. Say: 'Perfect! A {duration_weeks}-week program is a great choice. Now, how many days per week can you train? Most people see great results with 3 to 5 days per week.' Keep it encouraging."
+
+    @function_tool
+    async def capture_training_frequency(self, context: RunContext, days_per_week: int):
+        """
+        Call this when the user specifies how many days per week they can train.
+
+        Args:
+            days_per_week: Number of training days per week (e.g., 3, 4, 5)
+        """
+        print(f"[PROGRAM] Capturing training frequency: {days_per_week} days/week")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Validate frequency
+        if days_per_week < 1 or days_per_week > 7:
+            return None, f"Invalid frequency. Say: 'That doesn't sound quite right. How many days per week can you realistically train? Something between 2 and 6 days works best for most people.' Keep it supportive."
+
+        # Store in state
+        self.state.set("program_creation.days_per_week", days_per_week)
+
+        print(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
+
+        return None, f"Frequency captured: {days_per_week} days/week. Say: 'Awesome! {days_per_week} days per week is solid. Last question: how would you describe your fitness level? Are you a beginner, intermediate, or advanced?' Keep it non-judgmental."
+
+    @function_tool
+    async def capture_fitness_level(self, context: RunContext, fitness_level: str):
+        """
+        Call this when the user describes their fitness level.
+        Normalize to beginner, intermediate, or advanced.
+
+        Args:
+            fitness_level: The user's fitness level (e.g., "beginner", "intermediate", "I've been lifting for 2 years")
+        """
+        print(f"[PROGRAM] Capturing fitness level: {fitness_level}")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Normalize fitness level
+        normalized_level = self._normalize_fitness_level(fitness_level)
+
+        # Store in state
+        self.state.set("program_creation.fitness_level", normalized_level)
+
+        print(f"[PROGRAM] Fitness level normalized to: {normalized_level}")
+
+        # Get all collected data
+        height_cm = self.state.get("program_creation.height_cm")
+        weight_kg = self.state.get("program_creation.weight_kg")
+        goal_category = self.state.get("program_creation.goal_category")
+        goal_raw = self.state.get("program_creation.goal_raw")
+        duration_weeks = self.state.get("program_creation.duration_weeks")
+        days_per_week = self.state.get("program_creation.days_per_week")
+
+        # Print summary to console
+        print("\n" + "="*60)
+        print("[PROGRAM CREATION] All parameters collected:")
+        print(f"  User: {name} (ID: {user.get('id')})")
+        print(f"  Height: {height_cm} cm")
+        print(f"  Weight: {weight_kg} kg")
+        print(f"  Goal Category: {goal_category}")
+        print(f"  Goal Description: \"{goal_raw}\"")
+        print(f"  Duration: {duration_weeks} weeks")
+        print(f"  Training Frequency: {days_per_week} days/week")
+        print(f"  Fitness Level: {normalized_level}")
+        print("="*60 + "\n")
+
+        return None, f"All parameters collected! Say: 'Perfect, {name}! I'm going to create a {duration_weeks}-week {goal_category} program with {days_per_week} training days per week, tailored for your {normalized_level} level. This is going to be awesome!' Keep it enthusiastic."
+
+    def _normalize_fitness_level(self, level_str: str) -> str:
+        """Normalize fitness level to beginner, intermediate, or advanced"""
+        level_lower = level_str.lower()
+
+        # Beginner indicators
+        beginner_keywords = ["beginner", "new", "just starting", "never", "first time", "noob"]
+
+        # Advanced indicators
+        advanced_keywords = ["advanced", "experienced", "years", "competitive", "athlete", "expert"]
+
+        # Check for matches
+        if any(kw in level_lower for kw in beginner_keywords):
+            return "beginner"
+        elif any(kw in level_lower for kw in advanced_keywords):
+            return "advanced"
+        else:
+            # Default to intermediate
+            return "intermediate"
 
     # ===== WORKOUT TOOLS =====
 

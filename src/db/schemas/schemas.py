@@ -9,6 +9,8 @@ from pydantic import BaseModel
 class UserBase(BaseModel):
     name: str
     email: str
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
 
 
 class UserCreate(UserBase):
@@ -112,16 +114,35 @@ class WorkoutRead(WorkoutBase):
 
 
 # -------------------------
-# Programs
+# User Generated Programs
 # -------------------------
-class ProgramBase(BaseModel):
+class UserGeneratedProgramBase(BaseModel):
     name: str
     description: Optional[str]
     duration_weeks: Optional[int]
     is_public: bool = False
 
 
-class ProgramRead(ProgramBase):
+class UserGeneratedProgramRead(UserGeneratedProgramBase):
+    id: int
+    workouts: List[WorkoutRead] = []
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------------
+# Partner Programs
+# -------------------------
+class PartnerProgramBase(BaseModel):
+    name: str
+    description: Optional[str]
+    duration_weeks: Optional[int]
+    partner_name: Optional[str]
+    is_public: bool = False
+
+
+class PartnerProgramRead(PartnerProgramBase):
     id: int
     workouts: List[WorkoutRead] = []
 

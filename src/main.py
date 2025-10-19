@@ -295,8 +295,13 @@ class NowvaApp:
         print("Press Ctrl+C to exit.\n")
 
         # Main monitoring loop - watches state and controls pose estimation
+        # Synchronously monitors voice agent output on main thread
         pose_running = False
         last_mode = self.state.get_mode()
+
+        # Set stdout to line-buffered mode for immediate output
+        import sys
+        sys.stdout.flush()
 
         try:
             while True:
@@ -304,6 +309,23 @@ class NowvaApp:
                 if voice_agent_process.poll() is not None:
                     print("\n[SYSTEM] Voice agent terminated")
                     break
+
+                # Synchronously read voice agent output (main thread, blocking with short timeout)
+                # This uses select for Unix-like systems
+                try:
+                    import select
+                    if voice_agent_process.stdout:
+                        # Wait up to 50ms for data to be available
+                        ready, _, _ = select.select([voice_agent_process.stdout], [], [], 0.05)
+                        if ready:
+                            # Data is available, read one line
+                            line = voice_agent_process.stdout.readline()
+                            if line:
+                                print(line, end='')
+                                sys.stdout.flush()
+                except Exception as e:
+                    # select() might not work on all platforms, continue anyway
+                    pass
 
                 # Reload state to check for changes
                 self.state.reload_state()
@@ -361,7 +383,7 @@ class NowvaApp:
                     print("[POSE] Pose estimation stopped")
 
                 # Sleep briefly to avoid busy loop
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)
 
         except KeyboardInterrupt:
             print("\n\n" + "="*50)

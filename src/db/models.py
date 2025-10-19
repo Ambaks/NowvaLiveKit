@@ -21,11 +21,14 @@ class User(Base):
     name = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(Text, nullable=False)
+    height_cm = Column(DECIMAL(5, 2), nullable=True)  # Height in centimeters
+    weight_kg = Column(DECIMAL(5, 2), nullable=True)  # Weight in kilograms
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    programs = relationship("Program", back_populates="user", cascade="all, delete-orphan")
+    user_generated_programs = relationship("UserGeneratedProgram", back_populates="user", cascade="all, delete-orphan")
+    partner_programs = relationship("PartnerProgram", back_populates="user", cascade="all, delete-orphan")
     progress_logs = relationship("ProgressLog", back_populates="user", cascade="all, delete-orphan")
     schedule = relationship("Schedule", back_populates="user", cascade="all, delete-orphan")
 
@@ -46,10 +49,10 @@ class ProgramTemplate(Base):
 
 
 # -------------------------
-# Programs
+# User Generated Programs (LLM-created)
 # -------------------------
-class Program(Base):
-    __tablename__ = "programs"
+class UserGeneratedProgram(Base):
+    __tablename__ = "user_generated_programs"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -61,9 +64,31 @@ class Program(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    user = relationship("User", back_populates="programs")
-    workouts = relationship("Workout", back_populates="program", cascade="all, delete-orphan")
-    schedule = relationship("Schedule", back_populates="program", cascade="all, delete-orphan")
+    user = relationship("User", back_populates="user_generated_programs")
+    workouts = relationship("Workout", back_populates="user_generated_program", cascade="all, delete-orphan")
+    schedule = relationship("Schedule", back_populates="user_generated_program", cascade="all, delete-orphan")
+
+
+# -------------------------
+# Partner Programs (Pre-built)
+# -------------------------
+class PartnerProgram(Base):
+    __tablename__ = "partner_programs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text)
+    duration_weeks = Column(Integer)
+    partner_name = Column(String(255))  # Name of the partner/creator
+    is_public = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="partner_programs")
+    workouts = relationship("Workout", back_populates="partner_program", cascade="all, delete-orphan")
+    schedule = relationship("Schedule", back_populates="partner_program", cascade="all, delete-orphan")
 
 
 # -------------------------
@@ -73,14 +98,16 @@ class Workout(Base):
     __tablename__ = "workouts"
 
     id = Column(Integer, primary_key=True, index=True)
-    program_id = Column(Integer, ForeignKey("programs.id", ondelete="CASCADE"))
+    user_generated_program_id = Column(Integer, ForeignKey("user_generated_programs.id", ondelete="CASCADE"), nullable=True)
+    partner_program_id = Column(Integer, ForeignKey("partner_programs.id", ondelete="CASCADE"), nullable=True)
     day_number = Column(Integer)  # Day 1, Day 2, etc.
     name = Column(String(255))
     description = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
-    program = relationship("Program", back_populates="workouts")
+    user_generated_program = relationship("UserGeneratedProgram", back_populates="workouts")
+    partner_program = relationship("PartnerProgram", back_populates="workouts")
     workout_exercises = relationship("WorkoutExercise", back_populates="workout", cascade="all, delete-orphan")
     schedule = relationship("Schedule", back_populates="workout", cascade="all, delete-orphan")
 
@@ -165,12 +192,14 @@ class Schedule(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    program_id = Column(Integer, ForeignKey("programs.id", ondelete="CASCADE"))
+    user_generated_program_id = Column(Integer, ForeignKey("user_generated_programs.id", ondelete="CASCADE"), nullable=True)
+    partner_program_id = Column(Integer, ForeignKey("partner_programs.id", ondelete="CASCADE"), nullable=True)
     workout_id = Column(Integer, ForeignKey("workouts.id", ondelete="CASCADE"))
     scheduled_date = Column(Date, nullable=False)
     completed = Column(Boolean, default=False)
 
     # Relationships
     user = relationship("User", back_populates="schedule")
-    program = relationship("Program", back_populates="schedule")
+    user_generated_program = relationship("UserGeneratedProgram", back_populates="schedule")
+    partner_program = relationship("PartnerProgram", back_populates="schedule")
     workout = relationship("Workout", back_populates="schedule")

@@ -6,7 +6,7 @@ from portable_db_module import (
     SessionLocal,
     User,
     Exercise,
-    Program,
+    UserGeneratedProgram,
     Workout,
     WorkoutExercise,
     Set,
@@ -118,8 +118,8 @@ def example_create_program_with_workout(user_id):
     db = SessionLocal()
 
     try:
-        # Create a program
-        program = Program(
+        # Create a user-generated program
+        program = UserGeneratedProgram(
             user_id=user_id,
             name="Beginner Strength Program",
             description="A 12-week beginner strength program",
@@ -131,7 +131,7 @@ def example_create_program_with_workout(user_id):
 
         # Create a workout
         workout = Workout(
-            program_id=program.id,
+            user_generated_program_id=program.id,
             day_number=1,
             name="Upper Body Day",
             description="Focus on chest and back"
@@ -196,7 +196,7 @@ def example_query_with_relationships():
 
     try:
         # Get a program with all related data
-        program = db.query(Program).first()
+        program = db.query(UserGeneratedProgram).first()
 
         if program:
             print(f"Program: {program.name}")
