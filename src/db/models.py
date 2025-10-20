@@ -100,7 +100,9 @@ class Workout(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_generated_program_id = Column(Integer, ForeignKey("user_generated_programs.id", ondelete="CASCADE"), nullable=True)
     partner_program_id = Column(Integer, ForeignKey("partner_programs.id", ondelete="CASCADE"), nullable=True)
+    week_number = Column(Integer, nullable=True)  # Week 1, Week 2, etc.
     day_number = Column(Integer)  # Day 1, Day 2, etc.
+    phase = Column(String(50), nullable=True)  # Build, Deload, Peak, Taper, etc.
     name = Column(String(255))
     description = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -156,7 +158,8 @@ class Set(Base):
     workout_exercise_id = Column(Integer, ForeignKey("workout_exercises.id", ondelete="CASCADE"))
     set_number = Column(Integer)
     reps = Column(Integer)
-    weight = Column(DECIMAL(6, 2))
+    weight = Column(DECIMAL(6, 2))  # Actual weight (null initially, user fills in)
+    intensity_percent = Column(DECIMAL(5, 2), nullable=True)  # % of 1RM (e.g., 75.00)
     rpe = Column(DECIMAL(3, 1))
     rest_seconds = Column(Integer)
 

@@ -31,7 +31,7 @@ from core.agent_state import AgentState
 from core.ipc_communication import IPCClient
 
 # Prompt imports
-from agents.prompts import ONBOARDING_PROMPT, get_main_menu_prompt, get_workout_prompt
+from agents.prompts import ONBOARDING_PROMPT, get_main_menu_prompt, get_workout_prompt, get_program_creation_prompt
 
 # Database imports
 from db.database import SessionLocal
@@ -70,6 +70,8 @@ class NovaVoiceAgent(Agent):
             return self._get_main_menu_instructions()
         elif mode == "workout":
             return self._get_workout_instructions()
+        elif mode == "program_creation":
+            return self._get_program_creation_instructions()
         else:
             return self._get_onboarding_instructions()
 
@@ -90,6 +92,12 @@ class NovaVoiceAgent(Agent):
         user = self.state.get_user()
         name = user.get("name", "there")
         return get_workout_prompt(name)
+
+    def _get_program_creation_instructions(self) -> str:
+        """Instructions for program creation mode"""
+        user = self.state.get_user()
+        name = user.get("name", "there")
+        return get_program_creation_prompt(name)
 
     async def on_enter(self):
         """Entry point - generate appropriate greeting based on mode"""
@@ -391,9 +399,13 @@ class NovaVoiceAgent(Agent):
             has_programs = has_any_programs(db, user_id)
 
             if not has_programs:
-                # No programs - inform user and proceed to creation
-                print("[PROGRAM] User has no programs - proceeding to creation")
-                return None, f"The user has no programs yet. Say: '{name}, looks like you don't have any programs yet. Let's create your first one! I'll ask you a few questions to build a custom program just for you.' Then call create_program() to start the creation process. Keep it encouraging."
+                # No programs - switch to program_creation mode
+                print("[PROGRAM] User has no programs - switching to program_creation mode")
+                self.state.switch_mode("program_creation")
+                self.state.save_state()
+
+                # Instruct agent to call create_program()
+                return None, f"The user has no programs yet. Say something like: 'Oh! It looks like you don't have any programs yet. Let's create your first one! I'll ask you a few questions to build a custom program just for you.' Then call create_program() to start the creation process. Keep it encouraging."
             else:
                 # Has programs - ask if they want to create new or update existing
                 print("[PROGRAM] User has existing programs")
@@ -451,11 +463,11 @@ class NovaVoiceAgent(Agent):
             else:
                 # Have both - proceed with program creation
                 print(f"[PROGRAM] User has height ({db_user.height_cm} cm) and weight ({db_user.weight_kg} kg) - proceeding")
-                return None, f"The user has all required info. Say: '{name}, perfect! I have your stats. Now let's talk about your goals. What are you looking to achieve with this program? Strength, muscle gain, endurance, or something else?' Keep it engaging."
+                return None, f"The user has all required info. Say something like: ' Ok perfect! I already have your height and weight. Now let's talk about your goals. What are you looking to achieve with this program? Strength, muscle gain, endurance, weight loss, or something else?' Keep it engaging."
 
         except Exception as e:
             print(f"[ERROR] Failed to check user stats: {e}")
-            return None, f"Database error. Say: '{name}, I'm having trouble accessing your profile right now. Let's try again in a moment.' Keep it apologetic."
+            return None, f"Database error. Say something like: 'Hmmm, {name} I'm having trouble accessing your profile right now. Let's try again in a moment.' Keep it apologetic."
         finally:
             db.close()
 
@@ -648,6 +660,842 @@ class NovaVoiceAgent(Agent):
 
         return None
 
+    @function_tool
+    async def capture_goal(self, context: RunContext, goal_description: str):
+        """
+        Call this when the user describes their fitness goal.
+        Accepts free-form input and categorizes it into power, strength, or hypertrophy focus.
+
+        Args:
+            goal_description: The user's goal as they described it (e.g., "I want to look good for summer", "get stronger", "improve my vertical jump")
+        """
+        print(f"[PROGRAM] Capturing goal: {goal_description}")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Categorize the goal
+        goal_category = self._categorize_goal(goal_description)
+
+        # Store raw description and category in state
+        self.state.set("program_creation.goal_raw", goal_description)
+        self.state.set("program_creation.goal_category", goal_category)
+
+        print(f"[PROGRAM] Goal categorized as: {goal_category}")
+
+        # Create confirmation message based on category
+        if goal_category == "power":
+            confirmation = "explosiveness and athletic performance"
+        elif goal_category == "strength":
+            confirmation = "building maximum strength"
+        else:  # hypertrophy
+            confirmation = "building muscle and aesthetics"
+
+        return None, f"Goal captured: '{goal_description}' → {goal_category}. Immediately say: 'Got it! So it sounds like you're focused on {confirmation}. How long would you like this program to run? I'd recommend {self._get_recommended_duration(goal_category)} weeks.' Keep it brief and conversational. Don't wait for acknowledgment."
+
+    def _categorize_goal(self, goal_text: str) -> str:
+        """Categorize user's goal into power, strength, or hypertrophy"""
+        goal_lower = goal_text.lower()
+
+        # Power keywords
+        power_keywords = [
+            "explosive", "power", "athletic", "speed", "jump", "vertical",
+            "sprint", "agility", "quick", "fast", "sport", "performance"
+        ]
+
+        # Strength keywords
+        strength_keywords = [
+            "strong", "strength", "lift heavy", "max", "powerlifting",
+            "deadlift", "squat", "bench", "1rm", "pr", "personal record"
+        ]
+
+        # Hypertrophy keywords
+        hypertrophy_keywords = [
+            "muscle", "size", "big", "aesthetic", "look good", "beach",
+            "summer", "bodybuilding", "bulk", "mass", "tone", "definition",
+            "shredded", "ripped", "physique", "gains"
+        ]
+
+        # Count keyword matches
+        power_score = sum(1 for kw in power_keywords if kw in goal_lower)
+        strength_score = sum(1 for kw in strength_keywords if kw in goal_lower)
+        hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in goal_lower)
+
+        # Return category with highest score
+        if power_score > strength_score and power_score > hypertrophy_score:
+            return "power"
+        elif strength_score > hypertrophy_score:
+            return "strength"
+        else:
+            # Default to hypertrophy if unclear or tied
+            return "hypertrophy"
+
+    def _get_recommended_duration(self, goal_category: str) -> int:
+        """Get recommended program duration based on goal"""
+        if goal_category == "power":
+            return 6
+        elif goal_category == "strength":
+            return 10
+        else:  # hypertrophy
+            return 12
+
+    @function_tool
+    async def capture_program_duration(self, context: RunContext, duration_weeks: int):
+        """
+        Call this when the user specifies how long they want their program to be.
+
+        Args:
+            duration_weeks: Number of weeks for the program (e.g., 8, 12, 16)
+        """
+        print(f"[PROGRAM] Capturing program duration: {duration_weeks} weeks")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Validate duration
+        if duration_weeks < 2 or duration_weeks > 52:
+            return None, f"Invalid duration. Say: 'Hmm, {duration_weeks} weeks seems a bit off. Most programs work best between 4 and 16 weeks. How long would you like your program to be?' Keep it helpful."
+
+        # Store in state
+        self.state.set("program_creation.duration_weeks", duration_weeks)
+
+        print(f"[PROGRAM] Duration set to: {duration_weeks} weeks")
+
+        return None, f"Duration captured: {duration_weeks} weeks. Immediately say: 'Perfect! {duration_weeks} weeks is great. How many days per week can you train?' Keep it brief. Don't wait."
+
+    @function_tool
+    async def capture_training_frequency(self, context: RunContext, days_per_week: int):
+        """
+        Call this when the user specifies how many days per week they can train.
+
+        Args:
+            days_per_week: Number of training days per week (e.g., 3, 4, 5)
+        """
+        print(f"[PROGRAM] Capturing training frequency: {days_per_week} days/week")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Validate frequency
+        if days_per_week < 1 or days_per_week > 7:
+            return None, f"Invalid frequency. Say: 'That doesn't sound quite right. How many days per week can you realistically train? Something between 2 and 6 days works best for most people.' Keep it supportive."
+
+        # Store in state
+        self.state.set("program_creation.days_per_week", days_per_week)
+
+        print(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
+
+        return None, f"Frequency captured: {days_per_week} days/week. Immediately say: 'Awesome! {days_per_week} days is solid. Last question: how would you describe your fitness level? Beginner, intermediate, or advanced?' Keep it brief. Don't wait."
+
+    @function_tool
+    async def capture_fitness_level(self, context: RunContext, fitness_level: str):
+        """
+        Call this when the user describes their fitness level.
+        Normalize to beginner, intermediate, or advanced.
+
+        Args:
+            fitness_level: The user's fitness level (e.g., "beginner", "intermediate", "I've been lifting for 2 years")
+        """
+        print(f"[PROGRAM] Capturing fitness level: {fitness_level}")
+        print(f"[DEBUG] Step 1: Getting user from state...")
+
+        user = self.state.get_user()
+        print(f"[DEBUG] Step 2: User retrieved: {user}")
+
+        name = user.get("name", "there")
+        print(f"[DEBUG] Step 3: Name is: {name}")
+
+        # Normalize fitness level
+        print(f"[DEBUG] Step 4: Normalizing fitness level...")
+        normalized_level = self._normalize_fitness_level(fitness_level)
+        print(f"[DEBUG] Step 5: Normalized to: {normalized_level}")
+
+        # Store in state
+        print(f"[DEBUG] Step 6: Storing in state...")
+        self.state.set("program_creation.fitness_level", normalized_level)
+        print(f"[DEBUG] Step 7: Stored successfully")
+
+        print(f"[PROGRAM] Fitness level normalized to: {normalized_level}")
+
+        # Get all collected data
+        height_cm = self.state.get("program_creation.height_cm")
+        weight_kg = self.state.get("program_creation.weight_kg")
+        goal_category = self.state.get("program_creation.goal_category")
+        goal_raw = self.state.get("program_creation.goal_raw")
+        duration_weeks = self.state.get("program_creation.duration_weeks")
+        days_per_week = self.state.get("program_creation.days_per_week")
+
+        # Print summary to console
+        print("\n" + "="*60)
+        print("[PROGRAM CREATION] All parameters collected:")
+        print(f"  User: {name} (ID: {user.get('id')})")
+        print(f"  Height: {height_cm} cm")
+        print(f"  Weight: {weight_kg} kg")
+        print(f"  Goal Category: {goal_category}")
+        print(f"  Goal Description: \"{goal_raw}\"")
+        print(f"  Duration: {duration_weeks} weeks")
+        print(f"  Training Frequency: {days_per_week} days/week")
+        print(f"  Fitness Level: {normalized_level}")
+        print("="*60 + "\n")
+
+        # Acknowledge the fitness level and inform user that generation is starting
+        # The agent should speak THEN call the function (not both simultaneously)
+        return None, f"All parameters collected! First, say to {name}: 'Perfect! I've got everything I need. You're an {normalized_level} lifter looking to focus on {goal_category} for {duration_weeks} weeks, training {days_per_week} days a week. Let me generate your custom program now. This will take about a minute, so hang tight!' After you finish speaking this entire message, then call generate_workout_program() and wait for it to finish before doing anything else."
+
+    def _normalize_fitness_level(self, level_str: str) -> str:
+        """Normalize fitness level to beginner, intermediate, or advanced"""
+        level_lower = level_str.lower()
+
+        # Beginner indicators
+        beginner_keywords = ["beginner", "new", "just starting", "never", "first time", "noob"]
+
+        # Advanced indicators
+        advanced_keywords = ["advanced", "experienced", "years", "competitive", "athlete", "expert"]
+
+        # Check for matches
+        if any(kw in level_lower for kw in beginner_keywords):
+            return "beginner"
+        elif any(kw in level_lower for kw in advanced_keywords):
+            return "advanced"
+        else:
+            # Default to intermediate
+            return "intermediate"
+
+    @function_tool
+    async def generate_workout_program(self, context: RunContext):
+        """
+        Call this to START generating a complete workout program using GPT-5 based on the user's collected parameters.
+        This function returns immediately and the generation happens in the background.
+        The program will be generated based on:
+        - User's height and weight
+        - Goal (power/strength/hypertrophy)
+        - Program duration
+        - Training frequency
+        - Fitness level
+
+        This function will return immediately and start generation in background.
+        """
+        import json
+        from openai import AsyncOpenAI
+
+        print("\n" + "="*80)
+        print("[PROGRAM] ⚡ generate_workout_program() CALLED")
+        print("="*80)
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        print(f"[PROGRAM] User: {name} (ID: {user_id})")
+
+        # CRITICAL: Check if program has already been generated this session
+        existing_program = self.state.get("program_creation.generated_program")
+        if existing_program:
+            print("[PROGRAM] ⚠️  Program already generated - skipping duplicate call")
+            return None, f"Program already generated and saved. Now call finish_program_creation() to complete."
+
+        # Check if generation is already in progress
+        generation_in_progress = self.state.get("program_creation.generation_in_progress")
+        if generation_in_progress:
+            print("[PROGRAM] ⚠️  Generation already in progress - skipping duplicate call")
+            return None, f"Program generation already in progress. Please wait for it to complete."
+
+        # Get all parameters from state
+        print("[PROGRAM] Retrieving parameters from state...")
+        height_cm = self.state.get("program_creation.height_cm")
+        weight_kg = self.state.get("program_creation.weight_kg")
+        goal_category = self.state.get("program_creation.goal_category")
+        goal_raw = self.state.get("program_creation.goal_raw")
+        duration_weeks = self.state.get("program_creation.duration_weeks")
+        days_per_week = self.state.get("program_creation.days_per_week")
+        fitness_level = self.state.get("program_creation.fitness_level")
+
+        print(f"[PROGRAM] Parameters retrieved:")
+        print(f"  - height_cm: {height_cm}")
+        print(f"  - weight_kg: {weight_kg}")
+        print(f"  - goal_category: {goal_category}")
+        print(f"  - goal_raw: {goal_raw}")
+        print(f"  - duration_weeks: {duration_weeks}")
+        print(f"  - days_per_week: {days_per_week}")
+        print(f"  - fitness_level: {fitness_level}")
+
+        # Validate we have all parameters
+        missing = []
+        if not height_cm: missing.append("height_cm")
+        if not weight_kg: missing.append("weight_kg")
+        if not goal_category: missing.append("goal_category")
+        if not duration_weeks: missing.append("duration_weeks")
+        if not days_per_week: missing.append("days_per_week")
+        if not fitness_level: missing.append("fitness_level")
+
+        if missing:
+            print(f"[PROGRAM] ❌ ERROR: Missing parameters: {', '.join(missing)}")
+            return None, f"Missing parameters: {', '.join(missing)}. Say: '{name}, I need all your info before I can create your program. Let me collect what's missing...' Keep it helpful."
+
+        print("[PROGRAM] ✅ All parameters validated successfully")
+
+        # Mark generation as in progress
+        self.state.set("program_creation.generation_in_progress", True)
+        print("[PROGRAM] 🔄 Generation marked as in progress")
+
+        try:
+            print("[PROGRAM] Creating system prompt...")
+            # Create the system prompt for program generation
+            system_prompt = self._get_program_generation_system_prompt()
+            print(f"[PROGRAM] System prompt created ({len(system_prompt)} chars)")
+
+            print("[PROGRAM] Creating user prompt...")
+            # Create the user prompt with all parameters
+            user_prompt = f"""Create a personalized barbell-only weightlifting program for the following user:
+
+**User Profile:**
+- Name: {name}
+- Height: {height_cm} cm
+- Weight: {weight_kg} kg
+- Goal Category: {goal_category}
+- Goal Description: "{goal_raw}"
+- Fitness Level: {fitness_level}
+- Program Duration: {duration_weeks} weeks
+- Training Frequency: {days_per_week} days per week
+
+**Requirements:**
+1. Create a COMPLETE {duration_weeks}-week program with ALL {days_per_week} training days for EVERY week
+2. Use ONLY barbell exercises (and bodyweight for pull-ups/dips if needed)
+3. Include specific intensity percentages (% of 1RM) for each set that progress week-by-week
+4. Optimize volume per muscle group based on {goal_category} focus
+5. Set appropriate RIR based on {fitness_level} level (beginner: 2-3 RIR, intermediate: 1-2 RIR, advanced: 0-1 RIR)
+6. Show progressive loading: Week 1 might be 75% 1RM, Week 2 might be 77.5%, etc.
+7. Include deload weeks with reduced intensity/volume
+8. Structure each day logically (main lifts → accessories)
+9. Set appropriate rest periods based on goal
+
+**CRITICAL: You MUST generate ALL {duration_weeks} weeks × {days_per_week} days = {duration_weeks * days_per_week} total workouts.**
+
+**Output Format:**
+Return a valid JSON object with this EXACT structure:
+
+{{
+  "program_name": "Descriptive program name",
+  "description": "Brief program description",
+  "duration_weeks": {duration_weeks},
+  "goal": "{goal_category}",
+  "progression_strategy": "Detailed explanation of how intensity/volume progresses week-to-week",
+  "notes": "Important notes about deloads, form, recovery, warm-ups, etc.",
+  "weeks": [
+    {{
+      "week_number": 1,
+      "phase": "Build/Deload/Peak/Taper",
+      "workouts": [
+        {{
+          "day_number": 1,
+          "name": "Workout day name (e.g., Upper Push, Lower Power)",
+          "description": "Brief description of focus",
+          "exercises": [
+            {{
+              "exercise_name": "Exact exercise name (e.g., Barbell Bench Press)",
+              "category": "Strength",
+              "muscle_group": "Primary muscle group",
+              "order": 1,
+              "sets": [
+                {{
+                  "set_number": 1,
+                  "reps": 5,
+                  "intensity_percent": 75.0,
+                  "weight": null,
+                  "rpe": null,
+                  "rir": 2,
+                  "rest_seconds": 180,
+                  "notes": "Optional notes"
+                }}
+              ]
+            }}
+          ]
+        }},
+        {{
+          "day_number": 2,
+          "name": "...",
+          "exercises": [...]
+        }},
+        {{
+          "day_number": 3,
+          "name": "...",
+          "exercises": [...]
+        }},
+        {{
+          "day_number": 4,
+          "name": "...",
+          "exercises": [...]
+        }}
+      ]
+    }},
+    {{
+      "week_number": 2,
+      "phase": "Build",
+      "workouts": [
+        // ALL {days_per_week} days for Week 2 with slightly higher intensity
+      ]
+    }}
+    // Continue for ALL {duration_weeks} weeks
+  ]
+}}
+
+**IMPORTANT REMINDERS:**
+- Include intensity_percent (% of 1RM) for EVERY set
+- Generate ALL {duration_weeks} weeks (not just a template)
+- Each week should have ALL {days_per_week} workout days
+- Show progressive overload: intensity should increase week-to-week
+- Include deload weeks (typically every 4th week with ~60-70% intensity)
+
+Generate the COMPLETE program now with all {duration_weeks} weeks."""
+
+            print(f"[PROGRAM] User prompt created ({len(user_prompt)} chars)")
+
+            # Make async API call to GPT-4o
+            print("[PROGRAM] Initializing OpenAI client...")
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                print("[PROGRAM] ❌ ERROR: OPENAI_API_KEY not found in environment!")
+                return None, f"Configuration error. Say: '{name}, I'm having trouble accessing the AI service. Please check the configuration.' Keep it apologetic."
+
+            client = AsyncOpenAI(api_key=api_key)
+            print("[PROGRAM] ✅ OpenAI client initialized")
+
+            model = os.getenv("PROGRAM_CREATION_MODEL", "gpt-5")
+
+            # GPT-5 doesn't support custom temperature - only default (1.0)
+            # GPT-4o and earlier support custom temperature
+            temperature = None if model.startswith("gpt-5") else 0.7
+
+            print(f"[PROGRAM] 🚀 Calling {model} API for program generation...")
+            print(f"[PROGRAM] Request details:")
+            print(f"  - Model: {model}")
+            print(f"  - Temperature: {temperature if temperature else 'default (1.0)'}")
+            print(f"  - Response format: JSON")
+
+            # Build request params conditionally
+            request_params = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"}
+            }
+
+            # Only add temperature if not GPT-5
+            if temperature is not None:
+                request_params["temperature"] = temperature
+
+            print(f"[PROGRAM] 📡 Sending request to OpenAI API...")
+            print(f"[PROGRAM] This may take 2-4 minutes for {model}...")
+
+            import time
+            start_time = time.time()
+
+            # Add explicit timeout - GPT-5 can take 2-4 minutes for complex programs
+            request_params["timeout"] = 300.0  # 5 minutes max
+
+            response = await client.chat.completions.create(**request_params)
+
+            elapsed_time = time.time() - start_time
+            print(f"[PROGRAM] ✅ API call completed in {elapsed_time:.2f} seconds!")
+            print(f"[PROGRAM] Response received from {model}")
+
+            # Parse the response
+            program_json = response.choices[0].message.content
+            print(f"[PROGRAM] Parsing program JSON ({len(program_json)} chars)...")
+            program_data = json.loads(program_json)
+            print("[PROGRAM] ✅ JSON parsed successfully")
+
+            # Store in state temporarily
+            print("[PROGRAM] Storing program in state...")
+            self.state.set("program_creation.generated_program", program_data)
+            print("[PROGRAM] ✅ Program stored in state")
+
+            print(f"\n[PROGRAM] 🎉 Program generated successfully!")
+            print(f"[PROGRAM] Program name: {program_data.get('program_name')}")
+            print(f"[PROGRAM] Duration: {program_data.get('duration_weeks')} weeks")
+            print(f"[PROGRAM] Workouts: {len(program_data.get('workouts', []))} days")
+            print("="*80 + "\n")
+
+            # Clear the generation in progress flag
+            self.state.set("program_creation.generation_in_progress", False)
+
+            # Now save to database - agent must call immediately without waiting
+            print("[PROGRAM] 🎯 Returning from generate_workout_program() - instructing agent to save")
+            return None, f"Program generated successfully! Now call save_generated_program() to save it to the database. Call the function immediately without speaking first."
+
+        except json.JSONDecodeError as e:
+            self.state.set("program_creation.generation_in_progress", False)
+            print(f"\n[PROGRAM] ❌ JSON DECODE ERROR")
+            print(f"[PROGRAM] Error: {e}")
+            print(f"[PROGRAM] Response preview: {program_json[:500] if 'program_json' in locals() else 'N/A'}...")
+            print("="*80 + "\n")
+            return None, f"Error parsing program. Say: '{name}, I had trouble formatting that program. Let me try again...' Keep it apologetic."
+        except Exception as e:
+            self.state.set("program_creation.generation_in_progress", False)
+            print(f"\n[PROGRAM] ❌ EXCEPTION OCCURRED")
+            print(f"[PROGRAM] Error type: {type(e).__name__}")
+            print(f"[PROGRAM] Error message: {e}")
+            import traceback
+            print("[PROGRAM] Full traceback:")
+            traceback.print_exc()
+            print("="*80 + "\n")
+            return None, f"Error generating program. Say: '{name}, I ran into an issue creating your program. Let me try again in a moment.' Keep it apologetic."
+
+    def _get_program_generation_system_prompt(self) -> str:
+        """Get the system prompt for GPT-5 program generation with CAG knowledge base"""
+
+        # Base coaching expertise and guidelines
+        base_prompt = """You are an elite strength and conditioning coach specializing in barbell training and evidence-based program design.
+
+Your expertise includes:
+- Exercise physiology and biomechanics
+- Progressive overload and periodization strategies
+- Volume landmarks for hypertrophy, strength, and power development
+- Proper exercise selection and sequencing
+- Recovery and fatigue management
+
+**Volume Guidelines (sets per muscle group per week):**
+
+Hypertrophy Focus:
+- Chest: 12-20 sets/week
+- Back: 14-22 sets/week
+- Quads: 12-18 sets/week
+- Hamstrings: 10-16 sets/week
+- Shoulders: 12-18 sets/week
+- Arms: 8-14 sets/week
+
+Strength Focus:
+- Main Lifts (Squat, Bench, Deadlift, OHP): 6-12 sets/week each
+- Accessory work: 50-70% of main lift volume
+
+Power Focus:
+- Main Power Movements: 4-8 sets/week
+- Accessory Strength: 6-10 sets/week
+
+**Rep Ranges:**
+- Hypertrophy: 6-12 reps (can use 5-20 range)
+- Strength: 1-6 reps (80-95% 1RM)
+- Power: 1-5 reps with explosive intent (50-85% 1RM)
+
+**Rest Periods:**
+- Strength/Power: 3-5 minutes
+- Hypertrophy: 1.5-3 minutes
+- Accessory: 1-2 minutes
+
+**RIR (Reps in Reserve):**
+- Beginner: 2-4 RIR (focus on technique)
+- Intermediate: 1-3 RIR
+- Advanced: 0-2 RIR (can approach failure on appropriate exercises)
+
+**Barbell Exercise Library:**
+- Lower: Back squat, front squat, deadlift (conventional/sumo), RDL, Bulgarian split squat, hip thrust
+- Upper Push: Bench press (flat/incline), overhead press, push press, close-grip bench
+- Upper Pull: Barbell row (bent-over/pendlay), pull-ups (weighted)
+- Olympic: Clean, snatch, push jerk (for power focus)
+
+**Progression Strategies:**
+- Linear Progression: Add weight each week (beginner)
+- Double Progression: Increase reps, then weight (all levels)
+- Wave Loading: Vary intensity across weeks (intermediate+)
+- Block Periodization: Phase-based training (advanced)
+
+**Program Structure by Frequency:**
+- 2-3 days: Full body each session
+- 4 days: Upper/Lower split
+- 5-6 days: Push/Pull/Legs or Upper/Lower/Upper/Lower
+
+**Key Principles:**
+1. Start conservative, progress steadily
+2. Balance muscle groups across the week
+3. Place hardest work first in each session
+4. Include deload weeks every 4-8 weeks
+5. Prioritize compound movements
+6. Scale volume to recovery capacity
+
+Generate programs that are challenging but achievable, progressive, and scientifically sound. Always return valid JSON in the exact format specified."""
+
+        # Load CAG periodization knowledge base from external file
+        try:
+            cag_knowledge_path = Path(__file__).parent.parent / "knowledge" / "cag_periodization.txt"
+            with open(cag_knowledge_path, 'r', encoding='utf-8') as f:
+                cag_knowledge = f.read()
+
+            print(f"[PROGRAM] Loaded CAG knowledge base ({len(cag_knowledge)} characters)")
+
+            # Combine base prompt with CAG knowledge
+            full_prompt = base_prompt + "\n\n" + "="*80 + "\n" + cag_knowledge
+            return full_prompt
+
+        except FileNotFoundError:
+            print("[PROGRAM] ⚠️  WARNING: CAG knowledge base file not found, using base prompt only")
+            return base_prompt
+        except Exception as e:
+            print(f"[PROGRAM] ⚠️  WARNING: Error loading CAG knowledge base: {e}")
+            return base_prompt
+
+    @function_tool
+    async def save_generated_program(self, context: RunContext):
+        """
+        Call this to save the generated program to the database.
+        This should be called immediately after generate_workout_program().
+        """
+        print("[PROGRAM] Saving program to database...")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # CRITICAL: Check if program has already been saved
+        already_saved_id = self.state.get("program_creation.saved_program_id")
+        if already_saved_id:
+            print(f"[PROGRAM] ⚠️  Program already saved with ID {already_saved_id} - skipping duplicate save")
+            return None, f"Program already saved to database. Proceeding to markdown generation if not already done."
+
+        # Get program data from state
+        program_data = self.state.get("program_creation.generated_program")
+
+        if not program_data:
+            print("[PROGRAM] ⚠️  No program data found - generate_workout_program() hasn't completed yet or failed")
+            return None, f"No program data found in state. The program hasn't been generated yet. Wait for generate_workout_program() to complete before calling save. Say: '{name}, still working on generating your program. Give me just a moment...' Keep it patient."
+
+        db = SessionLocal()
+        try:
+            from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set
+
+            # Create UserGeneratedProgram
+            user_program = UserGeneratedProgram(
+                user_id=user_id,
+                name=program_data.get("program_name"),
+                description=program_data.get("description"),
+                duration_weeks=program_data.get("duration_weeks"),
+                is_public=False
+            )
+            db.add(user_program)
+            db.flush()  # Get the ID
+
+            # Create each week and its workouts
+            for week_data in program_data.get("weeks", []):
+                week_number = week_data.get("week_number")
+                phase = week_data.get("phase")
+
+                for workout_data in week_data.get("workouts", []):
+                    workout = Workout(
+                        user_generated_program_id=user_program.id,
+                        week_number=week_number,
+                        day_number=workout_data.get("day_number"),
+                        phase=phase,
+                        name=workout_data.get("name"),
+                        description=workout_data.get("description")
+                    )
+                    db.add(workout)
+                    db.flush()
+
+                    # Create exercises for this workout
+                    for exercise_data in workout_data.get("exercises", []):
+                        # Check if exercise exists, if not create it
+                        exercise_name = exercise_data.get("exercise_name")
+                        exercise = db.query(Exercise).filter(Exercise.name == exercise_name).first()
+
+                        if not exercise:
+                            # Create new exercise
+                            exercise = Exercise(
+                                name=exercise_name,
+                                category=exercise_data.get("category"),
+                                muscle_group=exercise_data.get("muscle_group"),
+                                description=f"Barbell exercise: {exercise_name}"
+                            )
+                        db.add(exercise)
+                        db.flush()
+                        print(f"[PROGRAM] Created new exercise: {exercise_name}")
+
+                    # Create workout_exercise (join table entry)
+                    workout_exercise = WorkoutExercise(
+                        workout_id=workout.id,
+                        exercise_id=exercise.id,
+                        order_number=exercise_data.get("order"),
+                        notes=exercise_data.get("notes", "")
+                    )
+                    db.add(workout_exercise)
+                    db.flush()
+
+                    # Create sets for this exercise
+                    for set_data in exercise_data.get("sets", []):
+                        set_obj = Set(
+                            workout_exercise_id=workout_exercise.id,
+                            set_number=set_data.get("set_number"),
+                            reps=set_data.get("reps"),
+                            weight=set_data.get("weight"),  # Will be None initially
+                            intensity_percent=set_data.get("intensity_percent"),  # % of 1RM
+                            rpe=set_data.get("rpe"),
+                            rest_seconds=set_data.get("rest_seconds")
+                        )
+                        # Store RIR in RPE column temporarily
+                        if "rir" in set_data:
+                            set_obj.rpe = set_data["rir"]
+
+                        db.add(set_obj)
+
+            db.commit()
+
+            # Store program ID in state
+            self.state.set("program_creation.saved_program_id", user_program.id)
+
+            print(f"[PROGRAM] Program saved successfully! ID: {user_program.id}")
+
+            return None, f"Program saved successfully! Now call generate_program_markdown() to create the summary. Call the function immediately without speaking first."
+
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] Failed to save program: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, f"Error saving program. Say: '{name}, I had trouble saving your program. Let me try again...' Keep it apologetic."
+        finally:
+            db.close()
+
+    @function_tool
+    async def generate_program_markdown(self, context: RunContext):
+        """
+        Call this to generate a markdown file with the workout program.
+        This should be called after save_generated_program().
+        """
+        print("[PROGRAM] Generating program markdown...")
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # Get program data and ID from state
+        program_data = self.state.get("program_creation.generated_program")
+        program_id = self.state.get("program_creation.saved_program_id")
+
+        if not program_data:
+            return None, f"No program data found. Say: '{name}, I need the program data to create the summary.' Keep it brief."
+
+        # CRITICAL: Check if markdown has already been generated
+        markdown_generated = self.state.get("program_creation.markdown_generated")
+        if markdown_generated:
+            print(f"[PROGRAM] ⚠️  Markdown already generated - skipping duplicate call")
+            return None, f"Markdown summary already created. Proceeding to finish program creation if not already done."
+
+        try:
+            # Create markdown content
+            md_content = f"# {program_data.get('program_name')}\n\n"
+            md_content += f"**Created for:** {name}\n\n"
+            md_content += f"**Duration:** {program_data.get('duration_weeks')} weeks\n\n"
+            md_content += f"**Goal:** {program_data.get('goal').title()}\n\n"
+            md_content += f"**Description:** {program_data.get('description')}\n\n"
+
+            if program_data.get('progression_strategy'):
+                md_content += f"**Progression Strategy:** {program_data.get('progression_strategy')}\n\n"
+
+            if program_data.get('notes'):
+                md_content += f"**Notes:** {program_data.get('notes')}\n\n"
+
+            md_content += "---\n\n"
+
+            # Add each week and its workouts (flat format with week indicators)
+            for week in program_data.get("weeks", []):
+                week_number = week.get("week_number")
+                phase = week.get("phase")
+
+                for workout in week.get("workouts", []):
+                    day_number = workout.get("day_number")
+                    # Flat format: Show as "Day X (Week Y - Phase)"
+                    md_content += f"## Day {day_number} (Week {week_number} - {phase}): {workout.get('name')}\n\n"
+                    if workout.get('description'):
+                        md_content += f"*{workout.get('description')}*\n\n"
+
+                    md_content += "| Exercise | Sets x Reps | Intensity | RIR | Rest |\n"
+                    md_content += "|----------|-------------|-----------|-----|------|\n"
+
+                    for exercise in workout.get("exercises", []):
+                        ex_name = exercise.get("exercise_name")
+                        sets = exercise.get("sets", [])
+
+                        if sets:
+                            # Get rep range
+                            reps = [s.get("reps") for s in sets]
+                            unique_reps = list(set(reps))
+                            if len(unique_reps) == 1:
+                                rep_display = str(unique_reps[0])
+                            else:
+                                rep_display = f"{min(reps)}-{max(reps)}"
+
+                            # Get intensity percentage
+                            intensity_values = [s.get("intensity_percent") for s in sets if s.get("intensity_percent")]
+                            if intensity_values:
+                                unique_intensity = list(set(intensity_values))
+                                if len(unique_intensity) == 1:
+                                    intensity_display = f"{unique_intensity[0]:.1f}%"
+                                else:
+                                    intensity_display = f"{min(intensity_values):.1f}-{max(intensity_values):.1f}%"
+                            else:
+                                intensity_display = "-"
+
+                            # Get RIR
+                            rir_values = [s.get("rir", "-") for s in sets]
+                            unique_rir = list(set(rir_values))
+                            if len(unique_rir) == 1:
+                                rir_display = str(unique_rir[0])
+                            else:
+                                rir_display = "-".join(map(str, unique_rir))
+
+                            # Get rest
+                            rest_sec = sets[0].get("rest_seconds", 0)
+                            rest_min = rest_sec // 60
+                            rest_display = f"{rest_min}min" if rest_min > 0 else f"{rest_sec}s"
+
+                            sets_display = f"{len(sets)} x {rep_display}"
+
+                            md_content += f"| {ex_name} | {sets_display} | {intensity_display} | {rir_display} | {rest_display} |\n"
+
+                    md_content += "\n"
+
+            # Save markdown file
+            import os
+            os.makedirs("programs", exist_ok=True)
+            filename = f"programs/program_{user_id}_{program_id}.md"
+
+            with open(filename, "w") as f:
+                f.write(md_content)
+
+            print(f"[PROGRAM] Markdown saved: {filename}")
+
+            # Mark markdown as generated to prevent duplicates
+            self.state.set("program_creation.markdown_generated", True)
+
+            return None, f"Markdown created successfully! Now call finish_program_creation() to complete the process. After calling it, say: '{name}, your program is ready! I've saved it to your account. Ready to crush it?' Be enthusiastic."
+
+        except Exception as e:
+            print(f"[ERROR] Failed to generate markdown: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, f"Error creating markdown. Say: '{name}, I had a small issue creating the summary file, but your program is saved in your account!' Keep it positive."
+
+    @function_tool
+    async def finish_program_creation(self, context: RunContext):
+        """
+        Call this to complete the program creation process and return to main menu.
+        """
+        print("[PROGRAM] Finishing program creation, returning to main menu...")
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Clear program creation state
+        self.state.set("program_creation", None)
+
+        # Switch back to main menu
+        self.state.switch_mode("main_menu")
+        self.state.save_state()
+
+        print("[STATE] Returned to main_menu mode")
+
+        return None, f"Program creation complete. Say: 'All set, {name}! Your program is ready to go. You can start your first workout whenever you're ready, or explore the other options. What would you like to do?' Keep it motivating."
+
     # ===== WORKOUT TOOLS =====
 
     @function_tool
@@ -673,15 +1521,21 @@ class NovaVoiceAgent(Agent):
 async def entrypoint(ctx: agents.JobContext):
     """Main entry point for Nova voice agent"""
 
+    print("[NOVA] Entrypoint function called")
+
     # Initialize state management
     # Check if user_id is provided in room metadata (for returning users)
+    print("[NOVA] Checking for user_id in room metadata...")
     user_id = ctx.room.metadata.get('user_id') if ctx.room.metadata else None
+    print(f"[NOVA] user_id from metadata: {user_id}")
 
     # If no user_id from metadata, try to find the most recent state file
     # (for console mode where metadata isn't available)
     if not user_id:
         import glob
+        print("[NOVA] Searching for state files...")
         state_files = glob.glob('.agent_state_*.json')
+        print(f"[NOVA] Found {len(state_files)} state files")
         if state_files:
             # Get most recently modified state file
             latest_state = max(state_files, key=os.path.getmtime)
@@ -689,7 +1543,9 @@ async def entrypoint(ctx: agents.JobContext):
             user_id = latest_state.replace('.agent_state_', '').replace('.json', '')
             print(f"[NOVA] Found recent state file for user: {user_id}")
 
+    print(f"[NOVA] Creating AgentState with user_id: {user_id}...")
     state = AgentState(user_id=user_id)
+    print(f"[NOVA] AgentState created successfully")
 
     print(f"[NOVA] Starting with mode: {state.get_mode()}")
     if user_id:
@@ -700,6 +1556,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Initialize OpenAI Realtime API model
     # Replaces separate STT (Deepgram) + LLM (OpenAI) + TTS (Inworld)
+    print("[NOVA] Initializing OpenAI Realtime model...")
     realtime_model = openai.realtime.RealtimeModel(
         voice=os.getenv("REALTIME_VOICE", "alloy"),
         temperature=float(os.getenv("REALTIME_TEMPERATURE", "0.8")),
@@ -711,19 +1568,30 @@ async def entrypoint(ctx: agents.JobContext):
         },
         modalities=["audio", "text"],
     )
+    print("[NOVA] Realtime model initialized")
 
     # Initialize agent session with Realtime model
+    print("[NOVA] Creating agent session...")
     session = AgentSession(
         llm=realtime_model,
+        # Note: LiveKit doesn't have a direct tool_timeout parameter
+        # Long-running tools (like GPT-5 program generation) should handle their own timeouts
+        # Our generate_workout_program() has a 300s timeout configured
     )
+    print("[NOVA] Agent session created")
 
     # Create agent with state management and IPC - tools are automatically registered via @function_tool decorators
+    print("[NOVA] Creating NovaVoiceAgent instance...")
     agent = NovaVoiceAgent(state=state, ipc_client=ipc_client)
+    print("[NOVA] NovaVoiceAgent created")
 
+    print("[NOVA] Starting session (connecting to room)...")
+    print("[NOVA] This may require microphone permissions on macOS")
     await session.start(
         room=ctx.room,
         agent=agent,
     )
+    print("[NOVA] Session started successfully!")
 
     print(f"Nova voice agent started in room: {ctx.room.name}")
     print(f"Agent state: {state}")

@@ -1,0 +1,501 @@
+# CONDENSED STRENGTH & CONDITIONING KNOWLEDGE BASE
+## Quick Reference for Conversational Agent
+
+---
+
+## 1. CORE TRAINING PRINCIPLES
+
+### Progressive Overload
+Systematic increase in training stress through:
+- **Load**: Add 2.5-5% weight when targets exceeded
+- **Volume**: Add sets/reps gradually
+- **Intensity**: Reduce RIR (get closer to failure)
+- **Frequency**: Increase training sessions
+
+**Progression Rate by Level**:
+- Novice: Session-to-session (add weight each workout)
+- Intermediate: Week-to-week (add weight weekly)
+- Advanced: Block-to-block (every 4-12 weeks)
+
+### Key Adaptation Mechanisms
+- **Mechanical Tension**: Primary hypertrophy driver (heavy loads + TUT)
+- **Metabolic Stress**: Accumulation via higher reps (8-20)
+- **Neural Adaptations**: Motor unit recruitment (60-80% of novice strength gains)
+- **Muscle Damage**: Controlled microdamage triggers growth
+
+---
+
+## 2. TRAINING VARIABLES
+
+### Volume (Weekly Sets per Muscle)
+- **Novice**: 6-12 sets/week
+- **Intermediate**: 10-18 sets/week  
+- **Advanced**: 14-25+ sets/week
+
+**Volume Landmarks**:
+- MV (Maintenance): 4-6 sets
+- MEV (Minimum Effective): 6-10 sets
+- MAV (Maximum Adaptive): 12-20 sets
+- MRV (Maximum Recoverable): 18-30+ sets (highly individual)
+
+### Intensity & Rep Ranges by Goal
+- **Strength**: 1-6 reps @ 80-95% 1RM, 0-2 RIR
+- **Hypertrophy**: 6-20 reps @ 60-85% 1RM, 0-3 RIR
+- **Power**: 1-5 reps @ 30-70% 1RM, 4-6 RIR (never failure)
+- **Endurance**: 15-20+ reps @ 40-60% 1RM
+
+### Frequency
+- Optimal: 2-3 sessions per muscle per week
+- Allows higher total volume without excessive per-session fatigue
+- Stimulates protein synthesis multiple times per week
+
+### Rest Periods
+- **Strength**: 3-5+ minutes (full recovery)
+- **Hypertrophy**: 2-3 minutes (balance recovery and efficiency)
+- **Power**: 3-5+ minutes (velocity dependent)
+- **Metabolic**: 30-90 seconds
+
+---
+
+## 3. PROXIMITY TO FAILURE (RIR/RPE)
+
+### RIR Scale
+- **0 RIR** = Failure (no more reps possible)
+- **1 RIR** = Could do 1 more rep
+- **2 RIR** = Could do 2 more reps
+- **3+ RIR** = Easier/warm-up sets
+
+### RPE-Based (10-point scale)
+- RPE 10 = 0 RIR (failure)
+- RPE 9 = 1 RIR
+- RPE 8 = 2 RIR
+- RPE 7 = 3 RIR
+
+### Application by Goal
+- **Hypertrophy**: 0-3 RIR (most sets at 1-2 RIR)
+- **Strength**: 0-2 RIR on heavy sets, 2-3 RIR on volume
+- **Power**: Never approach failure (4-6 RIR)
+
+**Key Finding**: Training 1-3 RIR produces similar results to failure for hypertrophy when volume equated; failure not required but proximity matters.
+
+---
+
+## 4. PERIODIZATION MODELS
+
+### Linear Periodization
+- Gradual increase in intensity, decrease in volume
+- Weeks 1-4: High volume (8-12 reps)
+- Weeks 5-8: Moderate (5-8 reps)
+- Weeks 9-12: Low volume, high intensity (1-5 reps)
+- **Best for**: Novices, simple progression
+
+### Undulating Periodization (DUP)
+- Frequent variation in intensity/volume (daily or weekly)
+- Example: Mon = Hypertrophy, Wed = Power, Fri = Strength
+- **Best for**: Intermediates/advanced, prevents adaptation
+- **Research**: May produce superior strength gains vs linear in trained lifters
+
+### Block Periodization
+- Sequential focused blocks (3-6 weeks each)
+- Block 1: Accumulation (volume, 60-75%)
+- Block 2: Intensification (strength, 80-90%)
+- Block 3: Realization (peaking, 90-95%+)
+- **Best for**: Advanced athletes, competition prep
+
+---
+
+## 5. TRAINING LEVEL CHARACTERISTICS
+
+### Novice (0-6 months)
+- **Progress**: Add weight every session
+- **Volume**: 40-60 total weekly sets
+- **Program**: Full body 3x/week
+- **Focus**: Technique mastery, compound lifts
+- **Example**: Starting Strength, StrongLifts 5x5
+
+### Intermediate (6 months - 3 years)
+- **Progress**: Add weight weekly
+- **Volume**: 60-100 total weekly sets
+- **Program**: Upper/lower or Push/Pull/Legs
+- **Focus**: Volume accumulation, accessories
+- **Example**: Texas Method, 4-day upper/lower split
+
+### Advanced (3-5 years)
+- **Progress**: Block-to-block (4-12 weeks)
+- **Volume**: 80-140+ total weekly sets
+- **Program**: Block periodization or specialized splits
+- **Focus**: Weak points, periodization
+- **Example**: Block periodization, body-part splits
+
+---
+
+## 6. PROGRAMMING BY GOAL
+
+### Strength Development
+- **Intensity**: ≥80% 1RM for main work
+- **Reps**: 1-6 (neural emphasis)
+- **Volume**: 8-15 weekly sets per lift
+- **Frequency**: 3-6 sessions/week per lift (advanced)
+- **Rest**: 3-5+ minutes
+- **Key**: Practice specific lift frequently, progressive load
+
+### Hypertrophy Optimization
+- **Intensity**: 60-85% 1RM (broad range effective)
+- **Reps**: Mix of 6-8, 8-12, 12-15, 15-20
+- **Volume**: 15-25 weekly sets per muscle
+- **Frequency**: 2-3 sessions per muscle/week
+- **Rest**: 2-3 minutes
+- **Key**: High volume near failure, multiple rep ranges
+
+### Power Development
+- **Intensity**: 30-70% 1RM for ballistics, 85%+ for strength
+- **Reps**: 1-5 explosive reps
+- **Volume**: 8-15 weekly sets per lift
+- **Frequency**: 2-4 sessions/week
+- **Rest**: 3-5+ minutes (velocity recovery)
+- **Key**: Never train to failure, maintain velocity, Olympic lifts
+
+---
+
+## 7. NUTRITION ESSENTIALS
+
+### Protein Requirements
+- **General athletes**: 1.6-2.2 g/kg/day
+- **Fat loss**: 1.8-2.4 g/kg/day (higher end for aggressive deficits)
+- **Strength focus**: 1.6-2.0 g/kg/day
+- **Masters (40+)**: 1.8-2.4 g/kg/day (anabolic resistance)
+
+### Distribution
+- **Meals**: 4-6 per day with 20-40g protein each
+- **Timing**: Protein within 2-3 hours pre/post workout
+- **Before bed**: 30-40g slow-digesting protein (casein)
+
+### Calories by Goal
+- **Muscle gain**: +10-20% surplus (+200-500 kcal)
+- **Fat loss**: -10-25% deficit (-250-500 kcal)
+- **Maintenance**: At TDEE
+
+### Macros
+- **Protein**: Set first (1.6-2.4 g/kg)
+- **Fat**: 0.8-1.5 g/kg (minimum 0.6 g/kg)
+- **Carbs**: Remaining calories (5-10 g/kg for training)
+
+### Key Supplements (Evidence-Based)
+1. **Creatine**: 3-5g/day (+5-15% strength)
+2. **Caffeine**: 3-6 mg/kg pre-workout
+3. **Protein powder**: Convenience only
+4. **Vitamin D**: 1000-4000 IU if deficient
+5. **Omega-3**: 2-3g EPA+DHA/day
+
+---
+
+## 8. DELOAD STRATEGIES
+
+### When to Deload
+- **Planned**: Every 3-6 weeks (most common: every 4 weeks)
+- **Reactive**: Performance plateau, excessive soreness, joint pain, fatigue
+
+### Deload Methods
+1. **Volume Reduction** (most common): Reduce sets 40-60%, maintain intensity
+2. **Intensity Reduction**: Reduce load 20-40%, maintain volume
+3. **Combined**: Reduce both 30-40%
+
+**Duration**: 5-7 days
+
+### Deload vs Taper
+- **Deload**: Integrated regularly, facilitates progression
+- **Taper**: Before competition, 7-14 days, peak performance
+
+---
+
+## 9. OLYMPIC WEIGHTLIFTING
+
+### Benefits
+- Highest power output of all movements (55.8 W/kg on clean second pull)
+- Superior RFD development (22,000 N·s-1 vs 5,000 N·s-1 squat)
+- Athletic transfer: triple extension mimics jumping/sprinting
+- Develops explosive strength across force-velocity continuum
+
+### Full Lifts vs Derivatives
+- **Full lifts** (snatch, clean & jerk): Maximum development, long learning curve
+- **Pulls**: Easier to learn, focus on hip extension, can load heavier
+- **Hang variations**: Reduce technical demand, less mobility required
+- **Power variations**: Faster learning, still develops power
+
+### Programming
+- **Frequency**: 2-6 sessions/week (sport dependent)
+- **Intensity**: 60-85% for technique, 85-95% for strength
+- **Volume**: 8-15 weekly sets
+- **Never train to failure**: Destroys technique and velocity
+
+---
+
+## 10. CONCURRENT TRAINING
+
+### Interference Effect
+Combining endurance + resistance may attenuate strength/hypertrophy vs resistance alone
+
+**Key Findings**:
+- Running > cycling for interference
+- High-frequency/long-duration endurance increases interference
+- HIIT produces less interference than steady-state
+- 6+ hours separation OR resistance first reduces interference
+
+### Minimizing Interference
+1. **Separate sessions** by 6+ hours or different days
+2. **Prioritize** primary goal (perform first when fresh)
+3. **Choose cycling/rowing** over running
+4. **Moderate endurance volume** (2-3 sessions, 20-40 min)
+5. **Increase protein** to 2.0-2.4 g/kg/day
+6. **Monitor total stress** carefully
+
+---
+
+## 11. SPECIAL POPULATIONS
+
+### Female Athletes
+- Similar volume tolerance or higher than males
+- May recover faster between sets
+- Menstrual cycle: follicular = better performance, luteal = slightly reduced (individual variation huge)
+- Benefit equally from progressive overload principles
+
+### Masters Athletes (40+)
+- **Longer warm-ups**: 10-15 min
+- **More recovery**: Extra day between sessions may be needed
+- **Higher protein**: 1.8-2.4 g/kg/day (anabolic resistance)
+- **Joint-friendly exercises**: Trap bar, safety bar, machines
+- **Deload more often**: Every 3-4 weeks vs 4-6
+
+### Return from Injury
+- Start at 50-60% pre-injury loads
+- Progress 5-10% per week
+- High reps initially (12-15)
+- Pain-free ROM only
+- Address asymmetries with unilateral work
+
+---
+
+## 12. EXERCISE SELECTION
+
+### Compound Movements (60-70% of volume)
+- Multi-joint: squats, deadlifts, presses, rows, pull-ups
+- Greatest total muscle stimulus
+- Allow heavy progressive overload
+- Build foundation strength
+
+### Isolation Movements (30-40% of volume)
+- Single-joint: curls, extensions, raises, flies
+- Target specific muscles
+- Safe to take to failure
+- Address weak points and imbalances
+
+### Movement Patterns (ensure balance)
+- **Horizontal Push**: Bench press, push-ups
+- **Horizontal Pull**: Rows, face pulls
+- **Vertical Push**: Overhead press, dips
+- **Vertical Pull**: Pull-ups, lat pulldowns
+- **Squat**: Back squat, front squat, leg press
+- **Hip Hinge**: Deadlift, RDL, good mornings
+
+---
+
+## 13. COMMON TRAINING SPLITS
+
+### Full Body (3x/week)
+- **Best for**: Novices, busy schedules
+- **Frequency**: Each muscle 3x/week
+- **Volume**: 2-4 exercises per muscle group
+- Example: Squat, bench, row every session
+
+### Upper/Lower (4x/week)
+- **Best for**: Intermediates
+- **Frequency**: Each muscle 2x/week
+- **Volume**: 4-6 exercises per muscle group
+- Example: Mon/Thu = Lower, Tue/Fri = Upper
+
+### Push/Pull/Legs (3-6x/week)
+- **Best for**: Intermediates/Advanced
+- **Frequency**: Each muscle 1-2x/week (depends if 3 or 6 days)
+- **Volume**: 4-8 exercises per muscle group
+- Example: Run through cycle 1x or 2x per week
+
+### Body Part Split (4-6x/week)
+- **Best for**: Advanced, hypertrophy focus
+- **Frequency**: Each muscle 1-2x/week
+- **Volume**: High (6-10 exercises per muscle)
+- Example: Chest, Back, Legs, Shoulders, Arms
+
+---
+
+## 14. RECOVERY MARKERS
+
+### Monitor These
+- **Resting HR**: Elevated = fatigue or overtraining
+- **HRV**: Decreased = need recovery
+- **Sleep quality**: <7 hours = impaired recovery
+- **Soreness**: >72 hours = excessive volume
+- **Performance**: Regression = need deload
+- **Mood**: Irritability, depression = overreaching
+
+### Deload When
+- 2+ consecutive sessions of decreased performance
+- Persistent soreness (>3 days)
+- Joint aches that don't resolve
+- Sleep disruption
+- Loss of motivation
+- Elevated resting HR
+
+---
+
+## 15. TESTING & ASSESSMENT
+
+### Strength Testing
+- **Frequency**: Every 8-12 weeks
+- **After**: Deload week (well-rested)
+- **Protocol**: Warm-up, build to 1RM in 3-5 attempts
+- **Alternative**: Use rep maxes with formulas (3-8 reps most accurate)
+
+### Body Composition
+- **Best methods**: DEXA, Bod Pod (±2-3% error)
+- **Practical**: Photos + measurements + scale weight
+- **Frequency**: Every 2-4 weeks
+- **Key metric**: Trend over time, not single measurement
+
+### Performance Testing
+- Vertical jump (power)
+- Sprint times (speed-strength)
+- Sport-specific tests
+- Conditioning benchmarks
+
+---
+
+## 16. QUICK PROGRAM SELECTION GUIDE
+
+**"Which program should I follow?"**
+
+**Novice + Any Goal** → Full body 3x/week (linear progression)
+- Add weight every session
+- Focus: squat, bench, deadlift, press, rows
+- Duration: 3-9 months until stalling
+
+**Intermediate + Strength** → Texas Method or Upper/Lower
+- Add weight weekly
+- Light/heavy day split
+- Duration: Ongoing with blocks
+
+**Intermediate + Hypertrophy** → Push/Pull/Legs or Upper/Lower
+- Volume emphasis (10-18 sets/muscle)
+- Multiple rep ranges
+- Progress volume then load
+
+**Advanced + Strength** → Block Periodization
+- 12-16 week cycles
+- Accumulation → Intensification → Realization
+- Peak for competition
+
+**Advanced + Hypertrophy** → Body Part Split or Specialization
+- High volume (16-25 sets/muscle)
+- Focus on weak points
+- 4-6 sessions per week
+
+**Athletic Performance** → Concurrent Training
+- 2-3 strength sessions
+- 2-3 power/Olympic lift sessions
+- 2-3 conditioning sessions
+- Manage interference carefully
+
+---
+
+## 17. COMMON QUESTIONS ANSWERED
+
+**"How much weight should I add each week?"**
+- Novice: 2.5-5 lbs per session on compounds
+- Intermediate: 2.5-5 lbs per week on main lifts
+- Advanced: Focus on volume, load increases every 4-12 weeks
+
+**"Should I train to failure?"**
+- Hypertrophy: 0-3 RIR is optimal (failure not required)
+- Strength: 0-2 RIR on heavy sets (avoid frequent failure)
+- Power: Never (destroys velocity)
+
+**"How many sets per muscle per week?"**
+- Novice: 6-12 sets
+- Intermediate: 10-18 sets
+- Advanced: 14-25+ sets (individual)
+
+**"How often should I train each muscle?"**
+- Optimal: 2-3 times per week
+- Minimum: 1-2 times per week
+- More frequency = higher total volume without excessive fatigue
+
+**"When should I deload?"**
+- Planned: Every 3-6 weeks (most do 4-5 weeks)
+- Reactive: When performance drops or excessive fatigue
+
+**"How much protein do I need?"**
+- General: 1.6-2.2 g/kg/day
+- Fat loss: 1.8-2.4 g/kg/day
+- Masters: 1.8-2.4 g/kg/day
+
+**"Can I build muscle and lose fat simultaneously?"**
+- Novices: Yes (newbie gains + recomp)
+- Intermediate/Advanced: Very difficult, pick primary goal
+- Exception: Return from layoff or detrained
+
+**"Should I do cardio while building muscle?"**
+- Yes, 2-3 sessions per week (20-40 min)
+- Doesn't interfere if managed properly
+- Choose cycling over running
+- Separate from lifting by 6+ hours if possible
+
+---
+
+## 18. RED FLAGS & CONTRAINDICATIONS
+
+**Don't Program This**:
+- Novice with 6-day advanced split
+- Power training without Olympic lift technique
+- High volume + aggressive caloric deficit
+- Frequent failure training for beginners
+- Zero deloads for 12+ weeks
+- <1.0 g/kg protein for muscle building
+
+**Safety Notes**:
+- Any pain (not soreness) = stop and modify
+- Form breakdown = reduce load
+- Get medical clearance if sedentary >6 months
+- Start conservative, progress gradually
+- Respect individual recovery capacity
+
+---
+
+## SUMMARY: KEY PRINCIPLES
+
+1. **Progressive Overload**: Must increase stress over time (load, volume, intensity, or frequency)
+
+2. **Volume Dose-Response**: More sets = more growth (up to individual limit of 18-30 sets/muscle)
+
+3. **Proximity to Failure**: 0-3 RIR for hypertrophy, don't need absolute failure
+
+4. **Frequency**: 2-3x per muscle per week optimal for most
+
+5. **Periodization**: Variation prevents adaptation and manages fatigue
+
+6. **Recovery**: Deload every 3-6 weeks, monitor fatigue markers
+
+7. **Nutrition**: 1.6-2.4 g/kg protein, appropriate calories for goal
+
+8. **Individualization**: Training level dictates progression rate and volume tolerance
+
+9. **Specificity**: Train the adaptations you want (strength = heavy loads, power = velocity)
+
+10. **Consistency**: Long-term adherence > perfect program
+
+---
+
+**Document Purpose**: Quick reference for conversational agent to answer user questions about training principles, provide guidance, and explain concepts from the full CAG document.
+
+**Token Count**: ~8,000-9,000 tokens (85% smaller than full version)
+
+**For Program Generation**: Use full 53K token CAG document  
+**For Q&A and Explanations**: Use this condensed version

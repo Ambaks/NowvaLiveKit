@@ -91,6 +91,9 @@ class AgentState:
         for k in keys[:-1]:
             if k not in target:
                 target[k] = {}
+            elif target[k] is None:
+                # If the key exists but is None, replace it with an empty dict
+                target[k] = {}
             target = target[k]
 
         # Set final value
@@ -180,7 +183,8 @@ class AgentState:
             with open(filepath, 'r') as f:
                 loaded_state = json.load(f)
                 self.state.update(loaded_state)
-            print(f"[STATE] Loaded state for user {user_id}")
+            # Suppressed verbose logging - uncomment for debugging
+            # print(f"[STATE] Loaded state for user {user_id}")
         except Exception as e:
             print(f"[STATE] Failed to load state: {e}")
 
