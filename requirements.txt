@@ -46,6 +46,14 @@ matplotlib>=3.7.0
 seaborn>=0.12.0
 
 # =============================================================================
+# FASTAPI BACKEND (for program generation)
+# =============================================================================
+fastapi>=0.109.0                       # Web framework
+uvicorn[standard]>=0.27.0              # ASGI server
+httpx>=0.26.0                          # Async HTTP client (for voice agent → FastAPI)
+openai>=1.0.0                          # OpenAI API client
+
+# =============================================================================
 # UTILITIES
 # =============================================================================
 python-dotenv>=1.0.0                   # Environment variables

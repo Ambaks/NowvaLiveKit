@@ -864,22 +864,20 @@ class NovaVoiceAgent(Agent):
     @function_tool
     async def generate_workout_program(self, context: RunContext):
         """
-        Call this to START generating a complete workout program using GPT-5 based on the user's collected parameters.
-        This function returns immediately and the generation happens in the background.
+        Call this to START generating a complete workout program via FastAPI backend.
+        Returns immediately - generation happens in the background.
+
         The program will be generated based on:
         - User's height and weight
         - Goal (power/strength/hypertrophy)
         - Program duration
         - Training frequency
         - Fitness level
-
-        This function will return immediately and start generation in background.
         """
-        import json
-        from openai import AsyncOpenAI
+        import httpx
 
         print("\n" + "="*80)
-        print("[PROGRAM] ⚡ generate_workout_program() CALLED")
+        print("[PROGRAM] ⚡ generate_workout_program() CALLED (FastAPI mode)")
         print("="*80)
 
         user = self.state.get_user()
@@ -888,17 +886,17 @@ class NovaVoiceAgent(Agent):
 
         print(f"[PROGRAM] User: {name} (ID: {user_id})")
 
-        # CRITICAL: Check if program has already been generated this session
-        existing_program = self.state.get("program_creation.generated_program")
-        if existing_program:
+        # Check if already generated
+        saved_program_id = self.state.get("program_creation.saved_program_id")
+        if saved_program_id:
             print("[PROGRAM] ⚠️  Program already generated - skipping duplicate call")
-            return None, f"Program already generated and saved. Now call finish_program_creation() to complete."
+            return None, f"Program already generated. Now call finish_program_creation() to complete."
 
-        # Check if generation is already in progress
-        generation_in_progress = self.state.get("program_creation.generation_in_progress")
-        if generation_in_progress:
-            print("[PROGRAM] ⚠️  Generation already in progress - skipping duplicate call")
-            return None, f"Program generation already in progress. Please wait for it to complete."
+        # Check if job already started
+        existing_job_id = self.state.get("program_creation.job_id")
+        if existing_job_id:
+            print(f"[PROGRAM] ⚠️  Generation job already started: {existing_job_id}")
+            return None, f"Generation already started. Now call check_program_status() to see if it's done."
 
         # Get all parameters from state
         print("[PROGRAM] Retrieving parameters from state...")
@@ -909,15 +907,6 @@ class NovaVoiceAgent(Agent):
         duration_weeks = self.state.get("program_creation.duration_weeks")
         days_per_week = self.state.get("program_creation.days_per_week")
         fitness_level = self.state.get("program_creation.fitness_level")
-
-        print(f"[PROGRAM] Parameters retrieved:")
-        print(f"  - height_cm: {height_cm}")
-        print(f"  - weight_kg: {weight_kg}")
-        print(f"  - goal_category: {goal_category}")
-        print(f"  - goal_raw: {goal_raw}")
-        print(f"  - duration_weeks: {duration_weeks}")
-        print(f"  - days_per_week: {days_per_week}")
-        print(f"  - fitness_level: {fitness_level}")
 
         # Validate we have all parameters
         missing = []
@@ -934,214 +923,125 @@ class NovaVoiceAgent(Agent):
 
         print("[PROGRAM] ✅ All parameters validated successfully")
 
-        # Mark generation as in progress
-        self.state.set("program_creation.generation_in_progress", True)
-        print("[PROGRAM] 🔄 Generation marked as in progress")
-
         try:
-            print("[PROGRAM] Creating system prompt...")
-            # Create the system prompt for program generation
-            system_prompt = self._get_program_generation_system_prompt()
-            print(f"[PROGRAM] System prompt created ({len(system_prompt)} chars)")
+            print("[PROGRAM] 🌐 Calling FastAPI to start generation...")
 
-            print("[PROGRAM] Creating user prompt...")
-            # Create the user prompt with all parameters
-            user_prompt = f"""Create a personalized barbell-only weightlifting program for the following user:
-
-**User Profile:**
-- Name: {name}
-- Height: {height_cm} cm
-- Weight: {weight_kg} kg
-- Goal Category: {goal_category}
-- Goal Description: "{goal_raw}"
-- Fitness Level: {fitness_level}
-- Program Duration: {duration_weeks} weeks
-- Training Frequency: {days_per_week} days per week
-
-**Requirements:**
-1. Create a COMPLETE {duration_weeks}-week program with ALL {days_per_week} training days for EVERY week
-2. Use ONLY barbell exercises (and bodyweight for pull-ups/dips if needed)
-3. Include specific intensity percentages (% of 1RM) for each set that progress week-by-week
-4. Optimize volume per muscle group based on {goal_category} focus
-5. Set appropriate RIR based on {fitness_level} level (beginner: 2-3 RIR, intermediate: 1-2 RIR, advanced: 0-1 RIR)
-6. Show progressive loading: Week 1 might be 75% 1RM, Week 2 might be 77.5%, etc.
-7. Include deload weeks with reduced intensity/volume
-8. Structure each day logically (main lifts → accessories)
-9. Set appropriate rest periods based on goal
-
-**CRITICAL: You MUST generate ALL {duration_weeks} weeks × {days_per_week} days = {duration_weeks * days_per_week} total workouts.**
-
-**Output Format:**
-Return a valid JSON object with this EXACT structure:
-
-{{
-  "program_name": "Descriptive program name",
-  "description": "Brief program description",
-  "duration_weeks": {duration_weeks},
-  "goal": "{goal_category}",
-  "progression_strategy": "Detailed explanation of how intensity/volume progresses week-to-week",
-  "notes": "Important notes about deloads, form, recovery, warm-ups, etc.",
-  "weeks": [
-    {{
-      "week_number": 1,
-      "phase": "Build/Deload/Peak/Taper",
-      "workouts": [
-        {{
-          "day_number": 1,
-          "name": "Workout day name (e.g., Upper Push, Lower Power)",
-          "description": "Brief description of focus",
-          "exercises": [
-            {{
-              "exercise_name": "Exact exercise name (e.g., Barbell Bench Press)",
-              "category": "Strength",
-              "muscle_group": "Primary muscle group",
-              "order": 1,
-              "sets": [
-                {{
-                  "set_number": 1,
-                  "reps": 5,
-                  "intensity_percent": 75.0,
-                  "weight": null,
-                  "rpe": null,
-                  "rir": 2,
-                  "rest_seconds": 180,
-                  "notes": "Optional notes"
-                }}
-              ]
-            }}
-          ]
-        }},
-        {{
-          "day_number": 2,
-          "name": "...",
-          "exercises": [...]
-        }},
-        {{
-          "day_number": 3,
-          "name": "...",
-          "exercises": [...]
-        }},
-        {{
-          "day_number": 4,
-          "name": "...",
-          "exercises": [...]
-        }}
-      ]
-    }},
-    {{
-      "week_number": 2,
-      "phase": "Build",
-      "workouts": [
-        // ALL {days_per_week} days for Week 2 with slightly higher intensity
-      ]
-    }}
-    // Continue for ALL {duration_weeks} weeks
-  ]
-}}
-
-**IMPORTANT REMINDERS:**
-- Include intensity_percent (% of 1RM) for EVERY set
-- Generate ALL {duration_weeks} weeks (not just a template)
-- Each week should have ALL {days_per_week} workout days
-- Show progressive overload: intensity should increase week-to-week
-- Include deload weeks (typically every 4th week with ~60-70% intensity)
-
-Generate the COMPLETE program now with all {duration_weeks} weeks."""
-
-            print(f"[PROGRAM] User prompt created ({len(user_prompt)} chars)")
-
-            # Make async API call to GPT-4o
-            print("[PROGRAM] Initializing OpenAI client...")
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                print("[PROGRAM] ❌ ERROR: OPENAI_API_KEY not found in environment!")
-                return None, f"Configuration error. Say: '{name}, I'm having trouble accessing the AI service. Please check the configuration.' Keep it apologetic."
-
-            client = AsyncOpenAI(api_key=api_key)
-            print("[PROGRAM] ✅ OpenAI client initialized")
-
-            model = os.getenv("PROGRAM_CREATION_MODEL", "gpt-5")
-
-            # GPT-5 doesn't support custom temperature - only default (1.0)
-            # GPT-4o and earlier support custom temperature
-            temperature = None if model.startswith("gpt-5") else 0.7
-
-            print(f"[PROGRAM] 🚀 Calling {model} API for program generation...")
-            print(f"[PROGRAM] Request details:")
-            print(f"  - Model: {model}")
-            print(f"  - Temperature: {temperature if temperature else 'default (1.0)'}")
-            print(f"  - Response format: JSON")
-
-            # Build request params conditionally
-            request_params = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "response_format": {"type": "json_object"}
+            # Prepare request payload
+            params = {
+                "user_id": user_id,
+                "height_cm": height_cm,
+                "weight_kg": weight_kg,
+                "goal_category": goal_category,
+                "goal_raw": goal_raw,
+                "duration_weeks": duration_weeks,
+                "days_per_week": days_per_week,
+                "fitness_level": fitness_level
             }
 
-            # Only add temperature if not GPT-5
-            if temperature is not None:
-                request_params["temperature"] = temperature
+            # Call FastAPI endpoint to start generation
+            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{fastapi_url}/api/programs/generate",
+                    json=params,
+                    timeout=10.0
+                )
+                data = response.json()
+                job_id = data["job_id"]
 
-            print(f"[PROGRAM] 📡 Sending request to OpenAI API...")
-            print(f"[PROGRAM] This may take 2-4 minutes for {model}...")
-
-            import time
-            start_time = time.time()
-
-            # Add explicit timeout - GPT-5 can take 2-4 minutes for complex programs
-            request_params["timeout"] = 300.0  # 5 minutes max
-
-            response = await client.chat.completions.create(**request_params)
-
-            elapsed_time = time.time() - start_time
-            print(f"[PROGRAM] ✅ API call completed in {elapsed_time:.2f} seconds!")
-            print(f"[PROGRAM] Response received from {model}")
-
-            # Parse the response
-            program_json = response.choices[0].message.content
-            print(f"[PROGRAM] Parsing program JSON ({len(program_json)} chars)...")
-            program_data = json.loads(program_json)
-            print("[PROGRAM] ✅ JSON parsed successfully")
-
-            # Store in state temporarily
-            print("[PROGRAM] Storing program in state...")
-            self.state.set("program_creation.generated_program", program_data)
-            print("[PROGRAM] ✅ Program stored in state")
-
-            print(f"\n[PROGRAM] 🎉 Program generated successfully!")
-            print(f"[PROGRAM] Program name: {program_data.get('program_name')}")
-            print(f"[PROGRAM] Duration: {program_data.get('duration_weeks')} weeks")
-            print(f"[PROGRAM] Workouts: {len(program_data.get('workouts', []))} days")
+            # Store job_id in state
+            self.state.set("program_creation.job_id", job_id)
+            print(f"[PROGRAM] ✅ Started generation job: {job_id}")
             print("="*80 + "\n")
 
-            # Clear the generation in progress flag
-            self.state.set("program_creation.generation_in_progress", False)
+            # Tell agent to wait and check status
+            return None, f"Program generation started! Wait 45 seconds, then call check_program_status() to see if it's done. Don't say anything yet, just wait and call check_program_status() after 45 seconds."
 
-            # Now save to database - agent must call immediately without waiting
-            print("[PROGRAM] 🎯 Returning from generate_workout_program() - instructing agent to save")
-            return None, f"Program generated successfully! Now call save_generated_program() to save it to the database. Call the function immediately without speaking first."
-
-        except json.JSONDecodeError as e:
-            self.state.set("program_creation.generation_in_progress", False)
-            print(f"\n[PROGRAM] ❌ JSON DECODE ERROR")
-            print(f"[PROGRAM] Error: {e}")
-            print(f"[PROGRAM] Response preview: {program_json[:500] if 'program_json' in locals() else 'N/A'}...")
-            print("="*80 + "\n")
-            return None, f"Error parsing program. Say: '{name}, I had trouble formatting that program. Let me try again...' Keep it apologetic."
         except Exception as e:
-            self.state.set("program_creation.generation_in_progress", False)
-            print(f"\n[PROGRAM] ❌ EXCEPTION OCCURRED")
-            print(f"[PROGRAM] Error type: {type(e).__name__}")
-            print(f"[PROGRAM] Error message: {e}")
+            print(f"\n[PROGRAM] ❌ ERROR: {e}")
             import traceback
-            print("[PROGRAM] Full traceback:")
             traceback.print_exc()
             print("="*80 + "\n")
-            return None, f"Error generating program. Say: '{name}, I ran into an issue creating your program. Let me try again in a moment.' Keep it apologetic."
+            return None, f"Error starting generation. Say: '{name}, I had trouble starting your program. Let me try again.' Keep it apologetic."
+
+    @function_tool
+    async def check_program_status(self, context: RunContext):
+        """
+        Check if program generation is complete.
+        Call this after generate_workout_program() to poll for completion.
+        """
+        import httpx
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        job_id = self.state.get("program_creation.job_id")
+        if not job_id:
+            return None, f"No generation job found. Call generate_workout_program() first."
+
+        try:
+            # Check status via FastAPI
+            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{fastapi_url}/api/programs/status/{job_id}",
+                    timeout=5.0
+                )
+                data = response.json()
+
+            status = data["status"]
+            progress = data.get("progress", 0)
+
+            if status == "completed":
+                # Get the program ID
+                program_id = data["program_id"]
+
+                # Store in state
+                self.state.set("program_creation.saved_program_id", program_id)
+
+                print(f"[PROGRAM] ✅ Program generation complete! ID: {program_id}")
+
+                return None, f"Program is ready! Say: '{name}, great news! Your custom program is ready. I've saved it to your account.' Then call finish_program_creation(). Be enthusiastic!"
+
+            elif status == "failed":
+                error = data.get("error_message", "Unknown error")
+                print(f"[PROGRAM] ❌ Generation failed: {error}")
+                return None, f"Generation failed. Say: '{name}, I had trouble creating your program. Let me try again.' Keep it apologetic."
+
+            else:
+                # Still in progress
+                print(f"[PROGRAM] Generation in progress: {progress}%")
+                return None, f"Program is {progress}% complete. Wait 15 more seconds, then call check_program_status() again. Don't say anything, just wait."
+
+        except Exception as e:
+            print(f"[PROGRAM] Error checking status: {e}")
+            return None, f"Error checking status. Wait 10 seconds and call check_program_status() again."
+
+    # DEPRECATED: Old GPT-5 direct call method - keeping for reference
+    # This function is no longer used but kept for potential rollback
+    async def _generate_workout_program_old(self, context: RunContext):
+        """
+        OLD METHOD: Direct GPT-5 call (deprecated in favor of FastAPI background tasks)
+        """
+        import json
+        from openai import AsyncOpenAI
+
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # Get all parameters from state
+        height_cm = self.state.get("program_creation.height_cm")
+        weight_kg = self.state.get("program_creation.weight_kg")
+        goal_category = self.state.get("program_creation.goal_category")
+        goal_raw = self.state.get("program_creation.goal_raw")
+        duration_weeks = self.state.get("program_creation.duration_weeks")
+        days_per_week = self.state.get("program_creation.days_per_week")
+        fitness_level = self.state.get("program_creation.fitness_level")
+
+        # This old deprecated method is kept for reference only
+        # All program generation now happens via FastAPI
+        pass
 
     def _get_program_generation_system_prompt(self) -> str:
         """Get the system prompt for GPT-5 program generation with CAG knowledge base"""

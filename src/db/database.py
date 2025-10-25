@@ -16,8 +16,22 @@ if not DATABASE_URL:
         "Please set it in your .env file or environment."
     )
 
-# Create SQLAlchemy engine
-engine = create_engine(DATABASE_URL, echo=True, future=True)
+# Create SQLAlchemy engine with connection pool settings for cloud databases
+engine = create_engine(
+    DATABASE_URL,
+    echo=True,
+    future=True,
+    pool_pre_ping=True,  # Test connections before using them
+    pool_recycle=3600,   # Recycle connections after 1 hour
+    pool_size=10,        # Connection pool size
+    max_overflow=20,     # Max overflow connections
+    connect_args={
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
+)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -206,3 +206,37 @@ class Schedule(Base):
     user_generated_program = relationship("UserGeneratedProgram", back_populates="schedule")
     partner_program = relationship("PartnerProgram", back_populates="schedule")
     workout = relationship("Workout", back_populates="schedule")
+
+
+# -------------------------
+# Program Generation Jobs (for FastAPI background tasks)
+# -------------------------
+class ProgramGenerationJob(Base):
+    __tablename__ = "program_generation_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(50), nullable=False, index=True)  # pending, in_progress, completed, failed
+    progress = Column(Integer, default=0)  # 0-100
+
+    # Input parameters
+    height_cm = Column(DECIMAL(5, 2))
+    weight_kg = Column(DECIMAL(5, 2))
+    goal_category = Column(String(50))
+    goal_raw = Column(String(500))
+    duration_weeks = Column(Integer)
+    days_per_week = Column(Integer)
+    fitness_level = Column(String(50))
+
+    # Output
+    program_id = Column(Integer, ForeignKey('user_generated_programs.id', ondelete="SET NULL"), nullable=True)
+    error_message = Column(String(1000), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    user = relationship("User")
+    program = relationship("UserGeneratedProgram")
