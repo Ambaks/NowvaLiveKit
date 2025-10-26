@@ -18,10 +18,11 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
     # Check what data already exists
     has_height_weight = existing_data.get("height_cm") and existing_data.get("weight_kg")
     has_age_sex = existing_data.get("age") and existing_data.get("sex")
+    has_any_existing_data = has_height_weight or has_age_sex
 
     # Build conditional instructions for Questions 1 and 2
     if has_height_weight and has_age_sex:
-        # User has all basic stats - confirm and skip
+        # User has all basic stats - confirm AFTER asking goals
         height_cm = existing_data.get("height_cm")
         weight_kg = existing_data.get("weight_kg")
         age = existing_data.get("age")
@@ -33,7 +34,10 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
         weight_lbs = int(weight_kg * 2.20462)
 
         question_1_2_instructions = f"""
-**Questions 1 & 2 - EXISTING DATA FOUND**:
+1. **First Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
+   → Call `capture_goal(goal_description)`
+
+2. **Second Question - EXISTING DATA FOUND**:
    → I have your stats from your profile: {height_ft}'{height_in}", {weight_lbs} lbs, {age} years old, {sex}.
    → Say: "I have your stats from last time - {height_ft} foot {height_in}, {weight_lbs} pounds, {age} years old, {sex}. Is that still correct?"
    → If they say YES/CORRECT: Call `capture_height_weight()` and `capture_age_sex()` with NO arguments to load from DB
@@ -41,26 +45,28 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
    → Then proceed to Question 3
 """
     elif has_height_weight:
-        # Has height/weight but not age/sex
+        # Has height/weight but not age/sex - ask goals first
         question_1_2_instructions = f"""
-1. **First Question - EXISTING DATA FOUND**:
+1. **First Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
+   → Call `capture_goal(goal_description)`
+
+2. **Second Question - EXISTING DATA FOUND**:
    → I have your height and weight from your profile.
    → Say: "I have your height and weight from last time. Is that still correct?"
    → If YES: Call `capture_height_weight()` with NO arguments to load from DB
    → If NO: Ask "What are your current height and weight?" and call `capture_height_weight(height_value, weight_value)`
-
-2. **Second Question**: "And how old are you, and are you male or female?"
+   → Then ask: "And how old are you, and are you male or female?"
    → When they answer, call `capture_age_sex(age, sex)`
 """
     elif has_age_sex:
-        # Has age/sex but not height/weight
+        # Has age/sex but not height/weight - ask goals first
         question_1_2_instructions = f"""
-1. **First Question**: "Let me start with a few quick stats. What's your height and weight?"
-   → When they answer, call `capture_height_weight(height_value, weight_value)`
+1. **First Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
+   → Call `capture_goal(goal_description)`
 
-2. **Second Question - EXISTING DATA FOUND**:
-   → I have your age and sex from your profile.
-   → Say: "I have your age and sex from last time. Is that still correct?"
+2. **Second Question**: "Let me get a few quick stats. What's your height and weight?"
+   → When they answer, call `capture_height_weight(height_value, weight_value)`
+   → Then say: "And I have your age and sex from last time. Is that still correct?"
    → If YES: Call `capture_age_sex()` with NO arguments to load from DB
    → If NO: Ask "How old are you and are you male or female?" and call `capture_age_sex(age, sex)`
 """
@@ -74,6 +80,20 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
    → When they answer, call `capture_age_sex(age, sex)`
 """
 
+    # Build goal question conditionally
+    if has_any_existing_data:
+        # Goal was already asked in Questions 1-2, so skip to duration
+        goal_question = ""
+        next_question_num = 3
+    else:
+        # No existing data, so we need to ask for goals now
+        goal_question = """
+3. **Third Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
+   → Call `capture_goal(goal_description)`
+
+"""
+        next_question_num = 4
+
     return f"""
 # 🚨 MANDATORY FIRST STEP - READ THIS BEFORE DOING ANYTHING 🚨
 
@@ -83,33 +103,30 @@ DO NOT SKIP AHEAD. DO NOT ASK OUT OF ORDER. FOLLOW THIS SEQUENCE EXACTLY:
 
 {question_1_2_instructions}
 
-3. **Third Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
-   → Call `capture_goal(goal_description)`
-
-4. **Fourth Question**: "How many weeks would you like this program to run?"
+{goal_question}{next_question_num}. **Question {next_question_num}**: "How many weeks would you like this program to run?"
    → Call `capture_program_duration(duration_weeks)`
 
-5. **Fifth Question**: "How many days per week can you train?"
+{next_question_num + 1}. **Question {next_question_num + 1}**: "How many days per week can you train?"
    → Call `capture_training_frequency(days_per_week)`
 
-6. **Sixth Question (OPTIONAL)**: "How much time do you have per session? Most people do about an hour."
+{next_question_num + 2}. **Question {next_question_num + 2} (OPTIONAL)**: "How much time do you have per session? Most people do about an hour."
    → Call `capture_session_duration(duration_minutes)`
 
-7. **Seventh Question (OPTIONAL)**: "Any current or past injuries I should know about?"
+{next_question_num + 3}. **Question {next_question_num + 3} (OPTIONAL)**: "Any current or past injuries I should know about?"
    → Call `capture_injury_history(injury_description)` or pass "none"
 
-8. **Eighth Question (OPTIONAL)**: "Are you training for a specific sport, or just general fitness?"
+{next_question_num + 4}. **Question {next_question_num + 4} (OPTIONAL)**: "Are you training for a specific sport, or just general fitness?"
    → Call `capture_specific_sport(sport_name)` or pass "none"
 
-9. **Ninth Question (OPTIONAL)**: "Anything else I should know? Like exercise preferences?"
+{next_question_num + 5}. **Question {next_question_num + 5} (OPTIONAL)**: "Anything else I should know? Like exercise preferences?"
    → Call `capture_user_notes(notes)` or skip if they have nothing
 
-10. **FINAL Question**: "Last question - would you say you're a beginner, intermediate, or advanced lifter?"
-    → Call `capture_fitness_level(fitness_level)`
-    → Then IMMEDIATELY call `set_vbt_capability(true/false)` based on the rules below
-    → Then IMMEDIATELY call `generate_workout_program()`
+{next_question_num + 6}. **FINAL Question**: "Last question - would you say you're a beginner, intermediate, or advanced lifter?"
+   → Call `capture_fitness_level(fitness_level)`
+   → Then IMMEDIATELY call `set_vbt_capability(true/false)` based on the rules below
+   → Then IMMEDIATELY call `generate_workout_program()`
 
-🚨 THESE 10 QUESTIONS ABOVE ARE THE ONLY THINGS YOU DO. ASK THEM IN ORDER 1→2→3→4→5→6→7→8→9→10. 🚨
+🚨 FOLLOW THE QUESTION ORDER ABOVE EXACTLY. DO NOT SKIP OR REORDER. 🚨
 
 IF YOU ASK ANY QUESTION OUT OF ORDER, YOU HAVE FAILED YOUR TASK.
 
