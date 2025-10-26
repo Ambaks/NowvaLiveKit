@@ -99,23 +99,28 @@ class NovaVoiceAgent(Agent):
         user_id = user.get("id")
         name = user.get("name", "there")
 
-        # Check database for existing user data
-        existing_data = {}
-        db = SessionLocal()
-        try:
-            from db.models import User
-            db_user = db.query(User).filter(User.id == user_id).first()
-            if db_user:
-                existing_data = {
-                    "height_cm": db_user.height_cm,
-                    "weight_kg": db_user.weight_kg,
-                    "age": db_user.age,
-                    "sex": db_user.sex
-                }
-        except Exception as e:
-            print(f"[PROGRAM] Error checking existing user data: {e}")
-        finally:
-            db.close()
+        # Try to get cached existing data from state first (set when entering program_creation mode)
+        existing_data = self.state.get("program_creation.existing_data")
+
+        # If no cached data, query database as fallback (shouldn't happen normally)
+        if existing_data is None:
+            print("[PROGRAM] No cached user data found, querying database (this shouldn't happen often)")
+            existing_data = {}
+            db = SessionLocal()
+            try:
+                from db.models import User
+                db_user = db.query(User).filter(User.id == user_id).first()
+                if db_user:
+                    existing_data = {
+                        "height_cm": db_user.height_cm,
+                        "weight_kg": db_user.weight_kg,
+                        "age": db_user.age,
+                        "sex": db_user.sex
+                    }
+            except Exception as e:
+                print(f"[PROGRAM] Error checking existing user data: {e}")
+            finally:
+                db.close()
 
         return get_program_creation_prompt(name, existing_data)
 
@@ -411,25 +416,59 @@ class NovaVoiceAgent(Agent):
         return None, f"The user wants to update their profile. Say something like: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
 
     @function_tool
-    async def create_or_update_program(self, context: RunContext):
+    async def create_program(self, context: RunContext):
         """
-        Call this when the user wants to create a new program or update an existing one.
-        User might say: "create a program", "make a workout plan", "build a program", "update my program"
+        Call this IMMEDIATELY when the user wants to create a program.
+
+        User phrases that trigger this function:
+        - "create a program"
+        - "make a program"
+        - "build a program"
+        - "create a workout plan"
+        - "make a new program"
+        - "I want to create a program"
+        - "new program"
+        - "make me a program"
+
+        This will start the program creation flow and guide the user through collecting their information.
         """
-        print("[MAIN MENU] User requested to create or update program")
+        print("\n" + "="*80)
+        print("[MAIN MENU] create_program() CALLED")
+        print("="*80)
 
         user = self.state.get_user()
         user_id = user.get("id")
         name = user.get("name", "there")
 
+        print(f"[PROGRAM] User: {name} (ID: {user_id})")
+
         # Check if user has any existing programs
         db = SessionLocal()
         try:
             has_programs = has_any_programs(db, user_id)
+            print(f"[PROGRAM] User has programs: {has_programs}")
 
             if not has_programs:
                 # No programs - switch to program_creation mode
                 print("[PROGRAM] User has no programs - switching to program_creation mode")
+
+                # Query and cache user's existing data ONCE before switching modes
+                from db.models import User
+                db_user = db.query(User).filter(User.id == user_id).first()
+                existing_data = {}
+                if db_user:
+                    # Convert Decimal to float for JSON serialization
+                    existing_data = {
+                        "height_cm": float(db_user.height_cm) if db_user.height_cm else None,
+                        "weight_kg": float(db_user.weight_kg) if db_user.weight_kg else None,
+                        "age": int(db_user.age) if db_user.age else None,
+                        "sex": db_user.sex
+                    }
+                    print(f"[PROGRAM] Cached existing user data: height={existing_data.get('height_cm')}, weight={existing_data.get('weight_kg')}, age={existing_data.get('age')}, sex={existing_data.get('sex')}")
+
+                # Store in state to avoid re-querying
+                self.state.set("program_creation.existing_data", existing_data)
+
                 self.state.switch_mode("program_creation")
                 self.state.save_state()
 
@@ -441,9 +480,38 @@ class NovaVoiceAgent(Agent):
                 # Start the program creation flow DIRECTLY - no need for create_program()
                 return None, f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'Oh! Let's create your first program, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY ask Question 1: 'First, what's your height and weight?' Keep it encouraging and conversational."
             else:
-                # Has programs - ask if they want to create new or update existing
-                print("[PROGRAM] User has existing programs")
-                return None, f"The user has existing programs. Say something like: '{name}, you already have some programs. Would you like to create a new one or update an existing program?' Keep it helpful and wait for their response."
+                # Has programs - but user said "create", so they likely want to create a NEW one
+                # Skip the confirmation and go straight to creating a new program
+                print("[PROGRAM] User has existing programs but requested creation - proceeding to create new program")
+
+                # Query and cache user's existing data ONCE before switching modes
+                from db.models import User
+                db_user = db.query(User).filter(User.id == user_id).first()
+                existing_data = {}
+                if db_user:
+                    # Convert Decimal to float for JSON serialization
+                    existing_data = {
+                        "height_cm": float(db_user.height_cm) if db_user.height_cm else None,
+                        "weight_kg": float(db_user.weight_kg) if db_user.weight_kg else None,
+                        "age": int(db_user.age) if db_user.age else None,
+                        "sex": db_user.sex
+                    }
+                    print(f"[PROGRAM] Cached existing user data: height={existing_data.get('height_cm')}, weight={existing_data.get('weight_kg')}, age={existing_data.get('age')}, sex={existing_data.get('sex')}")
+
+                # Store in state to avoid re-querying
+                self.state.set("program_creation.existing_data", existing_data)
+
+                # Switch to program_creation mode
+                self.state.switch_mode("program_creation")
+                self.state.save_state()
+
+                # Update agent instructions to program_creation mode
+                new_instructions = self._get_program_creation_instructions()
+                self.update_instructions(new_instructions)
+                print("[PROGRAM] Updated agent instructions to program_creation mode")
+
+                # Start the program creation flow
+                return None, f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'I see you already have some programs. Let's create a new one for you, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY start with Question 1 based on your instructions. Keep it encouraging and conversational."
 
         except Exception as e:
             print(f"[ERROR] Failed to check user programs: {e}")
@@ -452,26 +520,27 @@ class NovaVoiceAgent(Agent):
             db.close()
 
     @function_tool
-    async def create_program(self, context: RunContext):
+    async def update_program(self, context: RunContext):
         """
-        LEGACY: This function is kept for backward compatibility but is no longer the primary entry point.
-        Use create_or_update_program() instead, which handles mode switching.
+        Call this when the user wants to update or modify an existing program.
 
-        If this is called directly, it assumes we're already in program_creation mode.
+        User phrases that trigger this function:
+        - "update my program"
+        - "modify my program"
+        - "change my program"
+        - "edit my program"
+        - "update program"
+
+        This is a placeholder for future functionality.
         """
-        print("[PROGRAM] create_program() called directly (legacy path)")
+        print("[MAIN MENU] User requested to update program")
 
         user = self.state.get_user()
         name = user.get("name", "there")
 
-        # Check if we're in the right mode
-        current_mode = self.state.get_mode()
-        if current_mode != "program_creation":
-            print(f"[WARNING] create_program() called but mode is '{current_mode}', not 'program_creation'")
-            return None, f"ERROR: You must be in program_creation mode to create a program. Call create_or_update_program() first."
-
-        # Start asking questions directly
-        return None, f"You are in program_creation mode. Follow the 'PARAMETER COLLECTION ORDER' section at the top of your instructions EXACTLY. Start with Question 1: ask {name} for their height and weight. Do not say anything else first - just ask the question."
+        # TODO: Implement program update functionality
+        # For now, inform user this feature is coming soon
+        return None, f"Say something like: '{name}, updating existing programs is coming soon! For now, you can create a new program if you'd like to try something different.' Keep it encouraging."
 
     # ===== PROGRAM CREATION HELPER TOOLS =====
 

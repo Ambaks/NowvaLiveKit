@@ -297,7 +297,7 @@ async def _generate_program_batch(
 - **Additional User Notes/Preferences:** {user_notes}
   (IMPORTANT: Incorporate these preferences into the program design where applicable)"""
 
-    user_prompt += """
+    user_prompt += f"""
 
 **Program Overview:**
 - Total Duration: {total_weeks} weeks
@@ -335,8 +335,8 @@ Keep the program metadata consistent with the overall {total_weeks}-week program
 
 """
 
-    user_prompt += """**Requirements for Each Week:**
-1. Create exactly {days_per_week} complete workouts
+    user_prompt += f"""**Requirements for Each Week:**
+1. Create exactly {params.get('days_per_week')} complete workouts
 2. Each workout should have 4-8 exercises
 3. Use ONLY barbell exercises (+ bodyweight for pull-ups/dips if appropriate)
 4. Set intensity_percent for each set within the specified range for that week
@@ -357,10 +357,7 @@ Keep the program metadata consistent with the overall {total_weeks}-week program
 - Upper Pull: Barbell row, weighted pull-ups
 - Olympic (for power): Clean, snatch, push jerk
 
-Generate all {weeks_in_batch} week(s) now with complete workouts for each week.""".format(
-        days_per_week=params.get('days_per_week'),
-        weeks_in_batch=weeks_in_batch
-    )
+Generate all {weeks_in_batch} week(s) now with complete workouts for each week."""
 
     print(f"[JOB {job_id}] 📤 Sending request to OpenAI API...")
     print(f"[JOB {job_id}] 📏 System prompt: {len(system_prompt)} chars")

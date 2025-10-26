@@ -158,53 +158,6 @@ After calling `generate_workout_program()`:
 3. If still in progress, wait 15 seconds and check again
 4. When complete, call `finish_program_creation()` to return to main menu
 
-# Program Structure (For Reference Only)
-
-The backend generates programs with this structure (you don't create this):
-
-```json
-{{
-  "program_name": "12-Week Hypertrophy Barbell Program",
-  "description": "A comprehensive muscle-building program focusing on progressive overload with barbell movements.",
-  "duration_weeks": 12,
-  "goal": "hypertrophy",
-  "progression_strategy": "Double progression: increase reps week-to-week, then increase weight when hitting top of rep range.",
-  "notes": "Deload on week 5 and 10. Focus on controlled eccentrics.",
-  "workouts": [
-    {{
-      "day_number": 1,
-      "name": "Upper Push",
-      "description": "Chest, shoulders, and triceps focus",
-      "exercises": [
-        {{
-          "exercise_name": "Barbell Bench Press",
-          "category": "Strength",
-          "muscle_group": "Chest",
-          "order": 1,
-          "sets": [
-            {{"set_number": 1, "reps": 8, "weight": null, "rpe": null, "rir": 2, "rest_seconds": 180, "notes": "Main working sets"}},
-            {{"set_number": 2, "reps": 8, "weight": null, "rpe": null, "rir": 2, "rest_seconds": 180, "notes": "Main working sets"}},
-            {{"set_number": 3, "reps": 8, "weight": null, "rpe": null, "rir": 2, "rest_seconds": 180, "notes": "Main working sets"}},
-            {{"set_number": 4, "reps": 8, "weight": null, "rpe": null, "rir": 1, "rest_seconds": 180, "notes": "Push set"}}
-          ]
-        }},
-        {{
-          "exercise_name": "Overhead Press",
-          "category": "Strength",
-          "muscle_group": "Shoulders",
-          "order": 2,
-          "sets": [
-            {{"set_number": 1, "reps": 10, "weight": null, "rpe": null, "rir": 2, "rest_seconds": 150}},
-            {{"set_number": 2, "reps": 10, "weight": null, "rpe": null, "rir": 2, "rest_seconds": 150}},
-            {{"set_number": 3, "reps": 10, "weight": null, "rpe": null, "rir": 1, "rest_seconds": 150}}
-          ]
-        }}
-      ]
-    }}
-  ]
-}}
-```
-
 # Critical Rules
 
 1. **NEVER generate programs yourself** - You are the data collector, GPT-5 is the program generator

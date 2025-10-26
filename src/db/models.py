@@ -23,6 +23,8 @@ class User(Base):
     password_hash = Column(Text, nullable=False)
     height_cm = Column(DECIMAL(5, 2), nullable=True)  # Height in centimeters
     weight_kg = Column(DECIMAL(5, 2), nullable=True)  # Weight in kilograms
+    age = Column(Integer, nullable=True)  # User age
+    sex = Column(String(10), nullable=True)  # "male" or "female"
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

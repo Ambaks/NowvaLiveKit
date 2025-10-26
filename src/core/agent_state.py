@@ -185,10 +185,18 @@ class AgentState:
         else:
             try:
                 with open(filepath, 'r') as f:
-                    loaded_state = json.load(f)
+                    content = f.read()
+                    if not content or content.strip() == '':
+                        print(f"[STATE] Empty state file, skipping load")
+                        return
+                    loaded_state = json.loads(content)
                     self.state.update(loaded_state)
                 # Suppressed verbose logging - uncomment for debugging
                 # print(f"[STATE] Loaded state for user {user_id}")
+            except json.JSONDecodeError as e:
+                # Silently ignore JSON errors during concurrent file access
+                # This happens when main.py reads while voice_agent.py is writing
+                pass
             except Exception as e:
                 print(f"[STATE] Failed to load state: {e}")
 
