@@ -18,7 +18,14 @@ def create_job(
     goal_raw: str,
     duration_weeks: int,
     days_per_week: int,
-    fitness_level: str
+    fitness_level: str,
+    age: int,
+    sex: str,
+    session_duration: int = 60,
+    injury_history: str = "none",
+    specific_sport: str = "none",
+    has_vbt_capability: bool = False,
+    user_notes: str = None
 ) -> ProgramGenerationJob:
     """
     Create a new program generation job
@@ -28,11 +35,18 @@ def create_job(
         user_id: User UUID
         height_cm: User's height in centimeters
         weight_kg: User's weight in kilograms
-        goal_category: Training goal (power, strength, hypertrophy)
+        goal_category: Training goal (power, strength, hypertrophy, athletic_performance)
         goal_raw: User's goal description
         duration_weeks: Program duration
         days_per_week: Training frequency
         fitness_level: beginner, intermediate, or advanced
+        age: User's age in years
+        sex: Biological sex (M/F/male/female)
+        session_duration: Available minutes per session (default: 60)
+        injury_history: Current or past injuries (default: "none")
+        specific_sport: Sport name or "none" (default: "none")
+        has_vbt_capability: Whether user has VBT equipment (default: False)
+        user_notes: Any additional user notes or preferences (default: None)
 
     Returns:
         ProgramGenerationJob instance
@@ -48,13 +62,23 @@ def create_job(
         goal_raw=goal_raw,
         duration_weeks=duration_weeks,
         days_per_week=days_per_week,
-        fitness_level=fitness_level
+        fitness_level=fitness_level,
+        age=age,
+        sex=sex,
+        session_duration=session_duration,
+        injury_history=injury_history,
+        specific_sport=specific_sport,
+        has_vbt_capability=has_vbt_capability,
+        user_notes=user_notes
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
     print(f"[JOB MANAGER] Created job {job.id} for user {user_id}")
+    print(f"[JOB MANAGER] Parameters: {age}{sex}, {goal_category}, {duration_weeks}w, {days_per_week}d/w, {fitness_level}")
+    if has_vbt_capability:
+        print(f"[JOB MANAGER] VBT capability: ENABLED")
     return job
 
 

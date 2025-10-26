@@ -15,6 +15,26 @@ class SetSchema(BaseModel):
     rest_seconds: int = Field(ge=30, le=600, description="Rest time between sets in seconds")
     notes: Optional[str] = Field(default=None, description="Optional set-specific notes")
 
+    # VBT (Velocity-Based Training) fields - only populated if VBT is enabled
+    velocity_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.1,
+        le=3.0,
+        description="Target bar velocity in m/s (VBT only, for power/Olympic lifts)"
+    )
+    velocity_min: Optional[float] = Field(
+        default=None,
+        ge=0.1,
+        le=3.0,
+        description="Minimum acceptable velocity in m/s (stop set if below this)"
+    )
+    velocity_max: Optional[float] = Field(
+        default=None,
+        ge=0.1,
+        le=3.0,
+        description="Maximum target velocity in m/s"
+    )
+
 
 class ExerciseSchema(BaseModel):
     """Schema for an exercise within a workout"""
@@ -23,6 +43,10 @@ class ExerciseSchema(BaseModel):
     muscle_group: str = Field(description="Primary muscle group (e.g., Quads, Chest, Back)")
     order: int = Field(ge=1, description="Exercise order in the workout (1=first, 2=second, etc.)")
     sets: List[SetSchema] = Field(min_length=1, max_length=10, description="All sets for this exercise")
+    notes: Optional[str] = Field(
+        default=None,
+        description="Exercise-specific notes (setup, safety, technique cues, VBT instructions)"
+    )
 
 
 class WorkoutSchema(BaseModel):
@@ -93,6 +117,27 @@ class ProgramBatchSchema(BaseModel):
     overall_notes: str = Field(
         description="Important notes about warm-ups, form, recovery, deloads, etc. (required for first batch)"
     )
+
+    # VBT metadata (optional, only if has_vbt_capability = true)
+    vbt_enabled: Optional[bool] = Field(
+        default=False,
+        description="Whether this program uses velocity-based training"
+    )
+    vbt_setup_notes: Optional[str] = Field(
+        default=None,
+        description="VBT equipment setup and usage instructions (if vbt_enabled)"
+    )
+
+    # Program-level metadata
+    deload_schedule: Optional[str] = Field(
+        default=None,
+        description="Which weeks are deloads and how to implement them"
+    )
+    injury_accommodations: Optional[str] = Field(
+        default=None,
+        description="List of exercise substitutions made due to injury history"
+    )
+
     weeks: List[WeekSchema] = Field(
         min_length=1,
         max_length=4,

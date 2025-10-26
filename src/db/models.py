@@ -163,6 +163,11 @@ class Set(Base):
     rpe = Column(DECIMAL(3, 1))
     rest_seconds = Column(Integer)
 
+    # Velocity-Based Training (VBT) fields
+    velocity_threshold = Column(DECIMAL(4, 2), nullable=True)  # Target velocity (m/s)
+    velocity_min = Column(DECIMAL(4, 2), nullable=True)        # Minimum velocity threshold
+    velocity_max = Column(DECIMAL(4, 2), nullable=True)        # Maximum velocity threshold
+
     # Relationships
     workout_exercise = relationship("WorkoutExercise", back_populates="sets")
     progress_logs = relationship("ProgressLog", back_populates="set", cascade="all, delete-orphan")
@@ -181,6 +186,10 @@ class ProgressLog(Base):
     performed_weight = Column(DECIMAL(6, 2))
     rpe = Column(DECIMAL(3, 1))
     completed_at = Column(DateTime, default=datetime.utcnow)
+
+    # VBT tracking fields
+    measured_velocity = Column(DECIMAL(4, 2), nullable=True)   # Actual bar velocity (m/s)
+    velocity_loss = Column(DECIMAL(5, 2), nullable=True)       # % velocity loss in set
 
     # Relationships
     user = relationship("User", back_populates="progress_logs")
@@ -219,7 +228,7 @@ class ProgramGenerationJob(Base):
     status = Column(String(50), nullable=False, index=True)  # pending, in_progress, completed, failed
     progress = Column(Integer, default=0)  # 0-100
 
-    # Input parameters
+    # Input parameters (original)
     height_cm = Column(DECIMAL(5, 2))
     weight_kg = Column(DECIMAL(5, 2))
     goal_category = Column(String(50))
@@ -227,6 +236,15 @@ class ProgramGenerationJob(Base):
     duration_weeks = Column(Integer)
     days_per_week = Column(Integer)
     fitness_level = Column(String(50))
+
+    # Enhanced input parameters (for comprehensive programming)
+    session_duration = Column(Integer, nullable=True, default=60)      # Minutes per session
+    injury_history = Column(Text, nullable=True, default='none')       # Injury descriptions
+    age = Column(Integer, nullable=True)                               # User age
+    sex = Column(String(10), nullable=True)                            # M/F/male/female
+    specific_sport = Column(String(100), nullable=True, default='none') # Sport name or "none"
+    has_vbt_capability = Column(Boolean, nullable=True, default=False) # VBT equipment available
+    user_notes = Column(Text, nullable=True)                           # Any additional user notes/preferences
 
     # Output
     program_id = Column(Integer, ForeignKey('user_generated_programs.id', ondelete="SET NULL"), nullable=True)

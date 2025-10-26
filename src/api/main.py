@@ -34,6 +34,31 @@ async def startup_event():
     print("\n" + "="*80)
     print("🚀 Nowva FastAPI Backend Starting...")
     print("="*80)
+
+    # Clean up stuck jobs from previous server runs
+    from sqlalchemy import create_engine, text
+    import os
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    try:
+        engine = create_engine(os.getenv("DATABASE_URL"))
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                UPDATE program_generation_jobs
+                SET status = 'failed',
+                    error_message = 'Job terminated - server was restarted while job was running',
+                    completed_at = NOW()
+                WHERE status = 'in_progress'
+            """))
+            conn.commit()
+
+            if result.rowcount > 0:
+                print(f"🧹 Cleaned up {result.rowcount} stuck job(s) from previous server run")
+    except Exception as e:
+        print(f"⚠️  Failed to clean up stuck jobs: {e}")
+
     print("📚 API Docs: http://localhost:8000/docs")
     print("🔍 ReDoc: http://localhost:8000/redoc")
     print("💚 Health Check: http://localhost:8000/api/health")

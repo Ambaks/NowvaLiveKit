@@ -74,9 +74,19 @@ def format_program_markdown(program, workouts):
                 md.append(f"*{workout.description}*")
                 md.append("")
 
-            # Consolidated table header
-            md.append("| # | Exercise | Category | Muscle Group | Sets | Reps | Intensity | RIR | Rest |")
-            md.append("|---|----------|----------|--------------|------|------|-----------|-----|------|")
+            # Check if this workout has any VBT data
+            has_vbt = any(
+                any(s.velocity_threshold is not None for s in we.sets)
+                for we in workout.workout_exercises
+            )
+
+            # Consolidated table header (add VBT column if needed)
+            if has_vbt:
+                md.append("| # | Exercise | Category | Muscle Group | Sets | Reps | Intensity | RIR | VBT Target | Rest |")
+                md.append("|---|----------|----------|--------------|------|------|-----------|-----|------------|------|")
+            else:
+                md.append("| # | Exercise | Category | Muscle Group | Sets | Reps | Intensity | RIR | Rest |")
+                md.append("|---|----------|----------|--------------|------|------|-----------|-----|------|")
 
             # Collect exercise notes for display after table
             exercise_notes = []
@@ -133,8 +143,16 @@ def format_program_markdown(program, workouts):
                 rest_sec = first_set.rest_seconds % 60
                 rest = f"{rest_min}:{rest_sec:02d}" if first_set.rest_seconds else "N/A"
 
-                # Add row to table
-                md.append(f"| {workout_exercise.order_number} | {exercise.name} | {exercise.category} | {exercise.muscle_group} | {sets_display} | {reps} | {intensity} | {rpe} | {rest} |")
+                # Format VBT if present
+                vbt_display = "-"
+                if first_set.velocity_threshold:
+                    vbt_display = f"{first_set.velocity_threshold:.2f} m/s"
+
+                # Add row to table (with or without VBT column)
+                if has_vbt:
+                    md.append(f"| {workout_exercise.order_number} | {exercise.name} | {exercise.category} | {exercise.muscle_group} | {sets_display} | {reps} | {intensity} | {rpe} | {vbt_display} | {rest} |")
+                else:
+                    md.append(f"| {workout_exercise.order_number} | {exercise.name} | {exercise.category} | {exercise.muscle_group} | {sets_display} | {reps} | {intensity} | {rpe} | {rest} |")
 
                 # Collect notes if present
                 if workout_exercise.notes:
@@ -152,6 +170,15 @@ def format_program_markdown(program, workouts):
                         else:
                             progressive_details.append(f"Sets {group[0].set_number}-{group[-1].set_number}: {g_num}x{g_set.reps} @ {g_intensity}")
                     exercise_notes.append(f"**{workout_exercise.order_number}. {exercise.name}:** {', '.join(progressive_details)}")
+
+                # Add VBT details if present
+                if first_set.velocity_threshold:
+                    vbt_note_parts = [f"Target: {first_set.velocity_threshold:.2f} m/s"]
+                    if first_set.velocity_min:
+                        vbt_note_parts.append(f"stop if below {first_set.velocity_min:.2f} m/s")
+                    if first_set.velocity_max:
+                        vbt_note_parts.append(f"max {first_set.velocity_max:.2f} m/s")
+                    exercise_notes.append(f"**{workout_exercise.order_number}. {exercise.name} (VBT):** {', '.join(vbt_note_parts)}")
 
             md.append("")
 

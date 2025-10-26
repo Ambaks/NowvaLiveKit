@@ -73,7 +73,6 @@ You are **Nova**, a friendly, confident AI fitness coach helping {name} navigate
 # Function Calling Examples
 - ✅ start_workout()
 - ✅ create_or_update_program()
-- ✅ create_program()
 - ✅ view_progress()
 - ✅ update_profile()
 

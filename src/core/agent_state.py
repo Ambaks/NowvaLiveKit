@@ -27,6 +27,7 @@ class AgentState:
         Args:
             user_id: Optional user ID to load existing state
         """
+        self._user_loaded_from_db = False  # Track if we've already loaded user info from DB
         self.state = {
             "mode": "onboarding",  # Current mode: onboarding, main_menu, workout
             "user": {
@@ -47,6 +48,9 @@ class AgentState:
                 "exercise": None,
                 "reps": 0,
                 "sets": 0,
+            },
+            "program_creation": {
+                "has_vbt_capability": False,  # Automatically set based on fitness level + goal + sport
             }
         }
 
@@ -168,7 +172,7 @@ class AgentState:
 
     def load_state(self, user_id: str):
         """
-        Load state from file
+        Load state from file AND populate user info from database
 
         Args:
             user_id: User ID to load state for
@@ -177,16 +181,54 @@ class AgentState:
 
         if not os.path.exists(filepath):
             print(f"[STATE] No saved state found for user {user_id}")
-            return
+            # Still continue to load user info from database
+        else:
+            try:
+                with open(filepath, 'r') as f:
+                    loaded_state = json.load(f)
+                    self.state.update(loaded_state)
+                # Suppressed verbose logging - uncomment for debugging
+                # print(f"[STATE] Loaded state for user {user_id}")
+            except Exception as e:
+                print(f"[STATE] Failed to load state: {e}")
+
+        # Load user info from database ONLY if not already loaded (prevent spam)
+        if not self._user_loaded_from_db:
+            self._load_user_from_database(user_id)
+
+    def _load_user_from_database(self, user_id: str):
+        """
+        Load user information from database (cached - only loads once)
+
+        Args:
+            user_id: User ID to load
+        """
+        if self._user_loaded_from_db:
+            return  # Already loaded, skip to prevent DB spam
 
         try:
-            with open(filepath, 'r') as f:
-                loaded_state = json.load(f)
-                self.state.update(loaded_state)
-            # Suppressed verbose logging - uncomment for debugging
-            # print(f"[STATE] Loaded state for user {user_id}")
+            from db.database import SessionLocal
+            from db.models import User
+
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    self.state["user"]["id"] = str(user.id)
+                    self.state["user"]["username"] = user.username
+                    self.state["user"]["name"] = user.name
+                    self.state["user"]["email"] = user.email
+                    self.state["user"]["created_at"] = user.created_at.isoformat() if user.created_at else None
+                    self._user_loaded_from_db = True  # Mark as loaded
+                    print(f"[STATE] Loaded user info from database: {user.name} ({user.username})")
+                else:
+                    print(f"[STATE] User {user_id} not found in database")
+                    self._user_loaded_from_db = True  # Mark as attempted
+            finally:
+                db.close()
         except Exception as e:
-            print(f"[STATE] Failed to load state: {e}")
+            print(f"[STATE] Failed to load user from database: {e}")
+            self._user_loaded_from_db = True  # Mark as attempted even if failed
 
     def reload_state(self):
         """

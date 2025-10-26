@@ -11,6 +11,7 @@ Key Features:
 from db.database import SessionLocal
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set
 from .job_manager import update_job_status
+from .markdown_generator import generate_program_markdown
 from ..schemas.program_schemas import (
     ProgramBatchSchema,
     WeekSchema,
@@ -39,6 +40,9 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         user_id: UUID of the user
         params: Dictionary containing all program parameters
     """
+    # Start overall timing
+    total_start_time = time.time()
+
     print(f"\n[JOB {job_id}] 🚀 Background task STARTED")
     print(f"[JOB {job_id}] User ID: {user_id}")
     print(f"[JOB {job_id}] Params: {params}")
@@ -55,12 +59,17 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         duration_weeks = params["duration_weeks"]
         all_weeks = []
         program_metadata = None
+        first_batch_data = None  # Store first batch for markdown generation
 
         # Calculate number of batches (4 weeks per batch)
         BATCH_SIZE = 4
         num_batches = (duration_weeks + BATCH_SIZE - 1) // BATCH_SIZE  # Ceiling division
 
         print(f"[JOB {job_id}] 🏋️ Generating {duration_weeks} weeks in {num_batches} batch(es) of up to 4 weeks...")
+
+        # Timing tracking
+        batch_times = []
+        generation_start_time = time.time()
 
         # Generate batches (5% → 85%)
         for batch_num in range(num_batches):
@@ -75,10 +84,13 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
             batch_start_progress = 5 + int((80 / num_batches) * batch_num)
             batch_mid_progress = 5 + int((80 / num_batches) * (batch_num + 0.5))
 
+            print(f"[JOB {job_id}] 📊 Updating progress to {batch_mid_progress}%...")
             update_job_status(db, job_id, "in_progress", progress=batch_mid_progress)
-            print(f"[JOB {job_id}] 📊 Progress updated: {batch_mid_progress}%")
+            print(f"[JOB {job_id}] ✅ Progress updated: {batch_mid_progress}%")
 
             try:
+                batch_start = time.time()
+                print(f"[JOB {job_id}] 🚀 Starting batch generation for weeks {start_week}-{end_week}...")
                 batch_data = await _generate_program_batch(
                     job_id=job_id,
                     batch_num=batch_num,
@@ -88,6 +100,8 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
                     params=params,
                     previous_weeks=all_weeks
                 )
+                batch_elapsed = time.time() - batch_start
+                batch_times.append(batch_elapsed)
             except Exception as batch_error:
                 print(f"[JOB {job_id}] ❌ Batch generation error: {batch_error}")
                 import traceback
@@ -96,6 +110,7 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
 
             # First batch contains metadata
             if batch_num == 0:
+                first_batch_data = batch_data  # Store for markdown generation
                 program_metadata = {
                     "program_name": batch_data.program_name,
                     "description": batch_data.description,
@@ -114,9 +129,12 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
             progress = 5 + int((80 / num_batches) * (batch_num + 1))
             update_job_status(db, job_id, "in_progress", progress=progress)
 
+        generation_elapsed = time.time() - generation_start_time
+
         # Save to database (85% → 100%)
         update_job_status(db, job_id, "in_progress", progress=85)
         print(f"\n[JOB {job_id}] 💾 Saving complete program to database...")
+        db_save_start = time.time()
 
         program_data = {
             **program_metadata,
@@ -124,15 +142,42 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         }
 
         program_id = _save_program_to_db(db, user_id, program_data)
+        db_save_elapsed = time.time() - db_save_start
+
+        # Generate markdown file (90% → 95%)
+        update_job_status(db, job_id, "in_progress", progress=90)
+        markdown_start = time.time()
+        try:
+            print(f"\n[JOB {job_id}] 📄 Generating markdown file...")
+            _generate_markdown_file(db, program_id, user_id, params, first_batch_data)
+            print(f"[JOB {job_id}] ✅ Markdown file generated")
+        except Exception as md_error:
+            # Don't fail the job if markdown generation fails
+            print(f"[JOB {job_id}] ⚠️  Markdown generation failed (non-fatal): {md_error}")
+            import traceback
+            traceback.print_exc()
+        markdown_elapsed = time.time() - markdown_start
 
         # Mark complete
+        total_elapsed = time.time() - total_start_time
         update_job_status(db, job_id, "completed", progress=100, program_id=str(program_id))
+
+        # Print comprehensive timing report
         print(f"\n{'='*80}")
         print(f"[JOB {job_id}] 🎉 Program generation completed successfully!")
         print(f"[JOB {job_id}] Program ID: {program_id}")
         print(f"[JOB {job_id}] Total weeks: {duration_weeks}")
         print(f"[JOB {job_id}] Total workouts: {sum(len(w.workouts) for w in all_weeks)}")
         print(f"[JOB {job_id}] Generated in {num_batches} batch(es)")
+        print(f"\n{'='*80}")
+        print(f"⏱️  TIMING BREAKDOWN:")
+        print(f"{'='*80}")
+        for i, batch_time in enumerate(batch_times):
+            print(f"  Batch {i+1}: {batch_time:.2f}s")
+        print(f"  Total AI generation: {generation_elapsed:.2f}s")
+        print(f"  Database save: {db_save_elapsed:.2f}s")
+        print(f"  Markdown generation: {markdown_elapsed:.2f}s")
+        print(f"  TOTAL TIME: {total_elapsed:.2f}s ({total_elapsed/60:.2f} minutes)")
         print(f"{'='*80}\n")
 
     except Exception as e:
@@ -235,10 +280,24 @@ async def _generate_program_batch(
 **User Profile:**
 - Height: {params.get('height_cm')} cm
 - Weight: {params.get('weight_kg')} kg
+- Age/Sex: {params.get('age')}{params.get('sex')}
 - Goal Category: {params.get('goal_category')}
 - Goal Description: "{params.get('goal_raw')}"
 - Fitness Level: {params.get('fitness_level')}
 - Training Frequency: {params.get('days_per_week')} days per week
+- Session Duration: {params.get('session_duration', 60)} minutes
+- Injury History: {params.get('injury_history', 'none')}
+- Sport: {params.get('specific_sport', 'none')}
+- VBT Equipment Available: {'Yes' if params.get('has_vbt_capability') else 'No'}"""
+
+    # Add user notes if provided
+    user_notes = params.get('user_notes')
+    if user_notes and user_notes.strip():
+        user_prompt += f"""
+- **Additional User Notes/Preferences:** {user_notes}
+  (IMPORTANT: Incorporate these preferences into the program design where applicable)"""
+
+    user_prompt += """
 
 **Program Overview:**
 - Total Duration: {total_weeks} weeks
@@ -306,10 +365,13 @@ Generate all {weeks_in_batch} week(s) now with complete workouts for each week."
     print(f"[JOB {job_id}] 📤 Sending request to OpenAI API...")
     print(f"[JOB {job_id}] 📏 System prompt: {len(system_prompt)} chars")
     print(f"[JOB {job_id}] 📏 User prompt: {len(user_prompt)} chars")
+    print(f"[JOB {job_id}] ⏰ Timeout set to 480.0 seconds (8 minutes)")
+    print(f"[JOB {job_id}] 🤖 Using model: {model}")
 
     start_time = time.time()
 
     try:
+        print(f"[JOB {job_id}] 🔄 Awaiting OpenAI response...")
         response = await client.beta.chat.completions.parse(
             model=model,
             messages=[
@@ -317,14 +379,18 @@ Generate all {weeks_in_batch} week(s) now with complete workouts for each week."
                 {"role": "user", "content": user_prompt}
             ],
             response_format=ProgramBatchSchema,
-            timeout=240.0  # 4 minutes for up to 4 weeks
+            timeout=480.0  # 8 minutes for up to 4 weeks (increased for GPT-5-mini)
         )
+        print(f"[JOB {job_id}] ✅ OpenAI API call completed successfully")
     except Exception as api_error:
-        print(f"[JOB {job_id}] ❌ OpenAI API error: {api_error}")
+        elapsed_error = time.time() - start_time
+        print(f"[JOB {job_id}] ❌ OpenAI API error after {elapsed_error:.2f}s: {type(api_error).__name__}")
+        print(f"[JOB {job_id}] Error details: {str(api_error)[:500]}")
         raise
 
     elapsed = time.time() - start_time
-    print(f"[JOB {job_id}] ✅ Received response from OpenAI")
+    print(f"[JOB {job_id}] ⏱️  OpenAI response received in {elapsed:.2f}s")
+    print(f"[JOB {job_id}] 📦 Parsing response...")
 
     # Log cache stats if available
     usage = response.usage
@@ -341,71 +407,170 @@ Generate all {weeks_in_batch} week(s) now with complete workouts for each week."
 
 
 def _get_system_prompt() -> str:
-    """Load system prompt with knowledge base"""
+    """Load comprehensive system prompt with CAG knowledge base"""
+    print("[PROMPT] Loading system prompt...")
 
-    base_prompt = """You are an elite strength and conditioning coach specializing in barbell training and evidence-based program design.
+    base_prompt = """# Your Role
 
-Your expertise includes:
-- Exercise physiology and biomechanics
-- Progressive overload and periodization strategies
-- Volume landmarks for hypertrophy, strength, and power development
-- Proper exercise selection and sequencing
-- Recovery and fatigue management
+You are a **specialized program generation AI** with access to a comprehensive **Barbell-Only Strength & Conditioning CAG document** containing Olympic-level programming knowledge.
 
-**Volume Guidelines (sets per muscle group per week):**
+**Task:** Create evidence-based, personalized training programs using **only barbell exercises**, customized to the user's inputs.
 
-Hypertrophy Focus:
-- Chest: 12-20 sets/week
-- Back: 14-22 sets/week
-- Quads: 12-18 sets/week
-- Hamstrings: 10-16 sets/week
-- Shoulders: 12-18 sets/week
-- Arms: 8-14 sets/week
+# Critical Constraints
 
-Strength Focus:
-- Main Lifts (Squat, Bench, Deadlift, OHP): 6-12 sets/week each
-- Accessory work: 50-70% of main lift volume
+## Equipment
+* **Barbell only:** Olympic barbell, weight plates, squat rack with safety bars, adjustable bench
+* Optional: velocity tracking device (if has_vbt_capability = true)
+* **Forbidden:** dumbbells, cables, machines, specialized equipment
 
-Power Focus:
-- Main Power Movements: 4-8 sets/week
-- Accessory Strength: 6-10 sets/week
+## Exercise Selection Rules
+* Verify each exercise exists in the barbell exercise library (70+ exercises)
+* **Volume distribution:** Compound movements first (60-70%), isolation second (30-40%)
+* Safety notes for high-risk lifts (squat, bench, Olympic lifts)
+* Substitute exercises based on injury_history
+* Adjust for age/sex and sport specificity
+* Pull-ups/chin-ups **only** if user has access
 
-**Rep Ranges:**
-- Hypertrophy: 6-12 reps (can use 5-20 range)
-- Strength: 1-6 reps (80-95% 1RM)
-- Power: 1-5 reps with explosive intent (50-85% 1RM)
+# Volume & Session Guidelines
 
-**Rest Periods:**
-- Strength/Power: 3-5 minutes
-- Hypertrophy: 1.5-3 minutes
-- Accessory: 1-2 minutes
+## By Training Level
+| Level        | Total Weekly Sets | Per Muscle | Frequency                        | Session Duration |
+| ------------ | ----------------- | ---------- | -------------------------------- | ---------------- |
+| Beginner     | 40-60             | 6-12       | 2-3 full body                    | 45-60 min        |
+| Intermediate | 60-100            | 10-20      | 3-5 (upper/lower or PPL)         | 60-75 min        |
+| Advanced     | 80-140+           | 14-25+     | 4-6 (body part splits or blocks) | 60-90 min        |
 
-**RIR (Reps in Reserve):**
-- Beginner: 2-4 RIR (focus on technique)
-- Intermediate: 1-3 RIR
-- Advanced: 0-2 RIR (can approach failure on appropriate exercises)
+## By Training Goal
+* **Hypertrophy:** Chest 12-20, Back 14-22, Quads 12-18, Hamstrings 10-16, Shoulders 12-18, Biceps 8-14, Triceps 8-14 sets/week
+* **Strength:** Main lifts 8-15 sets/week, accessories 50% of main lift volume
+* **Power:** Olympic lifts/power work 8-15 sets/week, supporting strength 8-12 sets/lift
+* **Athletic Performance:** 2-3 strength sessions + sport practice, focus on transfer exercises and injury prevention
 
-**Key Principles:**
+## Session Duration Adjustments
+* **≤45 min:** Essential compounds only, minimal isolation, supersets/circuits for efficiency
+* **60 min:** Full program structure: main lifts + accessories + isolation, standard rest
+* **75-90 min:** Extended warm-ups, additional accessory volume, weak point specialization, longer rest
+
+# Rep Ranges & Intensity
+* **Hypertrophy:** 6-20 reps (6-8, 8-12, 12-15, 15-20)
+* **Strength:** 1-6 reps @ 80-95% 1RM
+* **Power:** 1-5 reps explosive @ 50-85% 1RM
+* **Athletic Performance:** Mix based on sport demands
+
+## RIR (Reps in Reserve) by Level
+* Beginner: 2-4 RIR
+* Intermediate: 1-3 RIR (main lifts 2-3, accessories 1-2)
+* Advanced: 0-2 RIR
+
+## Rest Periods
+* Strength/Power: 3-5 min
+* Hypertrophy compounds: 2-3 min
+* Hypertrophy isolation: 1.5-2 min
+* Time-constrained sessions: 90-120 sec (supersets/circuits)
+
+# Velocity-Based Training (VBT) - CRITICAL
+
+## VBT Implementation Rules
+1. **Only apply VBT if:** has_vbt_capability = true AND (goal = power OR Olympic lifts included)
+2. **Never use VBT for:** Hypertrophy-focused programs, beginners, isolation exercises
+3. **Velocity thresholds by movement type:**
+   - Olympic lifts (snatch/clean): >1.0 m/s (velocity_threshold: 1.0, velocity_min: 0.95)
+   - Olympic lifts (jerk): >1.2 m/s (velocity_threshold: 1.2, velocity_min: 1.1)
+   - Speed squats: 0.75-1.0 m/s (velocity_threshold: 0.85, velocity_min: 0.75)
+   - Speed bench: 0.5-0.75 m/s (velocity_threshold: 0.6, velocity_min: 0.5)
+   - Speed deadlifts: 0.6-0.9 m/s (velocity_threshold: 0.75, velocity_min: 0.65)
+4. **Autoregulation protocol:**
+   - If avg velocity >= threshold: add 2.5-5% load next session
+   - If avg velocity < velocity_min: reduce load 5-10% or end set early
+5. **Set termination rule:** "Stop set when velocity drops >10% from first rep"
+6. **VBT notes in set.notes:** Include instructions like "Target 1.0 m/s. Stop if velocity drops below 0.95 m/s"
+
+## VBT vs Non-VBT
+- **Power WITHOUT VBT:** Use % 1RM and RIR (e.g., 3x3 @ 70% 1RM, 2 RIR)
+- **Power WITH VBT:** Use velocity thresholds + autoregulation (e.g., 3x3 @ load that produces 1.0 m/s, stop if drops to 0.95 m/s)
+- **Strength WITH VBT:** Optional - can use velocity zones for autoregulation but not required
+- **Hypertrophy:** Never use VBT (not the right tool for muscle growth)
+
+# Age/Sex Adjustments
+* **Masters (40+):** Longer warm-ups, more recovery, joint-friendly lifts, deload more frequently, higher protein (1.8-2.4 g/kg/day)
+* **Female Athletes:** Track menstrual cycle, same progressive overload principles, higher frequency often tolerated
+
+# Injury History Accommodations
+* **Shoulder:** Avoid behind-neck press, wide-grip bench. Use incline bench, landmine press, floor press
+* **Lower back:** Avoid heavy floor deadlifts. Use deadlift from blocks, front squat, RDL with lighter loads
+* **Knee:** Avoid deep squats. Use box squat to parallel, deadlift variations, RDL, good mornings
+* **Wrist:** Avoid straight bar curls, low-bar squat. Use high-bar squat, front squat with crossed arms
+* **Elbow:** Avoid skull crushers, heavy close-grip. Use overhead tricep extension (lighter), moderate grip bench
+* **Current/acute injuries:** Note "Seek medical clearance" and work around, not through
+
+# Sport-Specific Programming
+* **Powerlifting:** Focus squat/bench/deadlift, block periodization, include variations
+* **Olympic Weightlifting:** Snatch/clean & jerk focus, high frequency (4-6 days), technical proficiency
+* **Team Sports:** In-season: 2 maintenance sessions. Off-season: 4 strength sessions. Include Olympic lifts
+* **Combat Sports:** 2-3 strength + sport practice, power endurance emphasis, manage volume carefully
+* **Endurance Sports:** 2 full-body sessions, injury prevention focus, separate from endurance by 6+ hours
+* **General Fitness:** Balanced approach, mix of strength/hypertrophy/conditioning
+
+# Progression Strategies
+* **Beginner:** Linear progression, add 5 lbs upper / 10 lbs lower weekly, 8-12 weeks
+* **Intermediate:** Weekly progression or wave loading, 8-12 week blocks
+* **Advanced:** Block periodization (Accumulation 4-6w → Intensification 3-4w → Realization 1-2w), 12-16 week cycles
+
+# Special Considerations
+* **Beginners:** Simpler programs, higher RIR, technique focus, no VBT, limit exercise variety (5-8 total)
+* **Strength:** Low rep, heavy accessories, long rests, optional VBT
+* **Hypertrophy:** Multiple rep ranges, isolation, moderate rest, VBT generally not used
+* **Power:** Olympic lifts mandatory, explosive intent, VBT highly recommended if available
+* **Athletic performance:** Sport-specific transfer, volume management, VBT useful for power development
+* **Masters:** Extended warm-ups (10-15 min), joint-friendly, more frequent deloads (every 3-4 weeks)
+* **Short sessions (≤45 min):** Prioritize compounds, supersets, minimal isolation
+* **Long sessions (75-90 min):** Extended warm-up, additional accessory volume, weak point work
+
+# Common Mistakes to AVOID
+❌ Using forbidden equipment (dumbbells, cables, machines)
+❌ Ignoring injury/age/sport adjustments
+❌ Improper volume for level
+❌ Missing deloads
+❌ Vague progression (must give specific plan like "+5lbs per week")
+❌ Push/pull imbalance (should be ~1:1)
+❌ Missing safety notes for squat/bench/Olympic lifts
+❌ Inappropriate RIR or rep ranges for goal
+❌ Using VBT incorrectly (e.g., for hypertrophy or beginners)
+❌ Not respecting session_duration constraints
+
+# Key Principles
 1. Start conservative, progress steadily
 2. Balance muscle groups across the week
 3. Place hardest work first in each session
-4. Include deload weeks every 4 weeks
+4. Include deload weeks every 3-6 weeks (based on age/level)
 5. Prioritize compound movements
 6. Scale volume to recovery capacity
+7. Use VBT appropriately (power/Olympic lifts only, if equipment available)
+8. Accommodate injuries safely
+9. Adjust for age and sex
+10. Respect session duration constraints
 
-Generate programs that are challenging but achievable, progressive, and scientifically sound."""
+Generate programs that are challenging but achievable, progressive, scientifically sound, and safe."""
 
     # Load CAG periodization knowledge base if available
     try:
         knowledge_path = Path(__file__).parent.parent.parent / "knowledge" / "cag_periodization.txt"
+        print(f"[PROMPT] Attempting to load CAG knowledge from: {knowledge_path}")
+
         with open(knowledge_path, 'r', encoding='utf-8') as f:
             cag_knowledge = f.read()
 
-        full_prompt = base_prompt + "\n\n" + "="*80 + "\n" + cag_knowledge
+        print(f"[PROMPT] ✅ Loaded CAG knowledge ({len(cag_knowledge)} chars)")
+        full_prompt = base_prompt + "\n\n" + "="*80 + "\n" + "# COMPREHENSIVE CAG KNOWLEDGE BASE\n" + "="*80 + "\n\n" + cag_knowledge
+        print(f"[PROMPT] ✅ Total system prompt: {len(full_prompt)} chars")
         return full_prompt
     except FileNotFoundError:
+        print(f"[PROMPT] ⚠️  CAG knowledge base not found at {knowledge_path}")
+        print("[PROMPT] Using base prompt only")
         return base_prompt
-    except Exception:
+    except Exception as e:
+        print(f"[PROMPT] ⚠️  Error loading CAG knowledge: {e}")
+        print("[PROMPT] Using base prompt only")
         return base_prompt
 
 
@@ -521,7 +686,11 @@ def _save_program_to_db(db, user_id: str, program_data: dict) -> str:
                         weight=set_data.get("weight"),
                         intensity_percent=set_data.get("intensity_percent"),
                         rpe=set_data.get("rpe"),
-                        rest_seconds=set_data.get("rest_seconds")
+                        rest_seconds=set_data.get("rest_seconds"),
+                        # VBT fields (optional)
+                        velocity_threshold=set_data.get("velocity_threshold"),
+                        velocity_min=set_data.get("velocity_min"),
+                        velocity_max=set_data.get("velocity_max")
                     )
                     if "rir" in set_data:
                         set_obj.rpe = set_data["rir"]
@@ -532,3 +701,53 @@ def _save_program_to_db(db, user_id: str, program_data: dict) -> str:
     db.commit()
     print(f"[PROGRAM GENERATOR V2] ✅ Program saved to database! ID: {user_program.id}")
     return user_program.id
+
+
+def _generate_markdown_file(db, program_id: int, user_id: str, params: dict, batch_data):
+    """
+    Generate a markdown file for the completed program.
+
+    Args:
+        db: Database session
+        program_id: ID of the saved program
+        user_id: User UUID as string
+        params: Program generation parameters
+        batch_data: First batch data containing metadata (vbt_enabled, etc.)
+    """
+    from sqlalchemy.orm import joinedload
+
+    # Fetch the program with all related data
+    program = db.query(UserGeneratedProgram).filter(
+        UserGeneratedProgram.id == program_id
+    ).first()
+
+    if not program:
+        raise ValueError(f"Program {program_id} not found")
+
+    # Fetch all workouts with exercises and sets
+    workouts = db.query(Workout).filter(
+        Workout.user_generated_program_id == program_id
+    ).options(
+        joinedload(Workout.workout_exercises).joinedload(WorkoutExercise.exercise),
+        joinedload(Workout.workout_exercises).joinedload(WorkoutExercise.sets)
+    ).order_by(Workout.week_number, Workout.day_number).all()
+
+    # Extract VBT and metadata from batch_data
+    vbt_enabled = getattr(batch_data, 'vbt_enabled', False)
+    vbt_setup_notes = getattr(batch_data, 'vbt_setup_notes', None)
+    deload_schedule = getattr(batch_data, 'deload_schedule', None)
+    injury_accommodations = getattr(batch_data, 'injury_accommodations', None)
+
+    # Generate the markdown
+    markdown_path = generate_program_markdown(
+        program=program,
+        workouts=workouts,
+        output_dir="programs",
+        user_name=params.get("name"),
+        vbt_enabled=vbt_enabled,
+        vbt_setup_notes=vbt_setup_notes,
+        deload_schedule=deload_schedule,
+        injury_accommodations=injury_accommodations
+    )
+
+    return markdown_path

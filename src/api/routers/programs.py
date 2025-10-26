@@ -44,7 +44,14 @@ async def start_program_generation(
         goal_raw=request.goal_raw,
         duration_weeks=request.duration_weeks,
         days_per_week=request.days_per_week,
-        fitness_level=request.fitness_level
+        fitness_level=request.fitness_level,
+        age=request.age,
+        sex=request.sex,
+        session_duration=request.session_duration,
+        injury_history=request.injury_history,
+        specific_sport=request.specific_sport,
+        has_vbt_capability=request.has_vbt_capability,
+        user_notes=request.user_notes
     )
 
     # Start background task
@@ -60,7 +67,14 @@ async def start_program_generation(
             "goal_raw": request.goal_raw,
             "duration_weeks": request.duration_weeks,
             "days_per_week": request.days_per_week,
-            "fitness_level": request.fitness_level
+            "fitness_level": request.fitness_level,
+            "age": request.age,
+            "sex": request.sex,
+            "session_duration": request.session_duration,
+            "injury_history": request.injury_history,
+            "specific_sport": request.specific_sport,
+            "has_vbt_capability": request.has_vbt_capability,
+            "user_notes": request.user_notes
         }
     )
 
