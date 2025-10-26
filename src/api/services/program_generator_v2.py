@@ -61,11 +61,24 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         program_metadata = None
         first_batch_data = None  # Store first batch for markdown generation
 
-        # Calculate number of batches (4 weeks per batch)
-        BATCH_SIZE = 4
+        # Calculate number of batches with smart batch sizing based on total workouts
+        # This prevents hitting the 16,384 token output limit on gpt-4o
+        workouts_per_week = params["days_per_week"]
+        total_workouts = duration_weeks * workouts_per_week
+
+        if total_workouts <= 6:      # 1-2 weeks at any frequency
+            BATCH_SIZE = duration_weeks  # Generate all at once
+        elif total_workouts <= 20:   # ~3-7 weeks at 3-5 days/week
+            BATCH_SIZE = 3
+        elif total_workouts <= 40:   # ~8-13 weeks at 3 days or ~8-10 weeks at 4-5 days
+            BATCH_SIZE = 3
+        else:                        # 12+ weeks at 5 days/week (60+ workouts)
+            BATCH_SIZE = 2           # Smaller batches to avoid 16K token limit
+
         num_batches = (duration_weeks + BATCH_SIZE - 1) // BATCH_SIZE  # Ceiling division
 
-        print(f"[JOB {job_id}] 🏋️ Generating {duration_weeks} weeks in {num_batches} batch(es) of up to 4 weeks...")
+        print(f"[JOB {job_id}] 🏋️ Generating {duration_weeks} weeks in {num_batches} batch(es) of up to {BATCH_SIZE} weeks...")
+        print(f"[JOB {job_id}] 📦 Batch size: {BATCH_SIZE} (optimized for {total_workouts} total workouts: {duration_weeks} weeks × {workouts_per_week} days/week)")
 
         # Timing tracking
         batch_times = []
@@ -197,6 +210,206 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         db.close()
 
 
+def _build_user_prompt(
+    total_weeks: int,
+    start_week: int,
+    end_week: int,
+    weeks_in_batch: int,
+    batch_num: int,
+    params: dict,
+    week_specs: list,
+    previous_weeks: list
+) -> str:
+    """Build user prompt optimized for program duration
+
+    Args:
+        total_weeks: Total program duration
+        start_week: First week in batch
+        end_week: Last week in batch
+        weeks_in_batch: Number of weeks in this batch
+        batch_num: Current batch number
+        params: User parameters
+        week_specs: Week specifications with phase, intensity, etc.
+        previous_weeks: Previously generated weeks
+
+    Returns:
+        Optimized user prompt string
+    """
+    # Determine prompt complexity based on total program duration
+    # Short programs (1-2 weeks): Simplified, focused
+    # Medium programs (3-7 weeks): Moderate detail
+    # Long programs (8+ weeks): Full detail with periodization
+    is_short = total_weeks <= 2
+    is_medium = 3 <= total_weeks <= 7
+    is_long = total_weeks >= 8
+
+    # Start with common user profile (all program lengths need this)
+    user_prompt = f"""Generate a complete barbell training program batch.
+
+**User Profile:**
+- Height: {params.get('height_cm')} cm
+- Weight: {params.get('weight_kg')} kg
+- Age/Sex: {params.get('age')}{params.get('sex')}
+- Goal Category: {params.get('goal_category')}
+- Goal Description: "{params.get('goal_raw')}"
+- Fitness Level: {params.get('fitness_level')}
+- Training Frequency: {params.get('days_per_week')} days per week
+- Session Duration: {params.get('session_duration', 60)} minutes"""
+
+    # Add injury history and sport only if relevant (skip for very short programs)
+    if not is_short or params.get('injury_history', 'none') != 'none':
+        user_prompt += f"""
+- Injury History: {params.get('injury_history', 'none')}"""
+
+    if not is_short or params.get('specific_sport', 'none') != 'none':
+        user_prompt += f"""
+- Sport: {params.get('specific_sport', 'none')}"""
+
+    # VBT only matters for power/Olympic lift programs
+    if params.get('has_vbt_capability') or params.get('goal_category') == 'Power':
+        user_prompt += f"""
+- VBT Equipment Available: {'Yes' if params.get('has_vbt_capability') else 'No'}"""
+
+    # Add user notes if provided
+    user_notes = params.get('user_notes')
+    if user_notes and user_notes.strip():
+        user_prompt += f"""
+- **Additional User Notes/Preferences:** {user_notes}
+  (IMPORTANT: Incorporate these preferences into the program design where applicable)"""
+
+    user_prompt += f"""
+
+**Program Overview:**
+- Total Duration: {total_weeks} weeks
+- This Batch: Weeks {start_week}-{end_week} ({weeks_in_batch} weeks)
+
+"""
+
+    # Metadata requirements - simplified for short programs
+    if is_short:
+        user_prompt += """**Task 1: Create Program Metadata**
+1. Program name should be clear and descriptive
+2. Description should explain the program's focus
+3. Progression strategy (if applicable for 2-week programs)
+4. Overall notes should cover warm-ups, form, and safety
+
+"""
+    elif is_medium:
+        user_prompt += """**Task 1: Create Program Metadata**
+1. Program name should be descriptive and motivating
+2. Description should explain what the program achieves
+3. Progression strategy should explain how intensity/volume increases
+4. Deload guidance if program is 5-7 weeks (typically week 4 or 6)
+5. Overall notes should cover warm-ups, form, recovery, and safety
+
+"""
+    else:  # Long programs
+        user_prompt += """**Task 1: Create/Reuse Program Metadata**
+1. Program name should be descriptive and motivating
+2. Description should explain what the program achieves and who it's for
+3. Progression strategy should explain how intensity/volume increases week-to-week
+4. Include guidance on deload weeks (typically every 4th week at 60-70% intensity)
+5. Overall notes should cover warm-ups, form, recovery, and safety
+
+"""
+
+    # Multi-batch note
+    if batch_num > 0:
+        user_prompt += f"""**Note:** This is batch {batch_num + 1} of a multi-batch program. {len(previous_weeks)} weeks already generated.
+Keep the program metadata consistent with the overall {total_weeks}-week program design.
+
+"""
+
+    # Week generation task
+    user_prompt += f"""**Task: Generate {weeks_in_batch} Week(s) of Training**
+
+"""
+
+    # Week specifications - simplified for short programs
+    for spec in week_specs:
+        if is_short:
+            # Minimal detail for 1-2 week programs
+            user_prompt += f"""**Week {spec['week_num']}:** {spec['phase']} - {spec['intensity_range']} intensity, {params.get('days_per_week')} days
+
+"""
+        else:
+            # Full detail for 3+ week programs
+            user_prompt += f"""**Week {spec['week_num']} Specifications:**
+- Phase: {spec['phase']}
+- Target Intensity: {spec['intensity_range']} of 1RM
+- Volume: {spec['volume_adjustment']}
+- Days per week: {params.get('days_per_week')}
+
+"""
+
+    # Requirements - scaled by program length
+    if is_short:
+        # Simplified requirements for 1-2 week programs
+        user_prompt += f"""**Requirements:**
+1. Create exactly {params.get('days_per_week')} complete workouts per week
+2. Each workout: 4-6 exercises (keep it simple)
+3. Use ONLY barbell exercises
+4. Set appropriate RIR: Beginner 3-4, Intermediate 2-3, Advanced 1-2
+5. Structure workouts: main lifts first, accessories after
+6. Rest periods: 2-5 minutes depending on intensity
+
+**Exercise Selection (Keep Simple):**
+- Core lifts: Squat, bench, deadlift, row, overhead press
+- Accessories: RDL, curls, extensions, hip thrust
+
+Generate all {weeks_in_batch} week(s) now with complete workouts."""
+
+    elif is_medium:
+        # Moderate detail for 3-7 week programs
+        user_prompt += f"""**Requirements for Each Week:**
+1. Create exactly {params.get('days_per_week')} complete workouts
+2. Each workout: 4-8 exercises
+3. Use ONLY barbell exercises (+ bodyweight for pull-ups/dips if appropriate)
+4. Set intensity_percent for each set within the specified range
+5. Set appropriate RIR:
+   - Beginner: 2-3 RIR (conservative)
+   - Intermediate: 1-2 RIR (moderate)
+   - Advanced: 0-1 RIR (can approach failure)
+6. Structure workouts logically (main lifts first, accessories after)
+7. Balance muscle groups across the week
+
+**Exercise Selection:**
+- Lower: Squat, front squat, deadlift, RDL, split squat
+- Upper Push: Bench, incline bench, overhead press, close-grip bench
+- Upper Pull: Barbell row, Pendlay row
+- Accessories: Good mornings, hip thrust, curls, extensions
+
+Generate all {weeks_in_batch} week(s) now with complete workouts for each week."""
+
+    else:  # Long programs (8+ weeks)
+        # Full detail for long programs
+        user_prompt += f"""**Requirements for Each Week:**
+1. Create exactly {params.get('days_per_week')} complete workouts
+2. Each workout should have 4-8 exercises
+3. Use ONLY barbell exercises (+ bodyweight for pull-ups/dips if appropriate)
+4. Set intensity_percent for each set within the specified range for that week
+5. Set appropriate RIR based on fitness level:
+   - Beginner: 2-3 RIR (conservative)
+   - Intermediate: 1-2 RIR (moderate)
+   - Advanced: 0-1 RIR (can approach failure)
+6. Structure workouts logically (main lifts first, accessories after)
+7. Balance muscle groups across the week
+8. Use appropriate rest periods:
+   - Strength sets (1-6 reps): 180-300 seconds
+   - Hypertrophy sets (6-12 reps): 90-180 seconds
+   - Accessory sets (12+ reps): 60-120 seconds
+
+**Exercise Selection Guidelines:**
+- Lower: Back squat, front squat, deadlift, RDL, Bulgarian split squat, hip thrust
+- Upper Push: Bench press, incline bench, overhead press, push press, close-grip bench
+- Upper Pull: Barbell row, weighted pull-ups
+- Olympic (for power): Clean, snatch, push jerk
+
+Generate all {weeks_in_batch} week(s) now with complete workouts for each week."""
+
+    return user_prompt
+
+
 async def _generate_program_batch(
     job_id: str,
     batch_num: int,
@@ -272,98 +485,35 @@ async def _generate_program_batch(
         })
 
     # System prompt (will be cached after first batch!)
-    system_prompt = _get_system_prompt()
+    # Load appropriate CAG knowledge based on total program duration
+    system_prompt = _get_system_prompt(total_weeks)
 
-    # User prompt
-    user_prompt = f"""Generate a complete barbell training program batch.
-
-**User Profile:**
-- Height: {params.get('height_cm')} cm
-- Weight: {params.get('weight_kg')} kg
-- Age/Sex: {params.get('age')}{params.get('sex')}
-- Goal Category: {params.get('goal_category')}
-- Goal Description: "{params.get('goal_raw')}"
-- Fitness Level: {params.get('fitness_level')}
-- Training Frequency: {params.get('days_per_week')} days per week
-- Session Duration: {params.get('session_duration', 60)} minutes
-- Injury History: {params.get('injury_history', 'none')}
-- Sport: {params.get('specific_sport', 'none')}
-- VBT Equipment Available: {'Yes' if params.get('has_vbt_capability') else 'No'}"""
-
-    # Add user notes if provided
-    user_notes = params.get('user_notes')
-    if user_notes and user_notes.strip():
-        user_prompt += f"""
-- **Additional User Notes/Preferences:** {user_notes}
-  (IMPORTANT: Incorporate these preferences into the program design where applicable)"""
-
-    user_prompt += f"""
-
-**Program Overview:**
-- Total Duration: {total_weeks} weeks
-- This Batch: Weeks {start_week}-{end_week} ({weeks_in_batch} weeks)
-
-"""
-
-    # Always include metadata requirements (GPT will generate or reuse)
-    user_prompt += """**Task 1: Create/Reuse Program Metadata**
-1. Program name should be descriptive and motivating
-2. Description should explain what the program achieves and who it's for
-3. Progression strategy should explain how intensity/volume increases week-to-week
-4. Include guidance on deload weeks (typically every 4th week at 60-70% intensity)
-5. Overall notes should cover warm-ups, form, recovery, and safety
-
-"""
-
-    if batch_num > 0:
-        user_prompt += f"""**Note:** This is batch {batch_num + 1} of a multi-batch program. {len(previous_weeks)} weeks already generated.
-Keep the program metadata consistent with the overall {total_weeks}-week program design.
-
-"""
-
-    # Add week specifications
-    user_prompt += f"""**Task: Generate {weeks_in_batch} Week(s) of Training**
-
-"""
-
-    for spec in week_specs:
-        user_prompt += f"""**Week {spec['week_num']} Specifications:**
-- Phase: {spec['phase']}
-- Target Intensity: {spec['intensity_range']} of 1RM
-- Volume: {spec['volume_adjustment']}
-- Days per week: {params.get('days_per_week')}
-
-"""
-
-    user_prompt += f"""**Requirements for Each Week:**
-1. Create exactly {params.get('days_per_week')} complete workouts
-2. Each workout should have 4-8 exercises
-3. Use ONLY barbell exercises (+ bodyweight for pull-ups/dips if appropriate)
-4. Set intensity_percent for each set within the specified range for that week
-5. Set appropriate RIR based on fitness level:
-   - Beginner: 2-3 RIR (conservative)
-   - Intermediate: 1-2 RIR (moderate)
-   - Advanced: 0-1 RIR (can approach failure)
-6. Structure workouts logically (main lifts first, accessories after)
-7. Balance muscle groups across the week
-8. Use appropriate rest periods:
-   - Strength sets (1-6 reps): 180-300 seconds
-   - Hypertrophy sets (6-12 reps): 90-180 seconds
-   - Accessory sets (12+ reps): 60-120 seconds
-
-**Exercise Selection Guidelines:**
-- Lower: Back squat, front squat, deadlift, RDL, Bulgarian split squat, hip thrust
-- Upper Push: Bench press, incline bench, overhead press, push press, close-grip bench
-- Upper Pull: Barbell row, weighted pull-ups
-- Olympic (for power): Clean, snatch, push jerk
-
-Generate all {weeks_in_batch} week(s) now with complete workouts for each week."""
+    # User prompt - optimized based on program duration
+    user_prompt = _build_user_prompt(
+        total_weeks=total_weeks,
+        start_week=start_week,
+        end_week=end_week,
+        weeks_in_batch=weeks_in_batch,
+        batch_num=batch_num,
+        params=params,
+        week_specs=week_specs,
+        previous_weeks=previous_weeks
+    )
 
     print(f"[JOB {job_id}] 📤 Sending request to OpenAI API...")
-    print(f"[JOB {job_id}] 📏 System prompt: {len(system_prompt)} chars")
-    print(f"[JOB {job_id}] 📏 User prompt: {len(user_prompt)} chars")
+    print(f"[JOB {job_id}] 📏 System prompt: {len(system_prompt)} chars (~{len(system_prompt)//4} tokens)")
+    print(f"[JOB {job_id}] 📏 User prompt: {len(user_prompt)} chars (~{len(user_prompt)//4} tokens)")
+    print(f"[JOB {job_id}] 📏 Total prompt size: ~{(len(system_prompt) + len(user_prompt))//4} tokens")
     print(f"[JOB {job_id}] ⏰ Timeout set to 480.0 seconds (8 minutes)")
     print(f"[JOB {job_id}] 🤖 Using model: {model}")
+
+    # Log optimization strategy
+    if total_weeks <= 2:
+        print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using SHORT CAG + simplified prompts for {total_weeks}-week program")
+    elif total_weeks <= 7:
+        print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using MEDIUM CAG + moderate prompts for {total_weeks}-week program")
+    else:
+        print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using FULL CAG + detailed prompts for {total_weeks}-week program")
 
     start_time = time.time()
 
@@ -394,7 +544,8 @@ Generate all {weeks_in_batch} week(s) now with complete workouts for each week."
     cached_tokens = getattr(usage.prompt_tokens_details, 'cached_tokens', 0) if hasattr(usage, 'prompt_tokens_details') else 0
 
     print(f"[JOB {job_id}] ⏱️  Batch {batch_num + 1} generation: {elapsed:.2f}s")
-    print(f"[JOB {job_id}] 📊 Tokens: {usage.prompt_tokens} input, {usage.completion_tokens} output")
+    print(f"[JOB {job_id}] ⏱️  Time per week: {elapsed/weeks_in_batch:.2f}s")
+    print(f"[JOB {job_id}] 📊 Tokens: {usage.prompt_tokens} input, {usage.completion_tokens} output, {usage.total_tokens} total")
     if cached_tokens > 0:
         print(f"[JOB {job_id}] 🚀 CACHE HIT: {cached_tokens} tokens cached (50% cost savings!)")
     else:
@@ -403,13 +554,20 @@ Generate all {weeks_in_batch} week(s) now with complete workouts for each week."
     return response.choices[0].message.parsed
 
 
-def _get_system_prompt() -> str:
-    """Load comprehensive system prompt with CAG knowledge base"""
-    print("[PROMPT] Loading system prompt...")
+def _get_system_prompt(duration_weeks: int) -> str:
+    """Load system prompt with appropriate CAG knowledge base based on program duration
+
+    Args:
+        duration_weeks: Total program duration to determine which CAG file to load
+
+    Returns:
+        Complete system prompt with appropriate CAG knowledge
+    """
+    print(f"[PROMPT] Loading system prompt for {duration_weeks}-week program...")
 
     base_prompt = """# Your Role
 
-You are a **specialized program generation AI** with access to a comprehensive **Barbell-Only Strength & Conditioning CAG document** containing Olympic-level programming knowledge.
+You are a **specialized program generation AI** with access to a **Barbell-Only Strength & Conditioning CAG document** containing Olympic-level programming knowledge.
 
 **Task:** Create evidence-based, personalized training programs using **only barbell exercises**, customized to the user's inputs.
 
@@ -549,16 +707,30 @@ You are a **specialized program generation AI** with access to a comprehensive *
 
 Generate programs that are challenging but achievable, progressive, scientifically sound, and safe."""
 
-    # Load CAG periodization knowledge base if available
+    # Determine which CAG knowledge base to load based on program duration
+    # 1-2 weeks: Short CAG (minimal, focused)
+    # 3-7 weeks: Medium CAG (mesocycle-focused)
+    # 8+ weeks: Full CAG (comprehensive, long-term periodization)
+    if duration_weeks <= 2:
+        cag_filename = "cag_periodization_short.txt"
+        cag_description = "SHORT-TERM (1-2 weeks)"
+    elif duration_weeks <= 7:
+        cag_filename = "cag_periodization_medium.txt"
+        cag_description = "MEDIUM-TERM (3-7 weeks)"
+    else:
+        cag_filename = "cag_periodization.txt"
+        cag_description = "COMPREHENSIVE (8+ weeks)"
+
+    # Load appropriate CAG periodization knowledge base
     try:
-        knowledge_path = Path(__file__).parent.parent.parent / "knowledge" / "cag_periodization.txt"
-        print(f"[PROMPT] Attempting to load CAG knowledge from: {knowledge_path}")
+        knowledge_path = Path(__file__).parent.parent.parent / "knowledge" / cag_filename
+        print(f"[PROMPT] Loading {cag_description} CAG knowledge from: {knowledge_path}")
 
         with open(knowledge_path, 'r', encoding='utf-8') as f:
             cag_knowledge = f.read()
 
-        print(f"[PROMPT] ✅ Loaded CAG knowledge ({len(cag_knowledge)} chars)")
-        full_prompt = base_prompt + "\n\n" + "="*80 + "\n" + "# COMPREHENSIVE CAG KNOWLEDGE BASE\n" + "="*80 + "\n\n" + cag_knowledge
+        print(f"[PROMPT] ✅ Loaded {cag_description} CAG knowledge ({len(cag_knowledge)} chars)")
+        full_prompt = base_prompt + "\n\n" + "="*80 + "\n" + f"# {cag_description} CAG KNOWLEDGE BASE\n" + "="*80 + "\n\n" + cag_knowledge
         print(f"[PROMPT] ✅ Total system prompt: {len(full_prompt)} chars")
         return full_prompt
     except FileNotFoundError:

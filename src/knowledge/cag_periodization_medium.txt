@@ -1,0 +1,619 @@
+# MEDIUM-TERM BARBELL TRAINING CAG (3-7 Week Programs)
+## Focused Knowledge Base for Mesocycle Training Blocks
+
+---
+
+## DOCUMENT PURPOSE & SCOPE
+
+This focused CAG document provides essential knowledge for programming **3-7 week barbell training mesocycles**. These medium-length programs are ideal for:
+- Single training block/mesocycle
+- Strength phases (accumulation, intensification)
+- Hypertrophy blocks
+- Skill development phases
+- Pre-competition preparation blocks
+- Fat loss phases with strength maintenance
+- Specialized weak point training
+
+**Equipment Required**: Olympic barbell, weight plates, squat rack, bench (adjustable)
+
+**Target outcomes**: Measurable strength gains, hypertrophy, skill mastery, or performance improvement within a focused training block
+
+---
+
+## KEY PRINCIPLES FOR 3-7 WEEK PROGRAMS
+
+### Adaptation Timeline
+- **Week 1**: Neural adaptation begins, DOMS likely
+- **Week 2-3**: Technique improves, performance increases
+- **Week 4**: Potential for fatigue accumulation (consider deload if 6-7 week program)
+- **Week 5-6**: Peak adaptations, strength/size gains realized
+- **Week 7**: Transition week or deload before next block
+
+### Volume Guidelines by Training Level
+**Beginner (3-7 weeks):**
+- Total weekly sets: 40-60
+- Per muscle group: 8-12 sets/week
+- Frequency: 2-3x per week full body
+- Session duration: 45-60 minutes
+
+**Intermediate (3-7 weeks):**
+- Total weekly sets: 60-100
+- Per muscle group: 12-18 sets/week
+- Frequency: 3-5x per week (upper/lower or PPL)
+- Session duration: 60-75 minutes
+
+**Advanced (3-7 weeks):**
+- Total weekly sets: 80-140
+- Per muscle group: 16-25 sets/week
+- Frequency: 4-6x per week (body part splits or DUP)
+- Session duration: 60-90 minutes
+
+### Progression Strategies (3-7 Weeks)
+1. **Linear Progression**: Add 2.5-10 lbs weekly (best for beginners)
+2. **Weekly Undulation**: Light/moderate/heavy weeks
+3. **Double Progression**: Add reps, then weight
+4. **Wave Loading**: Intensity waves week-to-week
+5. **Block Periodization**: Start high volume → end high intensity
+
+### Deload Strategy
+- **3-4 week programs**: No deload needed (too short)
+- **5-6 week programs**: Optional deload in week 4
+- **7 week programs**: Deload week 4 or week 6
+- **Deload protocol**: 50-60% volume, 60-70% intensity, maintain frequency
+
+---
+
+## EXERCISE SELECTION (BARBELL ONLY)
+
+### Core Compound Movements (Foundation)
+**Lower Body:**
+1. **Back Squat** - primary leg developer, high carryover
+2. **Front Squat** - quad emphasis, upright posture
+3. **Deadlift** - posterior chain, total body strength
+4. **Romanian Deadlift (RDL)** - hamstrings, glutes, lower back
+5. **Bulgarian Split Squat** - single-leg strength, balance
+
+**Upper Body Push:**
+6. **Bench Press** (flat) - chest, shoulders, triceps
+7. **Incline Bench Press** - upper chest emphasis
+8. **Overhead Press** - shoulders, triceps, core stability
+9. **Close-Grip Bench** - triceps, inner chest
+10. **Push Press** - overhead power
+
+**Upper Body Pull:**
+11. **Bent-Over Row** (overhand) - back thickness, lats
+12. **Pendlay Row** - explosive pulling, upper back
+13. **Barbell Row** (underhand) - biceps involvement, lats
+14. **T-Bar Row** - back thickness (if landmine available)
+
+**Olympic/Power Movements:**
+15. **Power Clean** - explosive hip extension, full body
+16. **Clean Pull** - deadlift + shrug explosive
+17. **Snatch** (full or power) - total body explosive
+18. **Push Jerk** - overhead power development
+
+### Accessory Movements (Support work)
+19. **Good Mornings** - hamstrings, lower back, hip hinge
+20. **Barbell Hip Thrust** - glute strength and size
+21. **Barbell Lunges** (forward, reverse, walking) - single-leg
+22. **Barbell Curls** (variations) - biceps
+23. **Skull Crushers** - triceps
+24. **Barbell Shrugs** - upper traps
+25. **Upright Rows** - side delts, traps (use carefully)
+26. **Barbell Front Raise** - anterior deltoids
+27. **Floor Press** - triceps, lockout strength
+28. **Pause Squat** - bottom strength, technique
+29. **Box Squat** - posterior chain, hip power
+30. **Deficit Deadlift** - off-floor strength
+
+---
+
+## PROGRAM STRUCTURES FOR 3-7 WEEKS
+
+### Beginner: Full Body 3x/Week (3-7 weeks)
+
+**Monday: Full Body A**
+- Back Squat: 3-4 × 5-8
+- Bench Press: 3-4 × 5-8
+- Barbell Row: 3-4 × 6-10
+- RDL: 2-3 × 8-12
+- Barbell Curls: 2 × 10-12
+
+**Wednesday: Full Body B**
+- Deadlift: 3-4 × 5 (or 3 × 8)
+- Overhead Press: 3-4 × 6-10
+- Front Squat: 3 × 8-12
+- Pendlay Row: 3 × 6-8
+- Overhead Extension: 2 × 10-12
+
+**Friday: Full Body C**
+- Front Squat: 3-4 × 8-10
+- Incline Bench: 3-4 × 8-10
+- Barbell Row (underhand): 3 × 8-10
+- Good Mornings: 2-3 × 10-12
+- Barbell Shrugs: 2-3 × 12-15
+
+**Progression (3-7 weeks):**
+- Week 1: Establish working weights (RPE 7-8)
+- Weeks 2-4: Add 2.5-5 lbs upper, 5-10 lbs lower each week
+- Week 5-6 (if applicable): Push to RPE 8-9
+- Week 7 (if applicable): Deload or test
+
+### Intermediate: Upper/Lower 4x/Week (3-7 weeks)
+
+**Monday: Lower Strength**
+- Back Squat: 4-5 × 3-6 @ 75-85%
+- RDL: 3-4 × 6-8
+- Front Squat or Pause Squat: 3 × 8-10
+- Good Mornings: 3 × 10-12
+- Calf Raise: 3 × 12-15
+
+**Tuesday: Upper Strength**
+- Bench Press: 4-5 × 3-6 @ 75-85%
+- Barbell Row: 4 × 6-8
+- Overhead Press: 3-4 × 6-8
+- Pendlay Row: 3 × 6-8
+- Barbell Shrugs: 3 × 12-15
+
+**Thursday: Lower Hypertrophy**
+- Deadlift: 3-4 × 5-8 @ 70-80%
+- Front Squat: 3-4 × 8-10
+- Bulgarian Split Squat: 3 × 8-10/leg
+- Barbell Hip Thrust: 3 × 10-15
+- RDL: 3 × 12-15
+
+**Friday: Upper Hypertrophy**
+- Incline Bench: 4 × 8-10
+- Overhead Press: 3-4 × 8-10
+- T-Bar or Barbell Row: 4 × 10-12
+- Close-Grip Bench: 3 × 10-12
+- Barbell Curls: 3 × 10-12
+- Skull Crushers: 3 × 10-12
+
+**Progression (3-7 weeks):**
+- Weeks 1-2: Build (70-80% intensity)
+- Weeks 3-4: Push (75-85% intensity)
+- Week 5-6: Peak (80-90% intensity) OR Week 4 deload
+- Week 7: Transition or test
+
+### Advanced: Push/Pull/Legs 5-6x/Week (3-7 weeks)
+
+**Day 1: Push (Chest, Shoulders, Triceps)**
+- Bench Press: 4-5 × 4-6
+- Incline Bench: 3-4 × 6-8
+- Overhead Press: 3-4 × 6-8
+- Close-Grip Bench: 3 × 8-10
+- Skull Crushers: 3 × 10-12
+- Front Raise: 3 × 12-15
+
+**Day 2: Pull (Back, Biceps)**
+- Deadlift: 3-4 × 5-8
+- Barbell Row: 4 × 6-8
+- Pendlay Row: 3-4 × 6-8
+- T-Bar Row: 3 × 8-10
+- Barbell Shrugs: 4 × 12-15
+- Barbell Curls (2 variations): 3 × 8-10 each
+
+**Day 3: Legs (Quads, Hamstrings, Glutes)**
+- Back Squat: 4-5 × 4-8
+- Front Squat: 3-4 × 8-10
+- RDL: 4 × 8-10
+- Bulgarian Split Squat: 3 × 10/leg
+- Good Mornings: 3 × 10-12
+- Barbell Hip Thrust: 3 × 12-15
+
+**Day 4: Push (Volume)**
+- Incline Bench: 4 × 8-10
+- Bench Press: 3 × 8-10
+- Push Press: 3 × 6-8
+- Overhead Press: 3 × 10-12
+- Close-Grip Incline: 3 × 10-12
+- Overhead Extension: 3 × 12-15
+
+**Day 5: Pull (Volume)**
+- Barbell Row (underhand): 4 × 8-10
+- Bent-Over Row: 4 × 10-12
+- Deadlift (lighter): 3 × 6-8 @ 70%
+- Barbell Shrugs: 4 × 15-20
+- Barbell Curls: 4 × 10-12
+- Reverse Curls: 3 × 12-15
+
+**Day 6 (optional): Legs (Accessories)**
+- Front Squat: 4 × 8-10
+- RDL: 4 × 10-12
+- Barbell Lunges: 3 × 10/leg
+- Good Mornings: 3 × 12-15
+- Barbell Hip Thrust: 4 × 15-20
+
+**Progression (3-7 weeks):**
+- Use Daily Undulating Periodization (DUP)
+- Rotate heavy/moderate/light days
+- Progressive overload on main lifts weekly
+- Deload week 4 or 6 for 6-7 week programs
+
+---
+
+## REP RANGES & INTENSITY ZONES
+
+### By Training Goal (3-7 Week Blocks)
+
+**Strength Focus:**
+- Main lifts: 3-6 reps @ 75-90% 1RM
+- Secondary compounds: 6-8 reps @ 70-80%
+- Accessories: 8-12 reps @ 65-75%
+- Weekly progression: +2.5-5 lbs upper, +5-10 lbs lower
+
+**Hypertrophy Focus:**
+- Main lifts: 6-10 reps @ 70-80% 1RM
+- Secondary compounds: 8-12 reps @ 65-75%
+- Accessories: 12-15 reps @ 60-70%
+- Progression: Add reps, then weight (double progression)
+
+**Power/Athletic Performance:**
+- Olympic lifts: 1-3 reps @ 75-85% (explosive)
+- Main lifts: 3-6 reps @ 70-85%
+- Accessories: 6-10 reps @ 65-75%
+- Velocity-based training recommended if equipment available
+
+### RIR (Reps in Reserve) by Week
+**Week 1-2:** 3-4 RIR (build work capacity)
+**Week 3-4:** 2-3 RIR (increase intensity)
+**Week 5-6:** 1-2 RIR (push performance)
+**Week 7:** 4-5 RIR (deload/transition)
+
+### Rest Periods
+- **Strength work (1-6 reps)**: 3-5 minutes
+- **Hypertrophy compounds (6-12 reps)**: 2-3 minutes
+- **Accessories (12+ reps)**: 60-120 seconds
+- **Power/Olympic lifts**: 3-5 minutes (full CNS recovery)
+
+---
+
+## PERIODIZATION MODELS FOR 3-7 WEEKS
+
+### Model 1: Linear Progression (Best for Beginners)
+```
+Week 1: 3 × 8 @ 70%
+Week 2: 3 × 8 @ 72.5%
+Week 3: 3 × 8 @ 75%
+Week 4: 4 × 6 @ 77.5%
+Week 5: 4 × 6 @ 80%
+Week 6: 4 × 6 @ 82.5%
+Week 7: Deload 3 × 6 @ 65%
+```
+
+### Model 2: Wave Loading (Intermediate)
+```
+Week 1: 4 × 8 @ 70% (Volume)
+Week 2: 4 × 6 @ 75% (Build)
+Week 3: 4 × 4 @ 82.5% (Intensity)
+Week 4: 3 × 5 @ 65% (Deload)
+Week 5: 4 × 6 @ 77.5% (Build)
+Week 6: 4 × 3 @ 85% (Peak)
+Week 7: Test week or transition
+```
+
+### Model 3: Block Periodization (Advanced)
+```
+Weeks 1-3: Accumulation Block
+- High volume (4-5 × 8-10)
+- Moderate intensity (65-75%)
+- Build work capacity
+
+Week 4: Deload
+- 50% volume
+- 60-70% intensity
+
+Weeks 5-6: Intensification Block
+- Moderate volume (4-5 × 3-6)
+- High intensity (80-90%)
+- Peak strength
+
+Week 7: Transition/Test
+```
+
+---
+
+## INJURY ACCOMMODATIONS & MODIFICATIONS
+
+### Shoulder Issues
+**Avoid:**
+- Behind-neck press
+- Very wide-grip bench
+- Upright rows (if painful)
+
+**Substitute:**
+- Floor press (reduced ROM)
+- Landmine press (shoulder-friendly angle)
+- Neutral-grip floor press
+- Incline bench (moderate incline)
+- Front raises instead of upright rows
+
+### Lower Back Issues
+**Avoid:**
+- Heavy conventional deadlifts from floor
+- Good mornings (if acute)
+- Low-bar squat
+
+**Substitute:**
+- Deadlift from blocks (reduced ROM)
+- Trap bar deadlift (if available)
+- Front squat (more upright)
+- RDL with lighter weight (controlled)
+- Safety bar squat (if available)
+
+### Knee Issues
+**Avoid:**
+- Deep squats (ass-to-grass)
+- Heavy front squats
+- Lunges (if painful)
+
+**Substitute:**
+- Box squat to parallel
+- Deadlift variations (less knee flexion)
+- RDL (minimal knee bend)
+- Good mornings
+- Hip thrusts
+
+### Wrist Issues
+**Avoid:**
+- Straight bar curls
+- Low-bar back squat
+- Front squat (clean grip)
+
+**Substitute:**
+- High-bar back squat
+- Front squat with crossed arms
+- Overhead press (wrists neutral)
+- Reverse curls (less supination)
+
+---
+
+## AGE & SEX CONSIDERATIONS
+
+### Masters Athletes (40+)
+- **Warm-up**: 10-15 minutes (longer than youth)
+- **Volume**: Start conservative, 10-20% less than younger athletes
+- **Intensity**: Can still train heavy, but add 1 RIR
+- **Recovery**: May need extra rest day or deload week 4
+- **Exercise selection**: Joint-friendly (front squat > back squat, floor press option)
+- **Progression**: Slower but steady (add 2.5 lbs vs 5 lbs)
+- **Deload**: Every 3-4 weeks vs 4-6 for youth
+
+### Female Athletes
+- **Same principles apply**: Progressive overload, periodization
+- **Volume tolerance**: Often can handle more frequency/volume
+- **Menstrual cycle tracking**:
+  - Weeks 1-2 (follicular): Higher performance capacity
+  - Weeks 3-4 (luteal): May need slight volume reduction
+- **Pregnancy/Postpartum**: Requires medical clearance and modified programming
+- **Relative strength**: Often stronger relative to bodyweight in lower body
+
+### Youth/Adolescents (Under 18)
+- **Technique first**: Perfect form before loading
+- **Conservative progression**: 2.5 lbs max increments
+- **Supervision**: Adult coaching/spotting required
+- **Volume**: Lower than adults (recovery capacity developing)
+- **Exercise selection**: Stick to basics (squat, bench, press, row, deadlift)
+- **Avoid**: Max singles, very high intensity (>90% 1RM)
+
+---
+
+## SPORT-SPECIFIC CONSIDERATIONS (3-7 WEEK BLOCKS)
+
+### Powerlifting
+- **Focus**: Squat, bench, deadlift specificity
+- **Frequency**: Each lift 2-3x per week
+- **Variations**: Competition style + variations (pause, tempo, chains)
+- **Accessories**: Support main lifts (RDL, close-grip bench, front squat)
+- **Peaking**: Weeks 1-4 volume, weeks 5-7 intensity + taper
+
+### Olympic Weightlifting
+- **Focus**: Snatch, clean & jerk + positional work
+- **Frequency**: 4-6 sessions per week
+- **Volume**: Olympic lifts first, squats/pulls second
+- **Technique**: High importance, moderate weights (70-85%)
+- **Accessories**: Front squat, clean pulls, jerk drives
+
+### Team Sports (Off-Season Block)
+- **Frequency**: 3-4 strength sessions per week
+- **Focus**: Power + strength (not bodybuilding)
+- **Olympic lifts**: High value (clean, snatch, push press)
+- **Volume**: Moderate (must balance with sport practice)
+- **Accessories**: Injury prevention (single-leg, posterior chain)
+
+### Combat Sports (Training Camp)
+- **Frequency**: 2-3 sessions per week (sport practice priority)
+- **Focus**: Strength maintenance + power
+- **Volume**: LOW (must manage total stress)
+- **Exercise selection**: Full body, efficient (no bodypart splits)
+- **Intensity**: Moderate-high (maintain strength without fatigue)
+
+### Endurance Sports (Strength Block)
+- **Frequency**: 2 full-body sessions per week
+- **Focus**: Injury prevention, strength maintenance
+- **Volume**: Low-moderate (cardio is priority)
+- **Timing**: Separate from hard endurance sessions by 6+ hours
+- **Exercise selection**: Compound lifts, functional patterns
+
+---
+
+## VELOCITY-BASED TRAINING (VBT) - Optional
+
+### When to Use VBT (3-7 weeks)
+- **Power/Olympic lifting programs**: High value
+- **Strength programs**: Useful for autoregulation
+- **Hypertrophy programs**: Low value (not the right tool)
+- **Beginners**: Not recommended (focus on technique first)
+
+### VBT Implementation (If Equipment Available)
+**Velocity Zones by Movement:**
+- Olympic lifts: >1.0 m/s (stop if drops below 0.95 m/s)
+- Speed squats: 0.75-1.0 m/s target
+- Speed bench: 0.5-0.75 m/s target
+- Speed deadlifts: 0.6-0.9 m/s target
+
+**Autoregulation Protocol:**
+- Day 1: Test average velocity at prescribed load
+- If velocity >= threshold: Increase 2.5-5% next session
+- If velocity < minimum: Reduce load 5-10%
+- Stop set when velocity drops >10% from first rep
+
+**VBT Set Notes Example:**
+"Target 1.0 m/s. Stop set if velocity drops below 0.95 m/s"
+
+---
+
+## NUTRITION BASICS FOR 3-7 WEEK BLOCKS
+
+### Protein Requirements
+- **Strength/hypertrophy**: 1.6-2.2 g/kg bodyweight daily
+- **Fat loss + strength**: 2.0-2.4 g/kg bodyweight daily
+- **Masters (40+)**: 1.8-2.4 g/kg (higher end recommended)
+- **Timing**: Spread across 3-5 meals, 20-40g per meal
+
+### Caloric Guidelines
+- **Muscle gain**: +250-500 kcal surplus
+- **Strength gain (minimal weight change)**: Maintenance
+- **Fat loss**: -250-500 kcal deficit (moderate)
+- **Aggressive cut**: -500-750 kcal (expect some strength loss)
+
+### Carbohydrates
+- **High intensity training**: 3-5 g/kg bodyweight
+- **Moderate training**: 2-3 g/kg bodyweight
+- **Fat loss phase**: 1-2 g/kg bodyweight (minimum for performance)
+
+### Hydration
+- **Baseline**: 0.03-0.04 L per kg bodyweight daily
+- **Pre-workout**: 400-600 mL, 2 hours before
+- **During**: 200-400 mL per hour
+- **Post-workout**: 1.5L per kg lost through sweat
+
+---
+
+## SAMPLE 3-7 WEEK PROGRAMS
+
+### Example 1: 4-Week Beginner Strength Block
+**Goal**: Build foundational strength, perfect technique
+
+**Week 1**: 3 × 8 @ 70% (technique focus)
+**Week 2**: 3 × 8 @ 72.5% (add 5-10 lbs)
+**Week 3**: 4 × 6 @ 75% (intensity increase)
+**Week 4**: 4 × 6 @ 77.5% (test new maxes week 5)
+
+**Structure**: Full body 3x/week (Mon/Wed/Fri)
+
+### Example 2: 6-Week Intermediate Hypertrophy Block
+**Goal**: Muscle growth, work capacity
+
+**Weeks 1-2**: Accumulation (4 × 10 @ 65-70%)
+**Weeks 3-4**: Intensification (4 × 8 @ 72-77%)
+**Week 5**: Peak volume (5 × 8 @ 75%)
+**Week 6**: Deload (3 × 8 @ 60%)
+
+**Structure**: Upper/Lower 4x/week
+
+### Example 3: 7-Week Advanced Strength Peak
+**Goal**: Peak strength for competition
+
+**Weeks 1-3**: Volume phase (5 × 5-6 @ 75-80%)
+**Week 4**: Deload (3 × 5 @ 65%)
+**Weeks 5-6**: Intensity phase (5 × 3 @ 85-90%)
+**Week 7**: Taper + test (singles @ 90-95%, then max attempts)
+
+**Structure**: Daily Undulating Periodization 5x/week
+
+---
+
+## BARBELL EXERCISE LIBRARY (MEDIUM PROGRAMS)
+
+### Must-Know Exercises (30 Total)
+1. Back Squat
+2. Front Squat
+3. Deadlift (conventional)
+4. Romanian Deadlift (RDL)
+5. Bench Press
+6. Incline Bench Press
+7. Overhead Press
+8. Close-Grip Bench
+9. Barbell Row (bent-over)
+10. Pendlay Row
+11. Barbell Row (underhand)
+12. Good Mornings
+13. Barbell Hip Thrust
+14. Bulgarian Split Squat
+15. Power Clean
+16. Push Press
+17. Barbell Shrugs
+18. Barbell Curls
+19. Skull Crushers
+20. Overhead Tricep Extension
+21. Pause Squat
+22. Box Squat
+23. Floor Press
+24. Barbell Lunges
+25. T-Bar Row (if landmine available)
+26. Upright Row
+27. Front Raise
+28. Deficit Deadlift
+29. Clean Pull
+30. Snatch (power or full)
+
+---
+
+## IMPLEMENTATION GUIDELINES FOR AI AGENTS
+
+### Program Generation Checklist (3-7 Weeks)
+1. ✅ **Assess training level** (beginner/intermediate/advanced)
+2. ✅ **Determine primary goal** (strength, hypertrophy, power)
+3. ✅ **Select appropriate split** (full body, upper/lower, PPL)
+4. ✅ **Choose periodization model** (linear, wave, block)
+5. ✅ **Set volume appropriately** (match training level)
+6. ✅ **Include deload if 5-7 weeks** (week 4 or 6)
+7. ✅ **Balance muscle groups** (push/pull 1:1 ratio)
+8. ✅ **Accommodate injuries** (substitute exercises)
+9. ✅ **Adjust for age/sex** (volume, intensity, recovery)
+10. ✅ **Progressive overload plan** (specific numbers: "+5 lbs/week")
+11. ✅ **Include safety notes** (squat/bench/deadlift form cues)
+12. ✅ **Set appropriate RIR** (by training level and week)
+
+### Common Mistakes to Avoid
+❌ Too much volume for beginners
+❌ No deload in 6-7 week programs
+❌ Ignoring injury history
+❌ Inappropriate exercise selection (dumbbells, machines)
+❌ Vague progression ("add weight when ready" - NO! Be specific)
+❌ Push/pull imbalance (chest focus with no back work)
+❌ Missing safety notes for compound lifts
+❌ Using VBT for hypertrophy or beginners
+❌ Not adjusting for age/sex
+❌ Unclear set/rep schemes
+
+---
+
+## CONCLUSION
+
+3-7 week mesocycles are the foundation of effective training programming. This duration allows:
+- **Meaningful adaptation** (enough time for gains)
+- **Focused blocks** (single goal: strength, size, or power)
+- **Manageable planning** (not too complex)
+- **Progress tracking** (clear beginning and end)
+- **Periodization** (progressive overload with strategic deload)
+
+Success in 3-7 week programs requires:
+1. **Clear goal** (strength, hypertrophy, or power)
+2. **Appropriate volume** (match training level)
+3. **Logical progression** (wave loading, linear, or block)
+4. **Strategic deload** (if 5+ weeks)
+5. **Exercise specificity** (barbell only, support the goal)
+6. **Safety emphasis** (proper form, injury accommodation)
+7. **Individual factors** (age, sex, sport, injuries)
+
+This medium-length CAG provides all essential knowledge for generating effective 3-7 week barbell training mesocycles.
+
+---
+
+**Document Version**: 1.0 - Medium Program Edition
+**Program Duration**: 3-7 weeks
+**Equipment Required**: Barbell, weight plates, squat rack, bench
+**Purpose**: Focused CAG for mesocycle training blocks

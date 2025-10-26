@@ -107,3 +107,7 @@ checkpoints/
 # User data (ensure no sensitive data is committed)
 user_data/
 downloads/
+
+# Generated program files
+src/programs/*.md
+programs/*.md
