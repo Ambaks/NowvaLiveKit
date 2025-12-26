@@ -62,3 +62,46 @@ class ProgramGenerationRequest(BaseModel):
                 "user_notes": "Prefer front squats over back squats. Available equipment includes competition-spec barbell and calibrated plates. Training for a meet in 12 weeks."
             }
         }
+
+
+class ProgramUpdateRequest(BaseModel):
+    """Request model for updating an existing program"""
+    change_request: str = Field(
+        min_length=5,
+        max_length=1000,
+        description="User's description of what they want to change about their program"
+    )
+
+    # User profile context (needed for intelligent updates)
+    age: int = Field(ge=13, le=100, description="User's age in years")
+    sex: str = Field(pattern="^(M|F|male|female)$", description="Biological sex")
+    height_cm: float = Field(gt=0, lt=300, description="Height in centimeters")
+    weight_kg: float = Field(gt=0, lt=500, description="Weight in kilograms")
+    fitness_level: str = Field(
+        pattern="^(beginner|intermediate|advanced)$",
+        description="User's fitness level"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "change_request": "I can only train 3 days per week now instead of 5",
+                "age": 28,
+                "sex": "M",
+                "height_cm": 190.5,
+                "weight_kg": 87.5,
+                "fitness_level": "intermediate"
+            }
+        }
+
+
+class ProgramListRequest(BaseModel):
+    """Request model for listing user's programs"""
+    user_id: UUID
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": "ee611076-e172-45c9-8562-c30aeebd037f"
+            }
+        }

@@ -45,9 +45,10 @@ class AgentState:
             },
             "workout": {
                 "active": False,
-                "exercise": None,
-                "reps": 0,
-                "sets": 0,
+                "current_session": None,  # WorkoutSession.to_dict() stored here during active workout
+                "exercise": None,  # Legacy field (kept for compatibility)
+                "reps": 0,  # Legacy field
+                "sets": 0,  # Legacy field
             },
             "program_creation": {
                 "has_vbt_capability": False,  # Automatically set based on fitness level + goal + sport

@@ -157,6 +157,34 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         program_id = _save_program_to_db(db, user_id, program_data)
         db_save_elapsed = time.time() - db_save_start
 
+        # Create schedule entries for the program (85% → 90%)
+        update_job_status(db, job_id, "in_progress", progress=85)
+        schedule_start = time.time()
+        try:
+            print(f"\n[JOB {job_id}] 📅 Creating workout schedule...")
+            from db.schedule_utils import create_schedule_for_program, get_next_monday
+
+            # Get days_per_week from params (default to 3 if not specified)
+            days_per_week = params.get("days_per_week", 3)
+            start_date = get_next_monday()  # Start on next Monday
+
+            schedule_entries = create_schedule_for_program(
+                db=db,
+                user_id=user_id,
+                program_id=program_id,
+                program_type="user_generated",
+                start_date=start_date,
+                days_per_week=days_per_week
+            )
+
+            schedule_elapsed = time.time() - schedule_start
+            print(f"[JOB {job_id}] ✅ Created {len(schedule_entries)} schedule entries (start: {start_date.isoformat()}) in {schedule_elapsed:.1f}s")
+        except Exception as schedule_error:
+            print(f"[JOB {job_id}] ⚠️  Failed to create schedule: {schedule_error}")
+            # Don't fail the whole job if schedule creation fails
+            import traceback
+            traceback.print_exc()
+
         # Generate markdown file (90% → 95%)
         update_job_status(db, job_id, "in_progress", progress=90)
         markdown_start = time.time()

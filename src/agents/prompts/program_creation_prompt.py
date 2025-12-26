@@ -2,18 +2,20 @@
 Program creation mode prompt for Nova voice agent
 """
 
-def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
+def get_program_creation_prompt(name: str, existing_data: dict = None, precaptured_params: dict = None) -> str:
     """
-    Get program creation prompt with user's name and existing data
+    Get program creation prompt with user's name, existing data, and pre-captured parameters
 
     Args:
         name: User's first name
         existing_data: Dict with existing user data (height_cm, weight_kg, age, sex)
+        precaptured_params: Dict with pre-captured params from user's initial request (goal, duration, etc.)
 
     Returns:
         Formatted prompt string
     """
     existing_data = existing_data or {}
+    precaptured_params = precaptured_params or {}
 
     # Check what data already exists
     has_height_weight = existing_data.get("height_cm") and existing_data.get("weight_kg")
@@ -33,9 +35,34 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
         height_in = int((height_cm / 2.54) % 12)
         weight_lbs = int(weight_kg * 2.20462)
 
-        question_1_2_instructions = f"""
+        # Check if goal was pre-captured
+        precaptured_goal = precaptured_params.get("goal")
+        precaptured_goal_raw = precaptured_params.get("goal_raw", "")
+
+        if precaptured_goal:
+            # Pre-captured goal - validate it
+            goal_descriptions = {
+                'hypertrophy': 'build muscle',
+                'strength': 'get stronger',
+                'power': 'improve explosiveness and power'
+            }
+            goal_desc = goal_descriptions.get(precaptured_goal, precaptured_goal)
+
+            question_1_instructions = f"""
+1. **First Question - PRE-CAPTURED GOAL**:
+   → I detected you want to {goal_desc} from your request
+   → Say: "I heard you want to {goal_desc} - is that right?"
+   → If YES: Call `capture_goal("{precaptured_goal_raw}")`
+   → If NO/MODIFY: Ask "What's your main goal?" and capture their answer with `capture_goal(goal_description)`
+"""
+        else:
+            # No pre-captured goal - ask normally
+            question_1_instructions = """
 1. **First Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
    → Call `capture_goal(goal_description)`
+"""
+
+        question_1_2_instructions = question_1_instructions + f"""
 
 2. **Second Question - EXISTING DATA FOUND**:
    → I have your stats from your profile: {height_ft}'{height_in}", {weight_lbs} lbs, {age} years old, {sex}.
@@ -46,9 +73,31 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
 """
     elif has_height_weight:
         # Has height/weight but not age/sex - ask goals first
-        question_1_2_instructions = f"""
+        precaptured_goal = precaptured_params.get("goal")
+        precaptured_goal_raw = precaptured_params.get("goal_raw", "")
+
+        if precaptured_goal:
+            goal_descriptions = {
+                'hypertrophy': 'build muscle',
+                'strength': 'get stronger',
+                'power': 'improve explosiveness and power'
+            }
+            goal_desc = goal_descriptions.get(precaptured_goal, precaptured_goal)
+
+            question_1_instructions = f"""
+1. **First Question - PRE-CAPTURED GOAL**:
+   → I detected you want to {goal_desc} from your request
+   → Say: "I heard you want to {goal_desc} - is that right?"
+   → If YES: Call `capture_goal("{precaptured_goal_raw}")`
+   → If NO/MODIFY: Ask "What's your main goal?" and capture their answer with `capture_goal(goal_description)`
+"""
+        else:
+            question_1_instructions = """
 1. **First Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
    → Call `capture_goal(goal_description)`
+"""
+
+        question_1_2_instructions = question_1_instructions + f"""
 
 2. **Second Question - EXISTING DATA FOUND**:
    → I have your height and weight from your profile.
@@ -60,9 +109,31 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
 """
     elif has_age_sex:
         # Has age/sex but not height/weight - ask goals first
-        question_1_2_instructions = f"""
+        precaptured_goal = precaptured_params.get("goal")
+        precaptured_goal_raw = precaptured_params.get("goal_raw", "")
+
+        if precaptured_goal:
+            goal_descriptions = {
+                'hypertrophy': 'build muscle',
+                'strength': 'get stronger',
+                'power': 'improve explosiveness and power'
+            }
+            goal_desc = goal_descriptions.get(precaptured_goal, precaptured_goal)
+
+            question_1_instructions = f"""
+1. **First Question - PRE-CAPTURED GOAL**:
+   → I detected you want to {goal_desc} from your request
+   → Say: "I heard you want to {goal_desc} - is that right?"
+   → If YES: Call `capture_goal("{precaptured_goal_raw}")`
+   → If NO/MODIFY: Ask "What's your main goal?" and capture their answer with `capture_goal(goal_description)`
+"""
+        else:
+            question_1_instructions = """
 1. **First Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
    → Call `capture_goal(goal_description)`
+"""
+
+        question_1_2_instructions = question_1_instructions + f"""
 
 2. **Second Question**: "Let me get a few quick stats. What's your height and weight?"
    → When they answer, call `capture_height_weight(height_value, weight_value)`
@@ -87,12 +158,126 @@ def get_program_creation_prompt(name: str, existing_data: dict = None) -> str:
         next_question_num = 3
     else:
         # No existing data, so we need to ask for goals now
-        goal_question = """
+        precaptured_goal = precaptured_params.get("goal")
+        precaptured_goal_raw = precaptured_params.get("goal_raw", "")
+
+        if precaptured_goal:
+            goal_descriptions = {
+                'hypertrophy': 'build muscle',
+                'strength': 'get stronger',
+                'power': 'improve explosiveness and power'
+            }
+            goal_desc = goal_descriptions.get(precaptured_goal, precaptured_goal)
+
+            goal_question = f"""
+3. **Third Question - PRE-CAPTURED GOAL**:
+   → I detected you want to {goal_desc} from your request
+   → Say: "I heard you want to {goal_desc} - is that right?"
+   → If YES: Call `capture_goal("{precaptured_goal_raw}")`
+   → If NO/MODIFY: Ask "What's your main goal?" and capture their answer with `capture_goal(goal_description)`
+
+"""
+        else:
+            goal_question = """
 3. **Third Question**: "What's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?"
    → Call `capture_goal(goal_description)`
 
 """
         next_question_num = 4
+
+    # Build duration question with validation
+    precaptured_duration = precaptured_params.get("duration")
+    if precaptured_duration:
+        duration_question = f"""
+{next_question_num}. **Question {next_question_num} - PRE-CAPTURED DURATION**:
+   → I detected you want a {precaptured_duration} week program
+   → Say: "You mentioned {precaptured_duration} weeks - does that work?"
+   → If YES: Call `capture_program_duration({precaptured_duration})`
+   → If NO/MODIFY: Ask "How many weeks would you like?" and capture their answer
+"""
+    else:
+        duration_question = f"""
+{next_question_num}. **Question {next_question_num}**: "How many weeks would you like this program to run?"
+   → Call `capture_program_duration(duration_weeks)`
+"""
+
+    # Build frequency question with validation
+    precaptured_frequency = precaptured_params.get("frequency")
+    if precaptured_frequency:
+        frequency_question = f"""
+{next_question_num + 1}. **Question {next_question_num + 1} - PRE-CAPTURED FREQUENCY**:
+   → I detected you want to train {precaptured_frequency} days per week
+   → Say: "I heard {precaptured_frequency} days per week - is that correct?"
+   → If YES: Call `capture_training_frequency({precaptured_frequency})`
+   → If NO/MODIFY: Ask "How many days per week can you train?" and capture their answer
+"""
+    else:
+        frequency_question = f"""
+{next_question_num + 1}. **Question {next_question_num + 1}**: "How many days per week can you train?"
+   → Call `capture_training_frequency(days_per_week)`
+"""
+
+    # Build session duration question with validation
+    precaptured_session = precaptured_params.get("session_duration")
+    if precaptured_session:
+        session_question = f"""
+{next_question_num + 2}. **Question {next_question_num + 2} (OPTIONAL) - PRE-CAPTURED**:
+   → I detected you want {precaptured_session} minute sessions
+   → Say: "You mentioned {precaptured_session} minute workouts - is that right?"
+   → If YES: Call `capture_session_duration({precaptured_session})`
+   → If NO/MODIFY: Ask "How much time do you have per session?" and capture their answer
+"""
+    else:
+        session_question = f"""
+{next_question_num + 2}. **Question {next_question_num + 2} (OPTIONAL)**: "How much time do you have per session? Most people do about an hour."
+   → Call `capture_session_duration(duration_minutes)`
+"""
+
+    # Build injury question with validation
+    precaptured_injuries = precaptured_params.get("injuries")
+    if precaptured_injuries:
+        injury_question = f"""
+{next_question_num + 3}. **Question {next_question_num + 3} (OPTIONAL) - PRE-CAPTURED**:
+   → I detected: {precaptured_injuries}
+   → Say: "I noticed you mentioned {precaptured_injuries} - can you tell me more about that?"
+   → Capture their detailed response with `capture_injury_history(injury_description)`
+"""
+    else:
+        injury_question = f"""
+{next_question_num + 3}. **Question {next_question_num + 3} (OPTIONAL)**: "Any current or past injuries I should know about?"
+   → Call `capture_injury_history(injury_description)` or pass "none"
+"""
+
+    # Build sport question with validation
+    precaptured_sport = precaptured_params.get("sport")
+    if precaptured_sport:
+        sport_question = f"""
+{next_question_num + 4}. **Question {next_question_num + 4} (OPTIONAL) - PRE-CAPTURED**:
+   → I detected you're training for {precaptured_sport}
+   → Say: "I heard you're training for {precaptured_sport} - is that right?"
+   → If YES: Call `capture_specific_sport("{precaptured_sport}")`
+   → If NO/MODIFY: Ask "What sport are you training for?" and capture their answer
+"""
+    else:
+        sport_question = f"""
+{next_question_num + 4}. **Question {next_question_num + 4} (OPTIONAL)**: "Are you training for a specific sport, or just general fitness?"
+   → Call `capture_specific_sport(sport_name)` or pass "none"
+"""
+
+    # Build notes question with validation
+    precaptured_notes = precaptured_params.get("notes")
+    if precaptured_notes:
+        notes_question = f"""
+{next_question_num + 5}. **Question {next_question_num + 5} (OPTIONAL) - PRE-CAPTURED**:
+   → I detected preferences: {precaptured_notes}
+   → Say: "I noted you want {precaptured_notes} - anything else I should know?"
+   → Call `capture_user_notes("{precaptured_notes}")` if they have nothing else, or capture additional notes
+"""
+    else:
+        notes_question = f"""
+{next_question_num + 5}. **Question {next_question_num + 5} (OPTIONAL)**: "Anything else I should know? Like exercise preferences?"
+   → Call `capture_user_notes(notes)` or skip if they have nothing
+"""
 
     return f"""
 # 🚨 MANDATORY FIRST STEP - READ THIS BEFORE DOING ANYTHING 🚨
@@ -103,23 +288,17 @@ DO NOT SKIP AHEAD. DO NOT ASK OUT OF ORDER. FOLLOW THIS SEQUENCE EXACTLY:
 
 {question_1_2_instructions}
 
-{goal_question}{next_question_num}. **Question {next_question_num}**: "How many weeks would you like this program to run?"
-   → Call `capture_program_duration(duration_weeks)`
+{goal_question}{duration_question}
 
-{next_question_num + 1}. **Question {next_question_num + 1}**: "How many days per week can you train?"
-   → Call `capture_training_frequency(days_per_week)`
+{frequency_question}
 
-{next_question_num + 2}. **Question {next_question_num + 2} (OPTIONAL)**: "How much time do you have per session? Most people do about an hour."
-   → Call `capture_session_duration(duration_minutes)`
+{session_question}
 
-{next_question_num + 3}. **Question {next_question_num + 3} (OPTIONAL)**: "Any current or past injuries I should know about?"
-   → Call `capture_injury_history(injury_description)` or pass "none"
+{injury_question}
 
-{next_question_num + 4}. **Question {next_question_num + 4} (OPTIONAL)**: "Are you training for a specific sport, or just general fitness?"
-   → Call `capture_specific_sport(sport_name)` or pass "none"
+{sport_question}
 
-{next_question_num + 5}. **Question {next_question_num + 5} (OPTIONAL)**: "Anything else I should know? Like exercise preferences?"
-   → Call `capture_user_notes(notes)` or skip if they have nothing
+{notes_question}
 
 {next_question_num + 6}. **FINAL Question**: "Last question - would you say you're a beginner, intermediate, or advanced lifter?"
    → Call `capture_fitness_level(fitness_level)`

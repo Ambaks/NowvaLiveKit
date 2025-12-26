@@ -8,6 +8,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # Add parent directory (src/) to path when running as subprocess
@@ -122,7 +123,25 @@ class NovaVoiceAgent(Agent):
             finally:
                 db.close()
 
-        return get_program_creation_prompt(name, existing_data)
+        # Gather pre-captured parameters from state
+        precaptured_params = {}
+        if self.state.get("program_creation.precaptured_goal"):
+            precaptured_params["goal"] = self.state.get("program_creation.precaptured_goal")
+            precaptured_params["goal_raw"] = self.state.get("program_creation.precaptured_goal_raw", "")
+        if self.state.get("program_creation.precaptured_duration"):
+            precaptured_params["duration"] = self.state.get("program_creation.precaptured_duration")
+        if self.state.get("program_creation.precaptured_frequency"):
+            precaptured_params["frequency"] = self.state.get("program_creation.precaptured_frequency")
+        if self.state.get("program_creation.precaptured_notes"):
+            precaptured_params["notes"] = self.state.get("program_creation.precaptured_notes")
+        if self.state.get("program_creation.precaptured_sport"):
+            precaptured_params["sport"] = self.state.get("program_creation.precaptured_sport")
+        if self.state.get("program_creation.precaptured_injuries"):
+            precaptured_params["injuries"] = self.state.get("program_creation.precaptured_injuries")
+        if self.state.get("program_creation.precaptured_session_duration"):
+            precaptured_params["session_duration"] = self.state.get("program_creation.precaptured_session_duration")
+
+        return get_program_creation_prompt(name, existing_data, precaptured_params)
 
     async def on_enter(self):
         """Entry point - generate appropriate greeting based on mode"""
@@ -371,26 +390,109 @@ class NovaVoiceAgent(Agent):
         """
         print("[MAIN MENU] User requested to start workout")
 
-        # Switch to workout mode (main.py monitors state file)
-        self.state.switch_mode("workout")
-        self.state.save_state()
+        from db.database import SessionLocal
+        from db.schedule_utils import get_todays_workout
+        from core.workout_session import WorkoutSession
 
-        # Update agent instructions to workout mode
-        new_instructions = self._get_workout_instructions()
-        self.update_instructions(new_instructions)
-        print("[STATE] Switched to workout mode and updated instructions - main.py will detect and start pose estimation")
+        # Get today's workout from schedule
+        db = SessionLocal()
+        try:
+            user = self.state.get_user()
+            user_id = user.get("id")
+            name = user.get("name", "there")
 
-        # Return instruction to transition to workout mode
-        user = self.state.get_user()
-        name = user.get("name", "there")
+            workout = get_todays_workout(db, user_id)
 
-        return None, f"The user wants to start a workout. Say enthusiastically: 'Alright {name}, let's do this! I'm tracking your form and counting reps. When you're ready, step up to the rack.' Keep it energetic."
+            if not workout:
+                print("[WORKOUT] No workout scheduled for today")
+                return None, f"Tell the user: 'Hey {name}, you don't have a workout scheduled for today. Would you like to check your upcoming schedule or create a new program?' Keep it helpful and supportive."
+
+            # Initialize workout session
+            session = WorkoutSession(
+                user_id=user_id,
+                schedule_id=workout["schedule_id"],
+                workout_data=workout
+            )
+
+            # Store session in state
+            self.state.set("workout.current_session", session.to_dict())
+            self.state.switch_mode("workout")
+            self.state.save_state()
+
+            # Update agent instructions to workout mode
+            new_instructions = self._get_workout_instructions()
+            self.update_instructions(new_instructions)
+            print("[STATE] Switched to workout mode with loaded workout - main.py will detect and start pose estimation")
+
+            # Get first exercise info
+            first_exercise_desc = session.get_current_exercise_description()
+
+            return None, f"The user wants to start a workout. Say enthusiastically: 'Alright {name}, let's do this! Today's workout is {workout['workout_name']}. First up: {first_exercise_desc}. I'm tracking your form and counting reps. When you're ready, step up to the rack!' Keep it energetic and clear."
+
+        except Exception as e:
+            print(f"[WORKOUT ERROR] Failed to load workout: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, f"Tell the user: 'Hmm, I'm having trouble loading your workout right now. Let's try again in a moment.' Keep it reassuring."
+        finally:
+            db.close()
+
+    @function_tool
+    async def view_schedule(self, days_ahead: int = 7, context: RunContext = None):
+        """
+        Call this when the user wants to see their upcoming workout schedule.
+        This includes requests about when workouts are scheduled, what's coming up,
+        viewing the calendar, or planning ahead.
+
+        Args:
+            days_ahead: Number of days to look ahead (default 7)
+        """
+        print(f"[MAIN MENU] User requested schedule (next {days_ahead} days)")
+
+        from db.database import SessionLocal
+        from db.schedule_utils import get_upcoming_workouts
+        from datetime import datetime
+
+        db = SessionLocal()
+        try:
+            user = self.state.get_user()
+            user_id = user.get("id")
+            name = user.get("name", "there")
+
+            workouts = get_upcoming_workouts(db, user_id, days_ahead)
+
+            if not workouts:
+                return None, f"The user has no workouts scheduled in the next {days_ahead} days. Suggest creating a new program or offer to help with other options."
+
+            # Build schedule summary
+            schedule_list = []
+            for w in workouts:
+                # Parse date for natural language
+                date_obj = datetime.fromisoformat(w['scheduled_date'])
+                date_display = date_obj.strftime("%A, %B %d")  # e.g., "Monday, November 4"
+
+                status = "completed" if w['completed'] else "scheduled"
+                schedule_list.append(
+                    f"{date_display}: {w['workout_name']} ({status})"
+                )
+
+            schedule_text = "\n".join(schedule_list)
+
+            return None, f"The user wants to see their schedule. Tell them they have {len(workouts)} workouts in the next {days_ahead} days:\n{schedule_text}\n\nKeep the delivery natural and conversational."
+
+        except Exception as e:
+            print(f"[SCHEDULE ERROR] Failed to load schedule: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, "There was an error loading the schedule. Apologize and suggest trying again."
+        finally:
+            db.close()
 
     @function_tool
     async def view_progress(self, context: RunContext):
         """
         Call this when the user wants to view their progress, stats, or history.
-        User might say: "show my progress", "how am I doing", "view stats", "my history"
+        This includes requests about performance trends, personal records, or past workouts.
         """
         print("[MAIN MENU] User requested to view progress")
 
@@ -399,7 +501,7 @@ class NovaVoiceAgent(Agent):
         name = user.get("name", "there")
 
         # For now, placeholder response
-        return None, f"The user wants to see their progress. Say something like: '{name}, you're doing great! This feature is coming soon - I'll be able to show you your workout history, personal records, and progress charts.' Keep it encouraging."
+        return None, f"The user wants to see their progress. Acknowledge their request and let them know this feature is coming soon - they'll be able to see workout history, personal records, and progress charts. Keep it encouraging."
 
     @function_tool
     async def update_profile(self, context: RunContext):
@@ -415,8 +517,126 @@ class NovaVoiceAgent(Agent):
         # For now, placeholder response
         return None, f"The user wants to update their profile. Say something like: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
 
+    def _extract_program_params_from_request(self, user_request: str) -> dict:
+        """
+        Extract program parameters from natural language request using intelligent parsing.
+
+        Args:
+            user_request: The user's full request (e.g., "build me a 6 week program to get my butt bigger")
+
+        Returns:
+            dict with extracted params (only high-confidence extractions)
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        extracted = {}
+        request_lower = user_request.lower()
+
+        # Extract GOAL/CATEGORY
+        hypertrophy_keywords = ['muscle', 'bigger', 'size', 'mass', 'hypertrophy', 'bulk', 'grow', 'butt', 'glutes', 'chest', 'arms', 'legs', 'aesthetic', 'look good', 'shredded', 'toned']
+        strength_keywords = ['stronger', 'strength', 'powerlifting', 'max', '1rm', 'heavy', 'strong']
+        power_keywords = ['explosive', 'power', 'jump', 'vertical', 'sprint', 'athletics', 'speed', 'fast', 'quick']
+
+        hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in request_lower)
+        strength_score = sum(1 for kw in strength_keywords if kw in request_lower)
+        power_score = sum(1 for kw in power_keywords if kw in request_lower)
+
+        if max(hypertrophy_score, strength_score, power_score) > 0:
+            if hypertrophy_score > strength_score and hypertrophy_score > power_score:
+                extracted['goal'] = 'hypertrophy'
+            elif strength_score > hypertrophy_score and strength_score > power_score:
+                extracted['goal'] = 'strength'
+            elif power_score > hypertrophy_score and power_score > strength_score:
+                extracted['goal'] = 'power'
+
+        # Extract DURATION (weeks)
+        # Pattern: "X weeks", "X week", "X months", "X month"
+        week_match = re.search(r'(\d+)\s*(?:weeks?|wks?)', request_lower)
+        if week_match:
+            extracted['duration'] = int(week_match.group(1))
+        else:
+            # Check for months
+            month_match = re.search(r'(\d+)\s*months?', request_lower)
+            if month_match:
+                extracted['duration'] = int(month_match.group(1)) * 4  # Convert to weeks
+
+        # Pattern: "by [date/event]" - calculate weeks from now
+        # E.g., "before christmas", "by the time season starts in 2 months"
+        if 'christmas' in request_lower and 'duration' not in extracted:
+            # Calculate weeks until Dec 25
+            today = datetime.now()
+            christmas = datetime(today.year if today.month < 12 else today.year + 1, 12, 25)
+            weeks_until = max(1, int((christmas - today).days / 7))
+            if weeks_until <= 52:  # Reasonable range
+                extracted['duration'] = weeks_until
+
+        # Extract TRAINING FREQUENCY
+        # Pattern: "X days a week", "X days per week", "Xx per week", "X times a week"
+        freq_match = re.search(r'(\d+)\s*(?:days?|times?|x)\s*(?:a|per)?\s*week', request_lower)
+        if freq_match:
+            extracted['frequency'] = int(freq_match.group(1))
+
+        # Extract USER NOTES (specific preferences)
+        notes_parts = []
+
+        # Muscle group emphasis
+        if 'glute' in request_lower or 'butt' in request_lower:
+            notes_parts.append("glute emphasis")
+        if 'chest' in request_lower:
+            notes_parts.append("chest emphasis")
+        if 'leg' in request_lower:
+            notes_parts.append("leg emphasis")
+        if 'arm' in request_lower:
+            notes_parts.append("arm emphasis")
+        if 'back' in request_lower:
+            notes_parts.append("back emphasis")
+
+        # Athletic goals
+        if 'vertical' in request_lower and 'jump' in request_lower:
+            notes_parts.append("vertical jump focus")
+        if 'sprint' in request_lower:
+            notes_parts.append("sprint speed focus")
+
+        if notes_parts:
+            extracted['notes'] = ", ".join(notes_parts)
+
+        # Extract SPORT
+        sports = ['basketball', 'football', 'soccer', 'volleyball', 'track', 'baseball', 'powerlifting', 'weightlifting', 'crossfit']
+        for sport in sports:
+            if sport in request_lower:
+                extracted['sport'] = sport
+                break
+
+        # Extract INJURIES
+        injury_keywords = ['injury', 'injured', 'hurt', 'pain', 'bad knee', 'bad shoulder', 'back pain']
+        for kw in injury_keywords:
+            if kw in request_lower:
+                # Try to extract what's injured
+                if 'knee' in request_lower:
+                    extracted['injuries'] = "knee issues mentioned"
+                elif 'shoulder' in request_lower:
+                    extracted['injuries'] = "shoulder issues mentioned"
+                elif 'back' in request_lower:
+                    extracted['injuries'] = "back issues mentioned"
+                else:
+                    extracted['injuries'] = "injury mentioned - needs clarification"
+                break
+
+        # Extract SESSION DURATION
+        # Pattern: "X minute workouts", "X min sessions", "X hour workouts"
+        duration_match = re.search(r'(\d+)\s*(?:minute|min)\s*(?:workout|session)', request_lower)
+        if duration_match:
+            extracted['session_duration'] = int(duration_match.group(1))
+        else:
+            hour_match = re.search(r'(\d+)\s*hour\s*(?:workout|session)', request_lower)
+            if hour_match:
+                extracted['session_duration'] = int(hour_match.group(1)) * 60
+
+        return extracted
+
     @function_tool
-    async def create_program(self, context: RunContext):
+    async def create_program(self, context: RunContext, user_request: str = ""):
         """
         Call this IMMEDIATELY when the user wants to create a program.
 
@@ -430,10 +650,17 @@ class NovaVoiceAgent(Agent):
         - "new program"
         - "make me a program"
 
+        IMPORTANT: Pass the user's FULL original message as user_request to enable intelligent parameter extraction.
+        Example: user_request="build me a 6 week program to get my butt as big as possible before christmas"
+
         This will start the program creation flow and guide the user through collecting their information.
+
+        Args:
+            user_request: The user's full original request (enables smart parameter extraction)
         """
         print("\n" + "="*80)
         print("[MAIN MENU] create_program() CALLED")
+        print(f"[MAIN MENU] User request: {user_request}")
         print("="*80)
 
         user = self.state.get_user()
@@ -441,6 +668,13 @@ class NovaVoiceAgent(Agent):
         name = user.get("name", "there")
 
         print(f"[PROGRAM] User: {name} (ID: {user_id})")
+
+        # Extract program parameters from user request
+        extracted_params = {}
+        if user_request:
+            extracted_params = self._extract_program_params_from_request(user_request)
+            if extracted_params:
+                print(f"[PROGRAM] Extracted parameters: {extracted_params}")
 
         # Check if user has any existing programs
         db = SessionLocal()
@@ -469,6 +703,30 @@ class NovaVoiceAgent(Agent):
                 # Store in state to avoid re-querying
                 self.state.set("program_creation.existing_data", existing_data)
 
+                # Store extracted parameters with precaptured_ prefix
+                if 'goal' in extracted_params:
+                    self.state.set("program_creation.precaptured_goal", extracted_params['goal'])
+                    self.state.set("program_creation.precaptured_goal_raw", user_request)
+                    print(f"[PROGRAM] Pre-captured goal: {extracted_params['goal']}")
+                if 'duration' in extracted_params:
+                    self.state.set("program_creation.precaptured_duration", extracted_params['duration'])
+                    print(f"[PROGRAM] Pre-captured duration: {extracted_params['duration']} weeks")
+                if 'frequency' in extracted_params:
+                    self.state.set("program_creation.precaptured_frequency", extracted_params['frequency'])
+                    print(f"[PROGRAM] Pre-captured frequency: {extracted_params['frequency']} days/week")
+                if 'notes' in extracted_params:
+                    self.state.set("program_creation.precaptured_notes", extracted_params['notes'])
+                    print(f"[PROGRAM] Pre-captured notes: {extracted_params['notes']}")
+                if 'sport' in extracted_params:
+                    self.state.set("program_creation.precaptured_sport", extracted_params['sport'])
+                    print(f"[PROGRAM] Pre-captured sport: {extracted_params['sport']}")
+                if 'injuries' in extracted_params:
+                    self.state.set("program_creation.precaptured_injuries", extracted_params['injuries'])
+                    print(f"[PROGRAM] Pre-captured injuries: {extracted_params['injuries']}")
+                if 'session_duration' in extracted_params:
+                    self.state.set("program_creation.precaptured_session_duration", extracted_params['session_duration'])
+                    print(f"[PROGRAM] Pre-captured session duration: {extracted_params['session_duration']} min")
+
                 self.state.switch_mode("program_creation")
                 self.state.save_state()
 
@@ -478,7 +736,7 @@ class NovaVoiceAgent(Agent):
                 print("[PROGRAM] Updated agent instructions to program_creation mode")
 
                 # Start the program creation flow DIRECTLY - no need for create_program()
-                return None, f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'Oh! Let's create your first program, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY ask Question 1: 'First, what's your height and weight?' Keep it encouraging and conversational."
+                return None, f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'Oh! Let's create your first program, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY ask Question 1 based on your instructions. Keep it encouraging and conversational."
             else:
                 # Has programs - but user said "create", so they likely want to create a NEW one
                 # Skip the confirmation and go straight to creating a new program
@@ -500,6 +758,30 @@ class NovaVoiceAgent(Agent):
 
                 # Store in state to avoid re-querying
                 self.state.set("program_creation.existing_data", existing_data)
+
+                # Store extracted parameters with precaptured_ prefix
+                if 'goal' in extracted_params:
+                    self.state.set("program_creation.precaptured_goal", extracted_params['goal'])
+                    self.state.set("program_creation.precaptured_goal_raw", user_request)
+                    print(f"[PROGRAM] Pre-captured goal: {extracted_params['goal']}")
+                if 'duration' in extracted_params:
+                    self.state.set("program_creation.precaptured_duration", extracted_params['duration'])
+                    print(f"[PROGRAM] Pre-captured duration: {extracted_params['duration']} weeks")
+                if 'frequency' in extracted_params:
+                    self.state.set("program_creation.precaptured_frequency", extracted_params['frequency'])
+                    print(f"[PROGRAM] Pre-captured frequency: {extracted_params['frequency']} days/week")
+                if 'notes' in extracted_params:
+                    self.state.set("program_creation.precaptured_notes", extracted_params['notes'])
+                    print(f"[PROGRAM] Pre-captured notes: {extracted_params['notes']}")
+                if 'sport' in extracted_params:
+                    self.state.set("program_creation.precaptured_sport", extracted_params['sport'])
+                    print(f"[PROGRAM] Pre-captured sport: {extracted_params['sport']}")
+                if 'injuries' in extracted_params:
+                    self.state.set("program_creation.precaptured_injuries", extracted_params['injuries'])
+                    print(f"[PROGRAM] Pre-captured injuries: {extracted_params['injuries']}")
+                if 'session_duration' in extracted_params:
+                    self.state.set("program_creation.precaptured_session_duration", extracted_params['session_duration'])
+                    print(f"[PROGRAM] Pre-captured session duration: {extracted_params['session_duration']} min")
 
                 # Switch to program_creation mode
                 self.state.switch_mode("program_creation")
@@ -531,16 +813,377 @@ class NovaVoiceAgent(Agent):
         - "edit my program"
         - "update program"
 
-        This is a placeholder for future functionality.
+        This starts the program update flow where the agent will:
+        1. Check if user has programs
+        2. Ask which program to update (if multiple)
+        3. Ask what they want to change
+        4. Generate the update using AI
         """
         print("[MAIN MENU] User requested to update program")
 
         user = self.state.get_user()
+        user_id = user.get("id")
         name = user.get("name", "there")
 
-        # TODO: Implement program update functionality
-        # For now, inform user this feature is coming soon
-        return None, f"Say something like: '{name}, updating existing programs is coming soon! For now, you can create a new program if you'd like to try something different.' Keep it encouraging."
+        # Check if user has any programs
+        db = SessionLocal()
+        try:
+            from db.program_utils import get_program_summary_list
+
+            programs = get_program_summary_list(db, user_id)
+
+            if len(programs) == 0:
+                # No programs
+                return None, f"Say something like: '{name}, you don't have any programs yet. Would you like to create your first program?' Keep it encouraging."
+            elif len(programs) == 1:
+                # Exactly one program - proceed with it
+                program = programs[0]
+                self.state.set("program_update.selected_program_id", program["id"])
+                self.state.set("program_update.selected_program_name", program["name"])
+
+                print(f"[PROGRAM UPDATE] User has 1 program: {program['name']} (ID: {program['id']})")
+
+                return None, f"Say something like: 'Sure! I can update your {program['name']} program. What would you like to change about it?' Keep it conversational."
+            else:
+                # Multiple programs - ask which one
+                program_list = ", ".join([f"'{p['name']}'" for p in programs[:3]])  # List first 3
+                if len(programs) > 3:
+                    program_list += f", and {len(programs) - 3} more"
+
+                # Store programs in state for selection
+                self.state.set("program_update.available_programs", programs)
+
+                print(f"[PROGRAM UPDATE] User has {len(programs)} programs")
+
+                return None, f"Say something like: '{name}, you have {len(programs)} programs: {program_list}. Which one would you like to update?' Keep it friendly."
+
+        except Exception as e:
+            print(f"[ERROR] Failed to list programs: {e}")
+            return None, f"Say something like: '{name}, I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
+        finally:
+            db.close()
+
+    @function_tool
+    async def select_program_for_update(self, context: RunContext, program_name: str):
+        """
+        Call this when the user selects which program they want to update (when they have multiple programs).
+
+        Args:
+            program_name: The name of the program the user wants to update
+        """
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Get available programs from state
+        programs = self.state.get("program_update.available_programs", [])
+
+        if not programs:
+            return None, f"Error: No programs available for selection. Try calling update_program() first."
+
+        # Find matching program (fuzzy match on name)
+        selected_program = None
+        program_name_lower = program_name.lower()
+
+        for program in programs:
+            if program_name_lower in program["name"].lower():
+                selected_program = program
+                break
+
+        if not selected_program:
+            # No match found - list options again
+            program_list = ", ".join([f"'{p['name']}'" for p in programs])
+            return None, f"I didn't find a program called '{program_name}'. Your programs are: {program_list}. Which one would you like to update?"
+
+        # Store selected program
+        self.state.set("program_update.selected_program_id", selected_program["id"])
+        self.state.set("program_update.selected_program_name", selected_program["name"])
+
+        print(f"[PROGRAM UPDATE] Selected program: {selected_program['name']} (ID: {selected_program['id']})")
+
+        return None, f"Great! I'll update your {selected_program['name']} program. What would you like to change about it? For example, you could change the training frequency, duration, exercises, or intensity."
+
+    @function_tool
+    async def capture_program_change_request(self, context: RunContext, change_request: str):
+        """
+        Call this when the user describes what they want to change about their program.
+
+        Args:
+            change_request: The user's description of what they want to change
+        """
+        user = self.state.get_user()
+        user_id = user.get("id")
+        name = user.get("name", "there")
+
+        # Get selected program
+        program_id = self.state.get("program_update.selected_program_id")
+        program_name = self.state.get("program_update.selected_program_name")
+
+        if not program_id:
+            return None, f"Error: No program selected for update. Call update_program() first."
+
+        # Store change request
+        self.state.set("program_update.change_request", change_request)
+
+        print(f"[PROGRAM UPDATE] Change request: {change_request}")
+
+        # Check if this is a safe simple change (title/description only)
+        db = SessionLocal()
+        try:
+            from api.services.simple_program_updates import detect_simple_update, handle_simple_update
+
+            update_type, params = detect_simple_update(change_request)
+
+            if update_type != "requires_llm":
+                # Safe simple update - apply immediately
+                print(f"[PROGRAM UPDATE] Detected safe simple update: {update_type}")
+                success, message = handle_simple_update(db, program_id, change_request)
+
+                if success:
+                    # Clear update state
+                    self.state.set("program_update", None)
+                    return None, f"Say something like: 'Done! {message}. Your {program_name} program has been updated.' Keep it quick and positive."
+                else:
+                    # Simple update failed
+                    print(f"[PROGRAM UPDATE] Simple update failed: {message}")
+                    return None, f"Say something like: 'I had trouble updating that. {message}' Keep it apologetic."
+
+            # Training-related change - need LLM validation
+            print(f"[PROGRAM UPDATE] Training change detected, validating with LLM...")
+
+            from db.models import User
+            db_user = db.query(User).filter(User.id == user_id).first()
+
+            if not db_user:
+                return None, f"Error: User not found in database."
+
+            # Validate required user data
+            if not db_user.age or not db_user.sex or not db_user.height_cm or not db_user.weight_kg:
+                return None, f"Say something like: '{name}, I need some more information about you first. Let me ask you a few quick questions.' Then ask for missing: age, sex, height, weight."
+
+            # Build user profile
+            user_profile = {
+                "age": int(db_user.age),
+                "sex": db_user.sex,
+                "height_cm": float(db_user.height_cm),
+                "weight_kg": float(db_user.weight_kg),
+                "fitness_level": "intermediate"  # Default
+            }
+
+            # Get current program for validation
+            from api.services.program_updater import _get_current_program_as_json, validate_program_change_with_llm
+            import asyncio
+
+            current_program = _get_current_program_as_json(db, program_id)
+            if not current_program:
+                return None, f"Error: Could not load program for validation."
+
+            # Run validation
+            validation_result = asyncio.run(validate_program_change_with_llm(
+                current_program=current_program,
+                change_request=change_request,
+                user_profile=user_profile
+            ))
+
+            is_risky = validation_result.get("is_risky", False)
+
+            if not is_risky:
+                # Safe change - proceed directly to update
+                print(f"[PROGRAM UPDATE] ✅ Validation passed, proceeding with update")
+
+                # Store user profile for update job
+                self.state.set("program_update.user_profile", user_profile)
+
+                return None, f"Got it! I'll update your {program_name} program: '{change_request}'. Now call start_program_update_job() to begin."
+
+            else:
+                # Risky change - present warning and alternative
+                warning = validation_result.get("warning", "This change may not be ideal for your goals.")
+                alternative = validation_result.get("alternative", "")
+
+                print(f"[PROGRAM UPDATE] ⚠️  Risky change detected")
+                print(f"[PROGRAM UPDATE]    Warning: {warning}")
+                print(f"[PROGRAM UPDATE]    Alternative: {alternative}")
+
+                # Store validation result and user profile
+                self.state.set("program_update.validation_result", validation_result)
+                self.state.set("program_update.user_profile", user_profile)
+                self.state.set("program_update.awaiting_choice", True)
+
+                # Present options to user conversationally
+                if alternative:
+                    return None, f"Say something like: 'I noticed something about this change. {warning} {alternative} Would you prefer that alternative, or do you still want to go with your original request?' Keep it conversational and helpful."
+                else:
+                    return None, f"Say something like: 'I need to mention something. {warning} Are you sure you want to make this change?' Keep it concerned but supportive."
+
+        except Exception as e:
+            print(f"[ERROR] Failed to process change request: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, f"Error processing change request. Try again."
+        finally:
+            db.close()
+
+    @function_tool
+    async def start_program_update_job(self, context: RunContext, user_response: str = ""):
+        """
+        Call this to start the program update job after the user has described what they want to change.
+        This sends the request to the FastAPI backend for processing.
+
+        Args:
+            user_response: Optional - user's response if they were presented with validation choices
+        """
+        import httpx
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        # Get all required data from state
+        program_id = self.state.get("program_update.selected_program_id")
+        program_name = self.state.get("program_update.selected_program_name")
+        change_request = self.state.get("program_update.change_request")
+        user_profile = self.state.get("program_update.user_profile")
+        awaiting_choice = self.state.get("program_update.awaiting_choice", False)
+        validation_result = self.state.get("program_update.validation_result")
+
+        if not program_id or not change_request or not user_profile:
+            return None, f"Error: Missing required data. Ensure capture_program_change_request() was called first."
+
+        # Handle validation choice if pending
+        if awaiting_choice and validation_result:
+            print(f"[PROGRAM UPDATE] Processing user choice: {user_response}")
+
+            alternative = validation_result.get("alternative", "")
+            user_response_lower = user_response.lower()
+
+            # Parse user's choice conversationally
+            wants_alternative = any(phrase in user_response_lower for phrase in [
+                "alternative", "better", "that sounds good", "yes", "yeah", "sure",
+                "front squat", "safety bar", "2 days", "3 days"  # Specific alternatives
+            ])
+
+            wants_original = any(phrase in user_response_lower for phrase in [
+                "original", "no", "still want", "barbell curl", "1 day", "stick with"
+            ])
+
+            cancel = any(phrase in user_response_lower for phrase in [
+                "cancel", "never mind", "forget it", "don't"
+            ])
+
+            if cancel:
+                # User cancelled
+                self.state.set("program_update", None)
+                return None, f"Say something like: 'No problem! Let me know if you want to make any other changes.' Keep it friendly."
+
+            elif wants_alternative and alternative:
+                # Use the LLM's suggested alternative
+                print(f"[PROGRAM UPDATE] User chose alternative: {alternative}")
+                change_request = alternative  # Override with alternative
+            elif wants_original:
+                # User insists on original (respect autonomy)
+                print(f"[PROGRAM UPDATE] User insists on original request")
+                # Keep change_request as is
+            else:
+                # Ambiguous response - default to alternative if available, otherwise original
+                if alternative:
+                    print(f"[PROGRAM UPDATE] Ambiguous response, defaulting to alternative")
+                    change_request = alternative
+                else:
+                    print(f"[PROGRAM UPDATE] Ambiguous response, proceeding with original")
+
+            # Clear validation state
+            self.state.set("program_update.awaiting_choice", False)
+            self.state.set("program_update.validation_result", None)
+
+        print(f"[PROGRAM UPDATE] Starting update job for program {program_id}")
+        print(f"[PROGRAM UPDATE] Change: {change_request}")
+
+        try:
+            # Call FastAPI endpoint
+            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{fastapi_url}/api/programs/{program_id}/update",
+                    json={
+                        "change_request": change_request,
+                        "age": user_profile["age"],
+                        "sex": user_profile["sex"],
+                        "height_cm": user_profile["height_cm"],
+                        "weight_kg": user_profile["weight_kg"],
+                        "fitness_level": user_profile["fitness_level"]
+                    },
+                    timeout=10.0
+                )
+                data = response.json()
+                job_id = data["job_id"]
+
+            # Store job_id in state
+            self.state.set("program_update.job_id", job_id)
+            print(f"[PROGRAM UPDATE] ✅ Started update job: {job_id}")
+
+            return None, f"Say something like: 'Perfect! I'm updating your {program_name} program now. This will take about a minute. Hang tight!' Wait 45 seconds, then call check_program_update_status()."
+
+        except Exception as e:
+            print(f"[PROGRAM UPDATE] ❌ ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, f"Error starting update. Say something like: '{name}, I had trouble starting the update. Let me try again.'"
+
+    @function_tool
+    async def check_program_update_status(self, context: RunContext):
+        """
+        Check if the program update is complete.
+        Call this after start_program_update_job() to poll for completion.
+        """
+        import httpx
+
+        user = self.state.get_user()
+        name = user.get("name", "there")
+
+        job_id = self.state.get("program_update.job_id")
+        program_name = self.state.get("program_update.selected_program_name")
+
+        if not job_id:
+            return None, f"No update job found. Call start_program_update_job() first."
+
+        try:
+            # Check status via FastAPI
+            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{fastapi_url}/api/programs/update-status/{job_id}",
+                    timeout=5.0
+                )
+                data = response.json()
+
+            status = data["status"]
+            progress = data.get("progress", 0)
+
+            if status == "completed":
+                # Get diff
+                diff = data.get("diff", [])
+                diff_summary = "\n".join([f"- {change}" for change in diff])
+
+                print(f"[PROGRAM UPDATE] ✅ Update complete!")
+                print(f"[PROGRAM UPDATE] Changes:\n{diff_summary}")
+
+                # Clear update state
+                self.state.set("program_update", None)
+
+                return None, f"Say something like: 'Awesome! Your {program_name} program has been updated. Here's what changed:\n{diff_summary}\nYour updated program is ready to go!' Keep it enthusiastic."
+
+            elif status == "failed":
+                error = data.get("error_message", "Unknown error")
+                print(f"[PROGRAM UPDATE] ❌ Update failed: {error}")
+                return None, f"Update failed. Say something like: '{name}, I had trouble updating your program. Let's try again.'"
+
+            else:
+                # Still in progress
+                print(f"[PROGRAM UPDATE] Update in progress: {progress}%")
+                return None, f"Update is {progress}% complete. Wait 15 more seconds, then call check_program_update_status() again. Don't say anything, just wait."
+
+        except Exception as e:
+            print(f"[PROGRAM UPDATE] Error checking status: {e}")
+            return None, f"Error checking status. Wait 10 seconds and call check_program_update_status() again."
 
     # ===== PROGRAM CREATION HELPER TOOLS =====
 
@@ -875,13 +1518,19 @@ class NovaVoiceAgent(Agent):
         print(f"[PROGRAM] Capturing goal: {goal_description}")
 
         # VALIDATION: Check if prerequisites were collected (height, weight, age, sex)
+        # HOWEVER: If user has existing data in DB, we allow goals to be asked first
         height_cm = self.state.get("program_creation.height_cm")
         weight_kg = self.state.get("program_creation.weight_kg")
         age = self.state.get("program_creation.age")
         sex = self.state.get("program_creation.sex")
 
-        if not (height_cm and weight_kg and age and sex):
-            print(f"[ERROR] Goal asked before prerequisites! height={height_cm}, weight={weight_kg}, age={age}, sex={sex}")
+        # Check if user has existing data in their profile
+        existing_data = self.state.get("program_creation.existing_data", {})
+        has_existing_stats = (existing_data.get("height_cm") and existing_data.get("weight_kg") and
+                             existing_data.get("age") and existing_data.get("sex"))
+
+        if not (height_cm and weight_kg and age and sex) and not has_existing_stats:
+            print(f"[ERROR] Goal asked before prerequisites! height={height_cm}, weight={weight_kg}, age={age}, sex={sex}, existing_data={has_existing_stats}")
             return None, f"ERROR: You MUST ask for height/weight (Question 1) and age/sex (Question 2) BEFORE asking about goals (Question 3). Go back and ask Questions 1 and 2 first!"
 
         user = self.state.get_user()
@@ -1620,6 +2269,59 @@ Generate programs that are challenging but achievable, progressive, and scientif
         """
         print("[WORKOUT] User requested to end workout")
 
+        from db.database import SessionLocal
+        from db.schedule_utils import mark_workout_completed
+        from db.progress_utils import log_completed_set
+        from core.workout_session import WorkoutSession
+
+        # Get current session from state
+        session_data = self.state.get("workout.current_session")
+
+        if session_data:
+            try:
+                # Deserialize session
+                session = WorkoutSession.from_dict(session_data)
+                session.end_session()
+
+                # Log all completed sets to database
+                db = SessionLocal()
+                try:
+                    for set_data in session.get_completed_sets_for_logging():
+                        # Only log if reps were actually performed
+                        if set_data["performed_reps"] > 0:
+                            log_completed_set(
+                                db=db,
+                                user_id=session.user_id,
+                                set_id=set_data["set_id"],
+                                performed_reps=set_data["performed_reps"],
+                                performed_weight=set_data.get("performed_weight"),
+                                rpe=set_data.get("rpe"),
+                                measured_velocity=set_data.get("measured_velocity")
+                            )
+                            print(f"[WORKOUT] Logged set {set_data['set_id']}")
+
+                    # Mark workout as completed in schedule
+                    mark_workout_completed(db, session.schedule_id)
+                    print(f"[WORKOUT] Marked schedule {session.schedule_id} as completed")
+
+                    # Get progress summary
+                    summary = session.get_progress_summary()
+
+                except Exception as e:
+                    print(f"[WORKOUT ERROR] Failed to save workout data: {e}")
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    db.close()
+
+            except Exception as e:
+                print(f"[WORKOUT ERROR] Failed to process session: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Clear workout session from state
+        self.state.set("workout.current_session", None)
+
         # Switch back to main menu mode (main.py monitors state file)
         self.state.switch_mode("main_menu")
         self.state.set("workout.active", False)
@@ -1633,7 +2335,198 @@ Generate programs that are challenging but achievable, progressive, and scientif
         user = self.state.get_user()
         name = user.get("name", "there")
 
-        return None, f"The user wants to end the workout. Say something like: 'Great work today, {name}! You crushed it. Returning to the main menu.' Keep it celebratory."
+        return None, f"The user wants to end the workout. Say something like: 'Great work today, {name}! You crushed it. All your progress has been saved. Returning to the main menu.' Keep it celebratory and proud."
+
+    @function_tool
+    async def complete_set(
+        self,
+        reps: int,
+        weight: Optional[float] = None,
+        rpe: Optional[float] = None,
+        context: RunContext = None
+    ):
+        """
+        Call this when the user completes a set.
+        User might say: "done", "finished", "complete", or you count the reps and they confirm.
+
+        Args:
+            reps: Number of reps completed
+            weight: Weight used (optional, kg or lbs)
+            rpe: Rate of perceived exertion 1-10 (optional)
+        """
+        print(f"[WORKOUT] User completed set: {reps} reps, weight={weight}, rpe={rpe}")
+
+        from core.workout_session import WorkoutSession
+
+        # Get current session from state
+        session_data = self.state.get("workout.current_session")
+        if not session_data:
+            print("[WORKOUT ERROR] No active session")
+            return None, "Tell the user: 'Hmm, I don't have an active workout session. Let's start a workout first!' Keep it helpful."
+
+        try:
+            # Deserialize session
+            session = WorkoutSession.from_dict(session_data)
+
+            # Get current set info before marking complete
+            current_set = session.get_current_set()
+            if not current_set:
+                return None, "Tell the user: 'Great work! Looks like you've finished all the sets. Ready to move on or end the workout?' Keep it encouraging."
+
+            # Mark set complete
+            session.mark_set_complete(
+                performed_reps=reps,
+                performed_weight=weight,
+                rpe=rpe
+            )
+
+            # Advance to next set
+            has_next = session.advance_to_next_set()
+
+            # Save updated session
+            self.state.set("workout.current_session", session.to_dict())
+            self.state.save_state()
+
+            user = self.state.get_user()
+            name = user.get("name", "there")
+
+            if has_next:
+                # Get next set info
+                next_desc = session.get_current_exercise_description()
+                rest_time = current_set.rest_seconds
+
+                rest_min = rest_time // 60
+                rest_sec = rest_time % 60
+                rest_display = f"{rest_min}:{rest_sec:02d}" if rest_min > 0 else f"{rest_sec} seconds"
+
+                return None, f"Tell the user: 'Awesome set, {name}! That's {reps} reps at {weight}kg.' Then say: 'Rest for {rest_display}. Next up: {next_desc}' Keep it energetic and clear."
+            else:
+                # Workout complete
+                summary = session.get_progress_summary()
+                return None, f"Tell the user: 'YES! That's the last one, {name}! You completed {summary['completed_sets']} total sets today. Amazing work! Ready to wrap up?' Keep it celebratory."
+
+        except Exception as e:
+            print(f"[WORKOUT ERROR] Failed to complete set: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, "Tell the user: 'Good set! Let me know when you're ready for the next one.' Keep it simple."
+
+    @function_tool
+    async def skip_exercise(self, reason: Optional[str] = None, context: RunContext = None):
+        """
+        Call this when the user wants to skip the current exercise.
+        User might say: "skip this", "I can't do this one", "next exercise", "equipment not available"
+
+        Args:
+            reason: Optional reason for skipping (e.g., "injury", "no equipment")
+        """
+        print(f"[WORKOUT] User wants to skip exercise. Reason: {reason}")
+
+        from core.workout_session import WorkoutSession
+
+        # Get current session from state
+        session_data = self.state.get("workout.current_session")
+        if not session_data:
+            return None, "Tell the user: 'No active workout to skip. Let's start a workout first!' Keep it helpful."
+
+        try:
+            # Deserialize session
+            session = WorkoutSession.from_dict(session_data)
+
+            current_exercise = session.get_current_exercise()
+            if not current_exercise:
+                return None, "Tell the user: 'You're all done with the workout! No more exercises to skip.' Keep it positive."
+
+            exercise_name = current_exercise.exercise_name
+
+            # Skip the exercise
+            session.skip_current_exercise(reason=reason)
+
+            # Save updated session
+            self.state.set("workout.current_session", session.to_dict())
+            self.state.save_state()
+
+            next_exercise = session.get_current_exercise()
+            if next_exercise:
+                next_desc = session.get_current_exercise_description()
+                return None, f"Tell the user: 'No problem, skipping {exercise_name}. Moving on to {next_desc}' Keep it supportive and matter-of-fact."
+            else:
+                return None, f"Tell the user: 'Alright, skipped {exercise_name}. That was the last exercise! Great work on what you did today. Ready to wrap up?' Keep it encouraging."
+
+        except Exception as e:
+            print(f"[WORKOUT ERROR] Failed to skip exercise: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, "Tell the user: 'Okay, let's move on to the next exercise.' Keep it simple."
+
+    @function_tool
+    async def get_next_exercise(self, context: RunContext = None):
+        """
+        Call this when the user asks what's next or wants to preview upcoming exercises.
+        User might say: "what's next", "what exercise is coming up", "show me next"
+        """
+        print("[WORKOUT] User wants to see next exercise")
+
+        from core.workout_session import WorkoutSession
+
+        # Get current session from state
+        session_data = self.state.get("workout.current_session")
+        if not session_data:
+            return None, "Tell the user: 'No active workout. Start a workout to see your exercises!' Keep it helpful."
+
+        try:
+            # Deserialize session
+            session = WorkoutSession.from_dict(session_data)
+
+            next_exercise = session.get_next_exercise()
+
+            if next_exercise:
+                set_count = len(next_exercise.sets)
+                return None, f"Tell the user: 'Coming up next: {next_exercise.exercise_name}, {set_count} sets. But let's finish this exercise first!' Keep it focused and motivating."
+            else:
+                current = session.get_current_exercise()
+                if current:
+                    return None, f"Tell the user: '{current.exercise_name} is the last exercise! Finish strong!' Keep it motivating."
+                else:
+                    return None, "Tell the user: 'You're done! That was the last exercise. Great job!' Keep it celebratory."
+
+        except Exception as e:
+            print(f"[WORKOUT ERROR] Failed to get next exercise: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, "Tell the user: 'Let's focus on this exercise first!' Keep it simple."
+
+    @function_tool
+    async def get_workout_progress(self, context: RunContext = None):
+        """
+        Call this when the user asks about their progress or where they are in the workout.
+        User might say: "how much left", "where am I", "progress", "how many sets left"
+        """
+        print("[WORKOUT] User wants to see workout progress")
+
+        from core.workout_session import WorkoutSession
+
+        # Get current session from state
+        session_data = self.state.get("workout.current_session")
+        if not session_data:
+            return None, "Tell the user: 'No active workout. Start a workout to track your progress!' Keep it helpful."
+
+        try:
+            # Deserialize session
+            session = WorkoutSession.from_dict(session_data)
+
+            summary = session.get_progress_summary()
+
+            user = self.state.get_user()
+            name = user.get("name", "there")
+
+            return None, f"Tell the user: 'You're crushing it, {name}! You've completed {summary['completed_sets']} out of {summary['total_sets']} sets. That's {summary['percent_complete']}% done. Currently on {summary['current_exercise_name']}.' Keep it motivating and clear."
+
+        except Exception as e:
+            print(f"[WORKOUT ERROR] Failed to get progress: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, "Tell the user: 'Keep pushing! You're doing great.' Keep it simple and encouraging."
 
 
 async def entrypoint(ctx: agents.JobContext):
@@ -1692,6 +2585,7 @@ async def entrypoint(ctx: agents.JobContext):
     print("[NOVA] Creating agent session...")
     session = AgentSession(
         llm=realtime_model,
+        preemptive_generation=True,
         # Note: LiveKit doesn't have a direct tool_timeout parameter
         # Long-running tools (like GPT-5 program generation) should handle their own timeouts
         # Our generate_workout_program() has a 300s timeout configured
