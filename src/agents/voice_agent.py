@@ -145,7 +145,13 @@ class NovaVoiceAgent(Agent):
 
     async def on_enter(self):
         """Entry point - generate appropriate greeting based on mode"""
+        import traceback
+        print(f"\n[DEBUG] on_enter() called!")
+        print(f"[DEBUG] Stack trace:")
+        traceback.print_stack()
+
         mode = self.state.get_mode()
+        print(f"[DEBUG] Current mode: {mode}")
 
         if mode == "onboarding":
             await self.session.generate_reply(
@@ -165,6 +171,57 @@ class NovaVoiceAgent(Agent):
             await self.session.generate_reply(
                 instructions=f"Start the workout mode. Say something like: 'Alright {name}, let's do this! I'm tracking your form and counting reps. When you're ready, step up to the rack.'"
             )
+
+    # ===== CONTEXT MANAGEMENT =====
+
+    async def _truncate_conversation_history(self, context: RunContext, max_items: int = 10):
+        """
+        Truncate conversation history to prevent context window exhaustion.
+
+        This method:
+        - Keeps only the last N messages to save tokens
+        - Preserves the system prompt automatically
+        - Removes leading function calls to avoid orphaning responses
+        - Is transparent to the agent (doesn't disrupt conversation flow)
+
+        Args:
+            context: The current RunContext
+            max_items: Maximum number of messages to retain (default: 10)
+        """
+        try:
+            from livekit.agents import llm
+
+            # Get current chat context
+            chat_ctx = context.agent.chat_ctx.copy()
+
+            # Count messages before truncation
+            messages_before = len(chat_ctx.messages) if hasattr(chat_ctx, 'messages') else 0
+
+            # Truncate to last N messages
+            # This automatically:
+            # - Preserves the system message (your prompt)
+            # - Removes leading function calls intelligently
+            # - Maintains conversation coherence
+            chat_ctx.truncate(max_items=max_items)
+
+            # Count messages after truncation
+            messages_after = len(chat_ctx.messages) if hasattr(chat_ctx, 'messages') else 0
+
+            # Update the agent's context
+            await context.agent.update_chat_ctx(chat_ctx)
+
+            messages_removed = messages_before - messages_after
+            if messages_removed > 0:
+                print(f"[CONTEXT] Truncated conversation: removed {messages_removed} messages, kept last {max_items}")
+            else:
+                print(f"[CONTEXT] No truncation needed: {messages_before} messages <= {max_items} limit")
+
+        except Exception as e:
+            # Don't fail the conversation if truncation fails
+            print(f"[CONTEXT] Warning: Failed to truncate conversation: {e}")
+            print(f"[CONTEXT] Continuing without truncation...")
+
+    # ===== ONBOARDING TOOLS =====
 
     # Tool 1: Capture first name
     @function_tool
@@ -732,7 +789,7 @@ class NovaVoiceAgent(Agent):
 
                 # Update agent instructions to program_creation mode
                 new_instructions = self._get_program_creation_instructions()
-                self.update_instructions(new_instructions)
+                await self.update_instructions(new_instructions)
                 print("[PROGRAM] Updated agent instructions to program_creation mode")
 
                 # Start the program creation flow DIRECTLY - no need for create_program()
@@ -789,7 +846,7 @@ class NovaVoiceAgent(Agent):
 
                 # Update agent instructions to program_creation mode
                 new_instructions = self._get_program_creation_instructions()
-                self.update_instructions(new_instructions)
+                await self.update_instructions(new_instructions)
                 print("[PROGRAM] Updated agent instructions to program_creation mode")
 
                 # Start the program creation flow
@@ -1214,7 +1271,12 @@ class NovaVoiceAgent(Agent):
                     print(f"[PROGRAM] Using existing DB values: height={db_user.height_cm} cm, weight={db_user.weight_kg} kg")
                     self.state.set("program_creation.height_cm", float(db_user.height_cm))
                     self.state.set("program_creation.weight_kg", float(db_user.weight_kg))
-                    return None, f"Using existing stats from database. Immediately ask: 'Perfect! And how old are you, and are you male or female?' Keep it conversational and brief."
+                    # When loading from DB, we're confirming stats - need to also call capture_age_sex()
+                    return None, "Height and weight loaded. Now call capture_age_sex() with no arguments, then ask about their fitness goal."
+                else:
+                    # DB data incomplete - need to ask for it
+                    print(f"[PROGRAM] No complete height/weight data in DB - need to ask user")
+                    return None, "No height and weight on file. Ask: 'What's your height and weight?'"
 
             # Parse new values if provided
             if height_value:
@@ -1241,7 +1303,7 @@ class NovaVoiceAgent(Agent):
 
                 print(f"[PROGRAM] Height: {height_cm} cm, Weight: {weight_kg} kg")
 
-                return None, f"Height and weight captured: {height_cm} cm, {weight_kg} kg. Immediately ask: 'Perfect! And how old are you, and are you male or female?' Keep it conversational and brief."
+                return None, "Captured. Immediately ask the next question."
 
         except Exception as e:
             print(f"[ERROR] Failed to handle height/weight: {e}")
@@ -1278,7 +1340,12 @@ class NovaVoiceAgent(Agent):
                     print(f"[PROGRAM] Using existing DB values: age={db_user.age}, sex={db_user.sex}")
                     self.state.set("program_creation.age", int(db_user.age))
                     self.state.set("program_creation.sex", db_user.sex)
-                    return None, f"Using existing demographics from database. Immediately ask: 'Great! Now, what's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?' Keep it engaging and conversational."
+                    # When loading from DB, stats confirmation is complete - ask about goal
+                    return None, "Age and sex loaded. Stats confirmation complete. Immediately ask about their fitness goal."
+                else:
+                    # DB data incomplete - need to ask for it
+                    print(f"[PROGRAM] No complete age/sex data in DB - need to ask user")
+                    return None, "No age and sex on file. Ask: 'How old are you, and are you male or female?'"
 
             # Validate and normalize new values if provided
             if age is not None:
@@ -1309,7 +1376,11 @@ class NovaVoiceAgent(Agent):
 
                 print(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
 
-                return None, f"Age and sex captured: {age}, {sex_normalized}. Immediately ask: 'Great! Now, what's your main fitness goal? Are you looking to build muscle, get stronger, improve athleticism, or something else?' Keep it engaging and conversational."
+                # Truncate conversation after basic stats collected (Milestone 1)
+                # This prevents context buildup from lengthy stat confirmations
+                await self._truncate_conversation_history(context, max_items=8)
+
+                return None, "Captured. Immediately ask the next question."
 
         except Exception as e:
             print(f"[ERROR] Failed to handle age/sex: {e}")
@@ -1318,58 +1389,6 @@ class NovaVoiceAgent(Agent):
             db.close()
 
         return None, f"Error: Could not capture age and sex. Please provide them again."
-
-    @function_tool
-    async def capture_height(self, context: RunContext, height_value: str):
-        """
-        Call this when the user provides their height.
-        Accepts various formats: "5 feet 9 inches", "5'9\"", "175 cm", "1.75 m", "5 foot 9", etc.
-        Normalizes to centimeters and saves to database.
-
-        Args:
-            height_value: The height as spoken by the user (e.g., "five nine", "175", "5 feet 9 inches")
-        """
-        print(f"[PROGRAM] Capturing height: {height_value}")
-
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
-
-        try:
-            # Normalize the height to centimeters
-            height_cm = self._normalize_height_to_cm(height_value)
-
-            if height_cm is None or height_cm < 50 or height_cm > 300:
-                # Invalid height
-                return None, f"That height doesn't seem right. Say something like: 'Hmm, that doesn't sound quite right. Can you tell me your height again? For example, you could say five foot nine, or 175 centimeters.' Keep it friendly."
-
-            # Save to database
-            db = SessionLocal()
-            try:
-                from db.models import User
-                db_user = db.query(User).filter(User.id == user_id).first()
-                if db_user:
-                    db_user.height_cm = height_cm
-                    db.commit()
-                    print(f"[PROGRAM] Saved height: {height_cm} cm")
-
-                    # Store in state
-                    self.state.set("program_creation.height_cm", height_cm)
-
-                    # Check if we also need weight
-                    if db_user.weight_kg is None:
-                        return None, f"Height captured successfully ({height_cm} cm). Say something like: 'Got it, {name}! Now, what's your current weight? You can tell me in pounds or kilograms.' Keep it supportive."
-                    else:
-                        # Have both now - proceed
-                        self.state.set("program_creation.weight_kg", float(db_user.weight_kg))
-                        return None, f"Height captured ({height_cm} cm). User has all stats. Say something like: 'Perfect! I've got your stats. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging."
-
-            finally:
-                db.close()
-
-        except Exception as e:
-            print(f"[ERROR] Failed to capture height: {e}")
-            return None, f"Error capturing height. Say something like: '{name}, I had trouble understanding that. Can you tell me your height again? For example, five foot nine, or 175 centimeters.' Keep it patient."
 
     def _normalize_height_to_cm(self, height_str: str) -> float:
         """Convert various height formats to centimeters"""
@@ -1422,58 +1441,6 @@ class NovaVoiceAgent(Agent):
                 return num * 2.54
 
         return None
-
-    @function_tool
-    async def capture_weight(self, context: RunContext, weight_value: str):
-        """
-        Call this when the user provides their weight.
-        Accepts various formats: "150 lbs", "68 kg", "150 pounds", "68 kilograms", etc.
-        Normalizes to kilograms and saves to database.
-
-        Args:
-            weight_value: The weight as spoken by the user (e.g., "150", "68 kg", "150 pounds")
-        """
-        print(f"[PROGRAM] Capturing weight: {weight_value}")
-
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
-
-        try:
-            # Normalize the weight to kilograms
-            weight_kg = self._normalize_weight_to_kg(weight_value)
-
-            if weight_kg is None or weight_kg < 20 or weight_kg > 300:
-                # Invalid weight
-                return None, f"That weight doesn't seem right. Say something like: 'Hmm, that doesn't sound quite right. Can you tell me your weight again? For example, you could say 150 pounds, or 68 kilograms.' Keep it supportive."
-
-            # Save to database
-            db = SessionLocal()
-            try:
-                from db.models import User
-                db_user = db.query(User).filter(User.id == user_id).first()
-                if db_user:
-                    db_user.weight_kg = weight_kg
-                    db.commit()
-                    print(f"[PROGRAM] Saved weight: {weight_kg} kg")
-
-                    # Store in state
-                    self.state.set("program_creation.weight_kg", weight_kg)
-
-                    # Check if we also need height
-                    if db_user.height_cm is None:
-                        return None, f"Weight captured successfully ({weight_kg} kg). Say something like: 'Great! Now I need your height. What's your height? You can tell me in feet and inches, or centimeters.' Keep it friendly."
-                    else:
-                        # Have both now - proceed
-                        self.state.set("program_creation.height_cm", float(db_user.height_cm))
-                        return None, f"Weight captured ({weight_kg} kg). User has all stats. Say something like: 'Awesome, {name}! I've got everything I need. Now let's talk about your goals. What are you looking to achieve with this program?' Keep it engaging."
-
-            finally:
-                db.close()
-
-        except Exception as e:
-            print(f"[ERROR] Failed to capture weight: {e}")
-            return None, f"Error capturing weight. Say something like: '{name}, I had trouble understanding that. Can you tell me your weight again? For example, 150 pounds, or 68 kilograms.' Keep it patient."
 
     def _normalize_weight_to_kg(self, weight_str: str) -> float:
         """Convert various weight formats to kilograms"""
@@ -1553,7 +1520,11 @@ class NovaVoiceAgent(Agent):
         else:  # hypertrophy
             confirmation = "building muscle and aesthetics"
 
-        return None, f"Goal captured: '{goal_description}' → {goal_category}. Immediately say something like: 'Got it! So it sounds like you're focused on {confirmation}. How long would you like this program to run? I'd recommend {self._get_recommended_duration(goal_category)} weeks.' Keep it brief and conversational. Don't wait for acknowledgment."
+        # Store for prompt to use
+        self.state.set("program_creation.goal_confirmation", confirmation)
+        self.state.set("program_creation.recommended_duration", self._get_recommended_duration(goal_category))
+
+        return None, "Goal captured. Immediately ask the next question based on what's missing in state."
 
     def _categorize_goal(self, goal_text: str) -> str:
         """Categorize user's goal into power, strength, or hypertrophy"""
@@ -1623,7 +1594,7 @@ class NovaVoiceAgent(Agent):
 
         print(f"[PROGRAM] Duration set to: {duration_weeks} weeks")
 
-        return None, f"Duration captured: {duration_weeks} weeks. Immediately say something like: 'Perfect! {duration_weeks} weeks is great. How many days per week can you train?' Keep it brief. Don't wait."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_training_frequency(self, context: RunContext, days_per_week: int):
@@ -1647,7 +1618,11 @@ class NovaVoiceAgent(Agent):
 
         print(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
 
-        return None, f"Frequency captured: {days_per_week} days/week. Immediately ask: 'Great! How much time do you have per session? Most people do about an hour.' Keep it brief and conversational."
+        # Truncate conversation after main parameters collected (Milestone 2)
+        # Core program structure is now defined, can clear early conversation
+        await self._truncate_conversation_history(context, max_items=8)
+
+        return None, "Training frequency captured. Immediately ask the next question."
 
     @function_tool
     async def capture_session_duration(self, context: RunContext, duration_minutes: int):
@@ -1671,7 +1646,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.session_duration", duration_minutes)
         print(f"[PROGRAM] Session duration set to: {duration_minutes} minutes")
 
-        return None, f"Session duration captured: {duration_minutes} minutes. Ask: 'Perfect! Any current or past injuries I should know about? If not, just say no.' Keep it brief."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_injury_history(self, context: RunContext, injury_description: str):
@@ -1688,10 +1663,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.injury_history", injury_description)
         print(f"[PROGRAM] Injury history saved")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
-
-        return None, f"Injury history captured. Ask: 'Got it! Are you training for a specific sport, or just general fitness?' Keep it conversational."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_specific_sport(self, context: RunContext, sport_name: str):
@@ -1713,10 +1685,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.specific_sport", sport_normalized)
         print(f"[PROGRAM] Specific sport set to: {sport_normalized}")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
-
-        return None, f"Sport captured: {sport_normalized}. Ask: 'Cool! Anything else I should know? Like exercise preferences or equipment you have access to? If not, just say no.' Keep it friendly."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_user_notes(self, context: RunContext, notes: str):
@@ -1733,10 +1702,11 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.user_notes", notes)
         print(f"[PROGRAM] User notes saved")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        # Truncate conversation after all optional parameters collected (Milestone 3)
+        # Almost done with collection, keep context lean for final steps
+        await self._truncate_conversation_history(context, max_items=6)
 
-        return None, f"Notes captured. Ask: 'Perfect! Last question: would you say you're a beginner, intermediate, or advanced lifter?' This is the final parameter needed."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_age(self, context: RunContext, age: int):
@@ -1758,7 +1728,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.age", age)
         print(f"[PROGRAM] Age set to: {age}")
 
-        return None, f"Age captured: {age}. Continue with the next question in the program creation flow."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_sex(self, context: RunContext, sex: str):
@@ -1785,7 +1755,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.sex", sex_normalized)
         print(f"[PROGRAM] Sex set to: {sex_normalized}")
 
-        return None, f"Sex captured: {sex_normalized}. Continue with the next question in the program creation flow."
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def set_vbt_capability(self, context: RunContext, enabled: bool):
@@ -1819,8 +1789,8 @@ class NovaVoiceAgent(Agent):
         else:
             print("[PROGRAM] ❌ VBT DISABLED - Program will use traditional percentage-based loading")
 
-        # Return nothing - this is a silent internal operation
-        return None, None
+        # Return continuation signal
+        return None, "Captured. Immediately ask the next question."
 
     @function_tool
     async def capture_fitness_level(self, context: RunContext, fitness_level: str):
@@ -1887,9 +1857,11 @@ class NovaVoiceAgent(Agent):
 
         print(f"[PROGRAM] VBT Decision: {'ENABLED' if should_enable_vbt else 'DISABLED'}")
 
-        # Acknowledge the fitness level and inform user that generation is starting
-        # The agent should speak THEN call the functions (not both simultaneously)
-        return None, f"All parameters collected! First, say to {name}: 'Perfect! I've got everything I need. You're an {normalized_level} lifter looking to focus on {goal_category} for {duration_weeks} weeks, training {days_per_week} days a week. Let me generate your custom program now. This will take about a minute, so hang tight!' After you finish speaking, call set_vbt_capability({'true' if should_enable_vbt else 'false'}), then call generate_workout_program() and wait for it to finish before doing anything else."
+        # Store VBT decision and completion flag in state for prompt to use
+        self.state.set("program_creation.vbt_enabled", should_enable_vbt)
+        self.state.set("program_creation.all_params_collected", True)
+
+        return None, "All parameters collected. Summarize their program, call set_vbt_capability, then generate_workout_program."
 
     def _should_enable_vbt(self, fitness_level: str, goal_category: str, specific_sport: str) -> bool:
         """
@@ -2201,9 +2173,9 @@ Power Focus:
 - Block Periodization: Phase-based training (advanced)
 
 **Program Structure by Frequency:**
-- 2-3 days: Full body each session
-- 4 days: Upper/Lower split
-- 5-6 days: Push/Pull/Legs or Upper/Lower/Upper/Lower
+- If the user plans to workout 2-3 days a week: Full body each session
+- If the user plans to workout 4 days a week: Upper/Lower split
+- If the user plans to workout 5-6 days a week: Push/Pull/Legs or Upper/Lower/Upper/Lower
 
 **Key Principles:**
 1. Start conservative, progress steadily
@@ -2575,7 +2547,7 @@ async def entrypoint(ctx: agents.JobContext):
             "type": "server_vad",
             "threshold": 0.5,
             "prefix_padding_ms": 300,
-            "silence_duration_ms": 500,
+            "silence_duration_ms": 300,
         },
         modalities=["audio", "text"],
     )

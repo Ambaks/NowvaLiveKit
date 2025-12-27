@@ -52,6 +52,24 @@ class AgentState:
             },
             "program_creation": {
                 "has_vbt_capability": False,  # Automatically set based on fitness level + goal + sport
+                # State tracking fields for state-driven flow:
+                "height_cm": None,
+                "weight_kg": None,
+                "age": None,
+                "sex": None,
+                "goal_raw": None,
+                "goal_category": None,
+                "goal_confirmation": None,  # For prompt to use in confirmation
+                "recommended_duration": None,  # For prompt to suggest
+                "duration_weeks": None,
+                "days_per_week": None,
+                "session_duration": None,
+                "injury_history": None,
+                "specific_sport": None,
+                "user_notes": None,
+                "fitness_level": None,
+                "vbt_enabled": None,
+                "all_params_collected": False,
             }
         }
 
