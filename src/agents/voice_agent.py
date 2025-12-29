@@ -38,6 +38,13 @@ from agents.prompts import ONBOARDING_PROMPT, get_main_menu_prompt, get_workout_
 from db.database import SessionLocal
 from db.program_utils import has_any_programs
 
+# Context summarization constants
+MAX_CONTEXT_TOKENS = 28672  # OpenAI Realtime API limit
+SUMMARY_TRIGGER_RATIO = 0.70  # Trigger at 70% capacity
+SUMMARY_TRIGGER_TOKENS = int(MAX_CONTEXT_TOKENS * SUMMARY_TRIGGER_RATIO)  # ~20,070 tokens
+KEEP_LAST_TURNS = 4  # Keep last 4 conversation items verbatim
+SUMMARY_MODEL = os.getenv("CONTEXT_SUMMARY_MODEL", "gpt-4o-mini")  # Model for conversation summarization, fallback to gpt-4o-mini
+
 
 class NovaVoiceAgent(Agent):
     """Mode-aware voice agent that handles all user interactions"""
@@ -55,6 +62,11 @@ class NovaVoiceAgent(Agent):
         self.first_name_retry_count = 0
         self.email_retry_count = 0
         self.max_retries = 3
+
+        # Context summarization state
+        self._current_token_count: int = 0
+        self._is_summarizing: bool = False  # Guard against concurrent summarization
+        self._summary_count: int = 0
 
         # Get initial instructions based on mode
         instructions = self._get_instructions_for_mode()
@@ -145,13 +157,7 @@ class NovaVoiceAgent(Agent):
 
     async def on_enter(self):
         """Entry point - generate appropriate greeting based on mode"""
-        import traceback
-        print(f"\n[DEBUG] on_enter() called!")
-        print(f"[DEBUG] Stack trace:")
-        traceback.print_stack()
-
         mode = self.state.get_mode()
-        print(f"[DEBUG] Current mode: {mode}")
 
         if mode == "onboarding":
             await self.session.generate_reply(
@@ -191,28 +197,30 @@ class NovaVoiceAgent(Agent):
         try:
             from livekit.agents import llm
 
-            # Get current chat context
-            chat_ctx = context.agent.chat_ctx.copy()
+            # Get agent through session (correct pattern for Realtime API)
+            agent = context.session.current_agent
 
-            # Count messages before truncation
-            messages_before = len(chat_ctx.messages) if hasattr(chat_ctx, 'messages') else 0
+            # Get current chat context (read-only)
+            current_ctx = agent.chat_ctx
+
+            # Get message items
+            items = current_ctx.items if hasattr(current_ctx, 'items') else []
+            messages_before = len(items)
 
             # Truncate to last N messages
-            # This automatically:
-            # - Preserves the system message (your prompt)
-            # - Removes leading function calls intelligently
-            # - Maintains conversation coherence
-            chat_ctx.truncate(max_items=max_items)
+            truncated_items = items[-max_items:] if len(items) > max_items else items
 
-            # Count messages after truncation
-            messages_after = len(chat_ctx.messages) if hasattr(chat_ctx, 'messages') else 0
+            # Create new context with truncated items
+            new_ctx = llm.ChatContext.empty()
+            for item in truncated_items:
+                new_ctx.insert(item)
 
-            # Update the agent's context
-            await context.agent.update_chat_ctx(chat_ctx)
+            # Update agent's chat context (syncs to Realtime API automatically)
+            await agent.update_chat_ctx(new_ctx)
 
-            messages_removed = messages_before - messages_after
+            messages_removed = messages_before - len(truncated_items)
             if messages_removed > 0:
-                print(f"[CONTEXT] Truncated conversation: removed {messages_removed} messages, kept last {max_items}")
+                print(f"[CONTEXT] Truncated: removed {messages_removed} messages, kept last {len(truncated_items)}")
             else:
                 print(f"[CONTEXT] No truncation needed: {messages_before} messages <= {max_items} limit")
 
@@ -220,6 +228,303 @@ class NovaVoiceAgent(Agent):
             # Don't fail the conversation if truncation fails
             print(f"[CONTEXT] Warning: Failed to truncate conversation: {e}")
             print(f"[CONTEXT] Continuing without truncation...")
+
+    # ===== CONTEXT SUMMARIZATION METHODS =====
+
+    def _items_to_text(self, items: list) -> str:
+        """
+        Convert chat items to readable text format for summarization.
+
+        Args:
+            items: List of ChatMessage items
+
+        Returns:
+            Formatted conversation text
+        """
+        lines = []
+        for item in items:
+            role = item.role.upper() if hasattr(item, 'role') else 'UNKNOWN'
+
+            # Extract text content (handle different item structures)
+            text = ""
+            if hasattr(item, 'content'):
+                if isinstance(item.content, str):
+                    text = item.content
+                elif isinstance(item.content, list):
+                    # Handle content array (common in OpenAI format)
+                    for content_item in item.content:
+                        if isinstance(content_item, dict):
+                            text += content_item.get('text', '') or content_item.get('transcript', '')
+                        elif hasattr(content_item, 'text'):
+                            text += content_item.text or ''
+            elif hasattr(item, 'text'):
+                text = item.text or ''
+
+            if text.strip():
+                lines.append(f"{role}: {text.strip()}")
+
+        return "\n".join(lines)
+
+    def _build_fallback_summary(self) -> str:
+        """
+        Build a simple summary from agent state if LLM call fails.
+
+        Returns:
+            Formatted summary string from collected state
+        """
+        try:
+            # Access existing state/collected data from program creation mode
+            mode = self.state.get_mode()
+
+            parts = []
+
+            # Check if we're in program creation mode and have collected data
+            if mode == "program_creation":
+                # Try to get data from state
+                height = self.state.get("program_creation.height_cm")
+                weight = self.state.get("program_creation.weight_kg")
+                age = self.state.get("program_creation.age")
+                sex = self.state.get("program_creation.sex")
+                goal = self.state.get("program_creation.goal")
+                experience = self.state.get("program_creation.experience_level")
+                equipment = self.state.get("program_creation.equipment_access")
+                schedule = self.state.get("program_creation.days_per_week")
+                injuries = self.state.get("program_creation.injuries_limitations")
+
+                if height or weight:
+                    parts.append(f"User is {height}cm tall, weighing {weight}kg" if height and weight else f"Height/weight: {height or weight}")
+
+                if age or sex:
+                    parts.append(f"{age} year old {sex}" if age and sex else f"{age or sex}")
+
+                if goal:
+                    parts.append(f"Goal: {goal}")
+
+                if experience:
+                    parts.append(f"Experience: {experience}")
+
+                if equipment:
+                    parts.append(f"Equipment: {equipment}")
+
+                if schedule:
+                    parts.append(f"Training {schedule} days per week")
+
+                if injuries:
+                    parts.append(f"Injuries/limitations: {injuries}")
+
+            if parts:
+                return "Collected data: " + ". ".join(parts) + "."
+            else:
+                return "Conversation in progress. Some user information has been collected."
+
+        except Exception as e:
+            print(f"[SUMMARY] Fallback summary generation failed: {e}")
+            return "Fitness consultation in progress."
+
+    async def _generate_conversation_summary(self, items: list) -> str | None:
+        """
+        Call gpt-4o-mini to generate a 2-3 sentence summary of conversation items.
+
+        Args:
+            items: List of ChatMessage items to summarize
+
+        Returns:
+            Summary string or None if generation fails
+        """
+        try:
+            # Convert items to text format
+            conversation_text = self._items_to_text(items)
+
+            if not conversation_text.strip():
+                print("[SUMMARY] No conversation text to summarize")
+                return None
+
+            print(f"[SUMMARY] Generating summary for {len(conversation_text)} characters of conversation...")
+
+            # Import OpenAI client
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+            # Call OpenAI API (non-blocking with asyncio.to_thread)
+            response = await asyncio.to_thread(
+                lambda: client.chat.completions.create(
+                    model=SUMMARY_MODEL,
+                    temperature=0.3,
+                    max_tokens=200,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a summarization assistant for a fitness consultation. "
+                                "Summarize the conversation in 2-3 concise sentences. "
+                                "Focus on data collected: height, weight, age, sex, fitness goals, "
+                                "experience level, equipment access, training schedule, and injuries/limitations. "
+                                "Be specific with numbers and measurements. "
+                                "Do not include pleasantries, greetings, or filler words."
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Summarize this fitness consultation:\n\n{conversation_text}"
+                        }
+                    ]
+                )
+            )
+
+            summary = response.choices[0].message.content.strip()
+            print(f"[SUMMARY] Generated summary ({len(summary)} chars): {summary[:100]}...")
+            return summary
+
+        except Exception as e:
+            print(f"[SUMMARY] LLM summary generation failed: {e}")
+            return None
+
+    async def _update_context_with_summary(
+        self,
+        agent,
+        summary_text: str,
+        system_items: list,
+        recent_items: list,
+        old_items: list
+    ) -> None:
+        """
+        Update the agent's chat context with the summary.
+
+        Creates new context: original system prompt + summary (as SYSTEM message) + recent messages.
+
+        Args:
+            agent: The current voice agent
+            summary_text: Generated summary text
+            system_items: Original system prompt items to preserve
+            recent_items: Recent conversation items to keep
+            old_items: Old items that were summarized (for logging)
+        """
+        from livekit.agents import llm
+
+        # Create new chat context
+        new_ctx = llm.ChatContext.empty()
+
+        # 1. Add original system prompt(s)
+        for item in system_items:
+            new_ctx.items.append(item)
+
+        # 2. Add summary as SYSTEM message (CRITICAL: use system role, not assistant)
+        summary_message = llm.ChatMessage(
+            role="system",
+            content=f"[CONVERSATION SUMMARY] {summary_text}"
+        )
+        new_ctx.items.append(summary_message)
+
+        # 3. Add recent conversation items
+        for item in recent_items:
+            new_ctx.items.append(item)
+
+        # Update agent context
+        await agent.update_chat_ctx(new_ctx)
+
+        print(f"[SUMMARY] Context updated: {len(system_items)} system + 1 summary + {len(recent_items)} recent items")
+        print(f"[SUMMARY] Removed {len(old_items)} old items")
+
+    async def _summarize_and_prune_context(self) -> None:
+        """
+        Async summarization: compress old conversation turns into a summary.
+
+        This runs in the background without blocking the main event loop.
+        Uses SYSTEM message type to avoid audio/text modality confusion.
+        """
+        if self._is_summarizing:
+            print("[SUMMARY] Summarization already in progress, skipping")
+            return
+
+        self._is_summarizing = True
+        print(f"[SUMMARY] ⚠️  Token count {self._current_token_count} >= {SUMMARY_TRIGGER_TOKENS}. Starting async summarization...")
+
+        try:
+            # Get current agent - we need to access it from the agent itself
+            # In LiveKit Realtime API, the agent is 'self' when called from within the agent
+            agent = self
+
+            if not agent or not hasattr(agent, 'chat_ctx'):
+                print("[SUMMARY] No agent or chat context available for summarization")
+                return
+
+            chat_ctx = agent.chat_ctx
+            items = list(chat_ctx.items)
+
+            # Need enough items to summarize
+            if len(items) <= KEEP_LAST_TURNS + 1:  # +1 for system prompt
+                print(f"[SUMMARY] Not enough items to summarize ({len(items)} items)")
+                return
+
+            # Split: keep system prompt + last N turns, summarize the rest
+            system_items = [item for item in items if item.role == "system"]
+            non_system_items = [item for item in items if item.role != "system"]
+
+            if len(non_system_items) <= KEEP_LAST_TURNS:
+                print(f"[SUMMARY] Not enough non-system items to summarize ({len(non_system_items)} items)")
+                return
+
+            old_items = non_system_items[:-KEEP_LAST_TURNS]
+            recent_items = non_system_items[-KEEP_LAST_TURNS:]
+
+            print(f"[SUMMARY] Splitting context: {len(old_items)} old items to summarize, {len(recent_items)} recent items to keep")
+
+            # Generate LLM summary of old items
+            summary_text = await self._generate_conversation_summary(old_items)
+
+            if not summary_text:
+                print("[SUMMARY] Failed to generate LLM summary, using fallback")
+                summary_text = self._build_fallback_summary()
+
+            # Create new context with summary
+            await self._update_context_with_summary(
+                agent=agent,
+                summary_text=summary_text,
+                system_items=system_items,
+                recent_items=recent_items,
+                old_items=old_items
+            )
+
+            self._summary_count += 1
+            print(f"[SUMMARY] ✅ Summarization complete (summary #{self._summary_count})")
+
+        except Exception as e:
+            print(f"[SUMMARY] Summarization failed: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._is_summarizing = False
+
+    async def check_and_summarize_if_needed(self, context: RunContext = None) -> None:
+        """
+        Check if summarization is needed based on message count and trigger if necessary.
+
+        This is called at strategic points during the conversation to prevent context overflow.
+        Uses message count as a proxy for token count (since direct token tracking requires
+        accessing response.done events which may not be easily available in the LiveKit SDK).
+
+        Args:
+            context: Optional RunContext (not used currently, but kept for compatibility)
+        """
+        try:
+            # Get current chat context
+            if not hasattr(self, 'chat_ctx'):
+                return
+
+            chat_ctx = self.chat_ctx
+            items = list(chat_ctx.items) if hasattr(chat_ctx, 'items') else []
+
+            # Use message count as heuristic: ~15 messages typically means we're approaching limits
+            # This is conservative to ensure we summarize before hitting the 28K token limit
+            MESSAGE_COUNT_THRESHOLD = 15
+
+            if len(items) > MESSAGE_COUNT_THRESHOLD and not self._is_summarizing:
+                print(f"[SUMMARY] Message count ({len(items)}) exceeds threshold ({MESSAGE_COUNT_THRESHOLD})")
+                # Trigger async summarization (non-blocking)
+                asyncio.create_task(self._summarize_and_prune_context())
+
+        except Exception as e:
+            print(f"[SUMMARY] Error checking for summarization: {e}")
 
     # ===== ONBOARDING TOOLS =====
 
@@ -1376,9 +1681,9 @@ class NovaVoiceAgent(Agent):
 
                 print(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
 
-                # Truncate conversation after basic stats collected (Milestone 1)
+                # Check and summarize conversation after basic stats collected (Milestone 1)
                 # This prevents context buildup from lengthy stat confirmations
-                await self._truncate_conversation_history(context, max_items=8)
+                await self.check_and_summarize_if_needed(context)
 
                 return None, "Captured. Immediately ask the next question."
 
@@ -1618,9 +1923,9 @@ class NovaVoiceAgent(Agent):
 
         print(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
 
-        # Truncate conversation after main parameters collected (Milestone 2)
+        # Check and summarize conversation after main parameters collected (Milestone 2)
         # Core program structure is now defined, can clear early conversation
-        await self._truncate_conversation_history(context, max_items=8)
+        await self.check_and_summarize_if_needed(context)
 
         return None, "Training frequency captured. Immediately ask the next question."
 
@@ -1702,9 +2007,9 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.user_notes", notes)
         print(f"[PROGRAM] User notes saved")
 
-        # Truncate conversation after all optional parameters collected (Milestone 3)
+        # Check and summarize conversation after all optional parameters collected (Milestone 3)
         # Almost done with collection, keep context lean for final steps
-        await self._truncate_conversation_history(context, max_items=6)
+        await self.check_and_summarize_if_needed(context)
 
         return None, "Captured. Immediately ask the next question."
 

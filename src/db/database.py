@@ -19,7 +19,7 @@ if not DATABASE_URL:
 # Create SQLAlchemy engine with connection pool settings for cloud databases
 engine = create_engine(
     DATABASE_URL,
-    echo=True,
+    echo=False,  # Set to True to see SQL queries in logs (useful for debugging)
     future=True,
     pool_pre_ping=True,  # Test connections before using them
     pool_recycle=3600,   # Recycle connections after 1 hour

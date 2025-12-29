@@ -441,4 +441,8 @@ class WorkoutSession:
         else:
             desc += f". Rest: {rest_sec}s"
 
+        # Add exercise notes/coaching cues if present
+        if exercise.notes:
+            desc += f". Note: {exercise.notes}"
+
         return desc

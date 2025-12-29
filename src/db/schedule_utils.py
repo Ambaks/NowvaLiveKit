@@ -143,6 +143,33 @@ def create_smart_schedule_pattern(
         return [0]  # Default to Monday
 
 
+def clear_future_schedules(db: Session, user_id: str) -> int:
+    """
+    Delete all incomplete future scheduled workouts for a user.
+    Preserves completed workouts for history/progress tracking.
+
+    Args:
+        db: Database session
+        user_id: User's UUID as string
+
+    Returns:
+        Number of schedule entries deleted
+    """
+    today = date.today()
+
+    # Delete all future uncompleted schedules
+    deleted_count = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date >= today,
+            Schedule.completed == False
+        )
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    return deleted_count
+
+
 def create_schedule_for_program(
     db: Session,
     user_id: str,
@@ -155,6 +182,10 @@ def create_schedule_for_program(
     Create schedule entries for a program, mapping workouts to calendar dates.
     Uses smart scheduling to respect rest days and muscle group recovery.
 
+    IMPORTANT: This function automatically clears all existing incomplete future
+    schedules for the user before creating new ones, ensuring users only have
+    one active program at a time.
+
     Args:
         db: Database session
         user_id: User's UUID as string
@@ -166,6 +197,11 @@ def create_schedule_for_program(
     Returns:
         List of created Schedule objects
     """
+    # Clear any existing future schedules before creating new ones
+    deleted_count = clear_future_schedules(db, user_id)
+    if deleted_count > 0:
+        print(f"[SCHEDULE] Cleared {deleted_count} existing future schedules for user {user_id}")
+
     # Default to next Monday if no start date provided
     if start_date is None:
         start_date = get_next_monday()
