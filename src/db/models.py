@@ -1,10 +1,10 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, DateTime,
-    Text, ForeignKey, DECIMAL
+    Text, ForeignKey, DECIMAL, ARRAY
 )
 from sqlalchemy.orm import relationship, declarative_base
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 
 Base = declarative_base()
@@ -212,6 +212,15 @@ class Schedule(Base):
     scheduled_date = Column(Date, nullable=False)
     completed = Column(Boolean, default=False)
 
+    # Schedule modification fields
+    skipped = Column(Boolean, default=False, nullable=False)
+    skipped_at = Column(DateTime, nullable=True)
+    skip_reason = Column(String(500), nullable=True)
+    is_deload = Column(Boolean, default=False, nullable=False)
+    deload_intensity_modifier = Column(DECIMAL(4, 2), nullable=True, default=1.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    modified_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
     # Relationships
     user = relationship("User", back_populates="schedule")
     user_generated_program = relationship("UserGeneratedProgram", back_populates="schedule")
@@ -260,3 +269,82 @@ class ProgramGenerationJob(Base):
     # Relationships
     user = relationship("User")
     program = relationship("UserGeneratedProgram")
+
+
+# -------------------------
+# Schedule Change History (Undo System)
+# -------------------------
+class ScheduleChangeHistory(Base):
+    __tablename__ = "schedule_change_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    change_type = Column(String(50), nullable=False)  # move, swap, skip, add_rest, repeat, deload, clear, reschedule
+    description = Column(Text, nullable=False)  # Human-readable description
+    affected_schedule_ids = Column(ARRAY(Integer))  # List of schedule IDs affected
+    before_state = Column(JSONB, nullable=False)  # Full snapshot before change
+    after_state = Column(JSONB, nullable=False)   # Full snapshot after change
+    created_at = Column(DateTime, default=datetime.utcnow)
+    function_name = Column(String(100))  # Function that made the change
+    is_undone = Column(Boolean, default=False)
+    undone_at = Column(DateTime, nullable=True)
+    undo_change_id = Column(Integer, ForeignKey("schedule_change_history.id"), nullable=True)
+
+    # Relationships
+    user = relationship("User")
+
+
+# -------------------------
+# Training Load Metrics (Deload System)
+# -------------------------
+class TrainingLoadMetrics(Base):
+    __tablename__ = "training_load_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    week_start_date = Column(Date, nullable=False)
+    week_end_date = Column(Date, nullable=False)
+
+    # Volume metrics
+    total_sets = Column(Integer, default=0)
+    total_reps = Column(Integer, default=0)
+    total_volume_kg = Column(DECIMAL(10, 2), default=0)
+
+    # Intensity metrics
+    avg_rpe = Column(DECIMAL(3, 1))
+    high_rpe_sets = Column(Integer, default=0)
+
+    # Velocity metrics
+    avg_velocity = Column(DECIMAL(4, 2))
+    velocity_decline_percent = Column(DECIMAL(5, 2))
+
+    # Fatigue indicators
+    fatigue_score = Column(DECIMAL(5, 2))
+    deload_recommended = Column(Boolean, default=False)
+
+    calculated_at = Column(DateTime, default=datetime.utcnow)
+    workouts_completed = Column(Integer, default=0)
+
+    # Relationships
+    user = relationship("User")
+
+
+# -------------------------
+# Deload History
+# -------------------------
+class DeloadHistory(Base):
+    __tablename__ = "deload_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    week_start_date = Column(Date, nullable=False)
+    week_end_date = Column(Date, nullable=False)
+    intensity_modifier = Column(DECIMAL(4, 2), default=0.7)
+    trigger_reason = Column(Text)
+    fatigue_score_at_trigger = Column(DECIMAL(5, 2))
+    applied = Column(Boolean, default=False)
+    applied_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User")

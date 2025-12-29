@@ -29,9 +29,9 @@ import json
 import re
 
 
-def detect_update_scope(change_request: str, current_program: Dict) -> Dict[str, Any]:
+async def detect_update_scope(change_request: str, current_program: Dict) -> Dict[str, Any]:
     """
-    Detect the scope of a program update request.
+    Use LLM to intelligently detect the scope of a program update request.
 
     Args:
         change_request: User's change request
@@ -45,138 +45,74 @@ def detect_update_scope(change_request: str, current_program: Dict) -> Dict[str,
             "reason": "Explanation of detection"
         }
     """
-    request_lower = change_request.lower().strip()
+    from openai import AsyncOpenAI
+    import os
+
     duration_weeks = current_program.get("metadata", {}).get("duration_weeks", 0)
     days_per_week = current_program.get("metadata", {}).get("days_per_week", 0)
 
     print(f"[SCOPE] Detecting scope for: '{change_request}'")
 
-    # Pattern 1: Week-level changes
-    week_patterns = [
-        r"week\s+(\d+)",  # "week 3"
-        r"weeks?\s+(\d+)\s+(?:and|&|,)\s+(\d+)",  # "week 3 and 4"
-        r"weeks?\s+(\d+)\s+(?:through|to|-)\s+(\d+)",  # "weeks 3 through 5"
-        r"(?:in|for|during)\s+week\s+(\d+)",  # "in week 3"
-    ]
+    # Get all workouts list for "all workouts" scope
+    all_workouts = []
+    for week in current_program.get("weeks", []):
+        week_num = week.get("week_number")
+        for workout in week.get("workouts", []):
+            day_num = workout.get("day_number")
+            all_workouts.append((week_num, day_num))
 
-    for pattern in week_patterns:
-        match = re.search(pattern, request_lower)
-        if match:
-            # Extract week numbers
-            groups = [g for g in match.groups() if g]
-            week_nums = [int(g) for g in groups if g.isdigit()]
+    # Use LLM to determine scope
+    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-            # Validate week numbers
-            valid_weeks = [w for w in week_nums if 1 <= w <= duration_weeks]
+    system_prompt = f"""You are a workout program analyzer. Analyze change requests and determine the minimal scope needed to implement them.
 
-            if valid_weeks:
-                # Check if it's just an exercise swap in specific week (might be workout scope)
-                if any(kw in request_lower for kw in ['replace', 'swap', 'change', 'remove', 'add']) and \
-                   any(kw in request_lower for kw in ['exercise', 'squat', 'press', 'deadlift', 'row', 'curl']):
-                    # Exercise-specific change in week - might affect multiple workouts in that week
-                    print(f"[SCOPE] Detected: Exercise change in week(s) {valid_weeks}")
-                    return {
-                        "scope": "week",
-                        "affected_weeks": valid_weeks,
-                        "affected_workouts": None,
-                        "reason": f"Exercise-specific change in week(s) {valid_weeks}"
-                    }
+Program structure:
+- {duration_weeks} weeks total
+- {days_per_week} days per week
+- Total workouts: {len(all_workouts)}
 
-                print(f"[SCOPE] Detected: Week-level change for week(s) {valid_weeks}")
-                return {
-                    "scope": "week",
-                    "affected_weeks": valid_weeks,
-                    "affected_workouts": None,
-                    "reason": f"Change targets specific week(s): {valid_weeks}"
-                }
+Return JSON with this exact structure:
+{{
+  "scope": "workout" | "week" | "full_program",
+  "affected_weeks": [1, 2, 3] or null,
+  "affected_workouts": [[1,1], [1,2]] or null,
+  "reason": "Brief explanation"
+}}
 
-    # Pattern 2: Workout/Day-level changes
-    day_patterns = [
-        r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
-        r"day\s+(\d+)",
-        r"workout\s+(\d+)",
-        r"(?:on|for)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
-    ]
+Scope guidelines:
+- "workout": Changes affecting specific workout(s) or all workouts (e.g., "add exercise to every workout", "modify week 2 day 1")
+- "week": Changes affecting entire week(s) (e.g., "change week 3", "swap weeks 2 and 4")
+- "full_program": Structural changes (e.g., "change from 3 to 5 days", "extend to 16 weeks", "change goal to hypertrophy")
 
-    day_names = {
-        "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4,
-        "friday": 5, "saturday": 6, "sunday": 7
-    }
+For "add X to every workout" use scope="workout" with affected_workouts={json.dumps(all_workouts)}"""
 
-    for pattern in day_patterns:
-        match = re.search(pattern, request_lower)
-        if match:
-            day_ref = match.group(1)
-            day_num = None
+    user_prompt = f"""Change request: "{change_request}"
 
-            if day_ref.isdigit():
-                day_num = int(day_ref)
-            elif day_ref in day_names:
-                day_num = day_names[day_ref]
+Determine the minimal scope needed to implement this change. Return JSON only."""
 
-            if day_num and 1 <= day_num <= days_per_week:
-                # Check if specific week mentioned
-                week_match = re.search(r"week\s+(\d+)", request_lower)
-                if week_match:
-                    week_num = int(week_match.group(1))
-                    if 1 <= week_num <= duration_weeks:
-                        print(f"[SCOPE] Detected: Workout-level change for Week {week_num}, Day {day_num}")
-                        return {
-                            "scope": "workout",
-                            "affected_weeks": [week_num],
-                            "affected_workouts": [(week_num, day_num)],
-                            "reason": f"Change targets specific workout: Week {week_num}, Day {day_num}"
-                        }
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
 
-                # No specific week - affects this day across all weeks
-                print(f"[SCOPE] Detected: Day {day_num} across all weeks")
-                return {
-                    "scope": "week",  # Need to regenerate all weeks
-                    "affected_weeks": list(range(1, duration_weeks + 1)),
-                    "affected_workouts": None,
-                    "reason": f"Change affects Day {day_num} across all weeks"
-                }
+        result = json.loads(response.choices[0].message.content)
+        print(f"[SCOPE] LLM detected: {result['scope']} - {result['reason']}")
+        return result
 
-    # Pattern 3: Full program changes
-    full_program_keywords = [
-        r"(?:go|change|switch|move)\s+(?:from|to).*?(\d+)\s+days?(?:\s+(?:per\s+)?week)?.*?(?:to|from).*?(\d+)\s+days?",  # "go from 5 days to 3 days"
-        r"extend.*?(\d+)\s+weeks?",  # "extend to 16 weeks"
-        r"shorten.*?(\d+)\s+weeks?",  # "shorten to 8 weeks"
-        r"change.*?goal",  # "change goal"
-        r"(?:make\s+it|switch\s+to).*?(strength|hypertrophy|power)",  # "make it hypertrophy"
-        r"(?:increase|decrease|add|reduce).*?(?:volume|intensity|frequency)",  # structural volume/intensity changes
-    ]
-
-    for pattern in full_program_keywords:
-        if re.search(pattern, request_lower):
-            print(f"[SCOPE] Detected: Full program change (structural)")
-            return {
-                "scope": "full_program",
-                "affected_weeks": None,
-                "affected_workouts": None,
-                "reason": "Change affects overall program structure"
-            }
-
-    # Pattern 4: Non-specific changes (default to full program for safety)
-    # Examples: "make it harder", "add more volume", "change the progression"
-    ambiguous_keywords = ['harder', 'easier', 'more', 'less', 'different', 'better', 'all', 'entire', 'whole']
-    if any(kw in request_lower for kw in ambiguous_keywords):
-        print(f"[SCOPE] Detected: Ambiguous/general change, defaulting to full program")
+    except Exception as e:
+        print(f"[SCOPE ERROR] LLM scope detection failed: {e}, defaulting to full_program")
         return {
             "scope": "full_program",
             "affected_weeks": None,
             "affected_workouts": None,
-            "reason": "General/ambiguous change requires full program review"
+            "reason": "Scope detection failed, regenerating full program for safety"
         }
-
-    # Default: If we can't determine scope, regenerate full program (safe default)
-    print(f"[SCOPE] Could not determine specific scope, defaulting to full program")
-    return {
-        "scope": "full_program",
-        "affected_weeks": None,
-        "affected_workouts": None,
-        "reason": "Scope unclear, regenerating full program for safety"
-    }
 
 
 async def update_program_background(
@@ -235,7 +171,7 @@ async def update_program_background(
 
         # Step 2.5: Detect update scope (20% → 25%)
         print(f"[UPDATE JOB {job_id}] 🔍 Detecting update scope...")
-        scope_info = detect_update_scope(change_request, current_program)
+        scope_info = await detect_update_scope(change_request, current_program)
         print(f"[UPDATE JOB {job_id}] ✅ Scope detected: {scope_info['scope']}")
         print(f"[UPDATE JOB {job_id}]    Reason: {scope_info['reason']}")
 
@@ -308,14 +244,13 @@ async def update_program_background(
         # Step 6: Mark complete (95% → 100%)
         total_elapsed = time.time() - total_start_time
 
-        # Store diff in job status for agent to read
+        # Mark job as completed
         update_job_status(
             db,
             job_id,
             "completed",
             progress=100,
-            program_id=str(program_id),
-            metadata={"diff": diff}
+            program_id=str(program_id)
         )
 
         print(f"\n{'='*80}")
@@ -418,12 +353,11 @@ def _get_current_program_as_json(db, program_id: int) -> Optional[Dict]:
                 set_data = {
                     "set_number": s.set_number,
                     "reps": s.reps,
-                    "weight_kg": float(s.weight_kg) if s.weight_kg else None,
-                    "percentage_1rm": float(s.percentage_1rm) if s.percentage_1rm else None,
-                    "rir": s.rir,
+                    "weight_kg": float(s.weight) if s.weight else None,
+                    "intensity_percent": float(s.intensity_percent) if s.intensity_percent else None,
+                    "rpe": float(s.rpe) if s.rpe else None,
                     "rest_seconds": s.rest_seconds,
-                    "tempo": s.tempo,
-                    "notes": s.notes or ""
+                    "velocity_threshold": float(s.velocity_threshold) if s.velocity_threshold else None
                 }
                 exercise_data["sets"].append(set_data)
 
@@ -651,7 +585,7 @@ If change is SAFE, return:
 
     user_prompt = f"""Analyze this change request: "{change_request}"
 
-Is it risky for a {user_profile.get('fitness_level')} level {current_goal} program?
+Is it risky for a {user_profile.get('fitness_level')} level {program_summary['goal']} program?
 
 Return JSON validation result."""
 
@@ -1337,24 +1271,22 @@ def _update_exercise_sets(db, workout_exercise: WorkoutExercise, sets_data: List
             # Update existing
             s = existing_sets[set_num]
             s.reps = set_data.get("reps")
-            s.weight_kg = set_data.get("weight_kg")
-            s.percentage_1rm = set_data.get("percentage_1rm")
-            s.rir = set_data.get("rir")
+            s.weight = set_data.get("weight_kg")  # Map weight_kg -> weight
+            s.intensity_percent = set_data.get("intensity_percent")
+            s.rpe = set_data.get("rpe")
             s.rest_seconds = set_data.get("rest_seconds")
-            s.tempo = set_data.get("tempo", "")
-            s.notes = set_data.get("notes", "")
+            s.velocity_threshold = set_data.get("velocity_threshold")
         else:
             # Create new
             s = Set(
                 workout_exercise_id=workout_exercise.id,
                 set_number=set_num,
                 reps=set_data.get("reps"),
-                weight_kg=set_data.get("weight_kg"),
-                percentage_1rm=set_data.get("percentage_1rm"),
-                rir=set_data.get("rir"),
+                weight=set_data.get("weight_kg"),  # Map weight_kg -> weight
+                intensity_percent=set_data.get("intensity_percent"),
+                rpe=set_data.get("rpe"),
                 rest_seconds=set_data.get("rest_seconds"),
-                tempo=set_data.get("tempo", ""),
-                notes=set_data.get("notes", "")
+                velocity_threshold=set_data.get("velocity_threshold")
             )
             db.add(s)
 

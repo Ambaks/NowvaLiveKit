@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_
 
 from .models import Schedule, Workout, WorkoutExercise, Exercise, Set, UserGeneratedProgram, PartnerProgram
+from .schedule_history import create_schedule_snapshot, log_schedule_change
 
 
 def get_next_monday(start_date: Optional[date] = None) -> date:
@@ -523,3 +524,686 @@ def has_scheduled_workouts(db: Session, user_id: str) -> bool:
     """
     count = db.query(Schedule).filter(Schedule.user_id == user_id).count()
     return count > 0
+
+
+# ===== SCHEDULE MODIFICATION FUNCTIONS =====
+
+
+def move_workout(
+    db: Session,
+    schedule_id: int,
+    new_date: date,
+    allow_overwrite: bool = False
+) -> Tuple[bool, Optional[str]]:
+    """
+    Move a single workout to a new date (NO cascading).
+
+    Args:
+        db: Database session
+        schedule_id: Schedule entry to move
+        new_date: Target date
+        allow_overwrite: If True, overwrite existing workout on target date
+
+    Returns:
+        (success: bool, error_message: Optional[str])
+    """
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+
+    if not schedule:
+        return (False, "Workout not found")
+
+    # Prevent moving completed workouts
+    if schedule.completed:
+        return (False, "Cannot move completed workouts")
+
+    # Prevent moving skipped workouts
+    if schedule.skipped:
+        return (False, "Cannot move skipped workouts")
+
+    # Check if target date is in the past
+    if new_date < date.today():
+        return (False, "Cannot move workout to a past date")
+
+    # Check for conflicts on target date
+    conflict = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == schedule.user_id,
+            Schedule.scheduled_date == new_date,
+            Schedule.id != schedule_id,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).first()
+
+    if conflict and not allow_overwrite:
+        workout_name = conflict.workout.name if conflict.workout else "a workout"
+        return (False, f"You already have '{workout_name}' scheduled on {new_date}. Would you like to swap them instead?")
+
+    # Capture before state for history
+    affected_ids = [schedule_id]
+    if conflict and allow_overwrite:
+        affected_ids.append(conflict.id)
+
+    before_state = create_schedule_snapshot(db, affected_ids)
+    old_date = schedule.scheduled_date
+
+    if conflict and allow_overwrite:
+        # Delete conflicting workout
+        db.delete(conflict)
+
+    # Move the workout
+    schedule.scheduled_date = new_date
+    schedule.modified_at = datetime.utcnow()
+    db.flush()
+
+    # Capture after state for history
+    after_state = create_schedule_snapshot(db, [schedule_id])
+
+    # Log change
+    workout_name = schedule.workout.name if schedule.workout else "workout"
+    description = f"Moved {workout_name} from {old_date.strftime('%b %d')} to {new_date.strftime('%b %d')}"
+    log_schedule_change(
+        db, str(schedule.user_id), "move", description,
+        affected_ids, before_state, after_state, "move_workout"
+    )
+
+    db.commit()
+
+    return (True, None)
+
+
+def swap_workouts(
+    db: Session,
+    schedule_id_1: int,
+    schedule_id_2: int
+) -> Tuple[bool, Optional[str]]:
+    """
+    Swap two individual workouts by exchanging their dates.
+
+    Args:
+        db: Database session
+        schedule_id_1: First workout schedule ID
+        schedule_id_2: Second workout schedule ID
+
+    Returns:
+        (success: bool, error_message: Optional[str])
+    """
+    schedule1 = db.query(Schedule).filter(Schedule.id == schedule_id_1).first()
+    schedule2 = db.query(Schedule).filter(Schedule.id == schedule_id_2).first()
+
+    if not schedule1 or not schedule2:
+        return (False, "One or both workouts not found")
+
+    # Prevent swapping completed workouts
+    if schedule1.completed or schedule2.completed:
+        return (False, "Cannot swap completed workouts")
+
+    # Prevent swapping skipped workouts
+    if schedule1.skipped or schedule2.skipped:
+        return (False, "Cannot swap skipped workouts")
+
+    # Verify same user
+    if schedule1.user_id != schedule2.user_id:
+        return (False, "Cannot swap workouts between different users")
+
+    # Capture before state for history
+    affected_ids = [schedule_id_1, schedule_id_2]
+    before_state = create_schedule_snapshot(db, affected_ids)
+    date1_old = schedule1.scheduled_date
+    date2_old = schedule2.scheduled_date
+
+    # Swap dates
+    temp_date = schedule1.scheduled_date
+    schedule1.scheduled_date = schedule2.scheduled_date
+    schedule2.scheduled_date = temp_date
+
+    schedule1.modified_at = datetime.utcnow()
+    schedule2.modified_at = datetime.utcnow()
+    db.flush()
+
+    # Capture after state for history
+    after_state = create_schedule_snapshot(db, affected_ids)
+
+    # Log change
+    workout1_name = schedule1.workout.name if schedule1.workout else "workout"
+    workout2_name = schedule2.workout.name if schedule2.workout else "workout"
+    description = f"Swapped {workout1_name} ({date1_old.strftime('%b %d')}) with {workout2_name} ({date2_old.strftime('%b %d')})"
+    log_schedule_change(
+        db, str(schedule1.user_id), "swap", description,
+        affected_ids, before_state, after_state, "swap_workouts"
+    )
+
+    db.commit()
+
+    return (True, None)
+
+
+def swap_weeks(
+    db: Session,
+    user_id: str,
+    week1_start: date,
+    week2_start: date
+) -> Tuple[bool, Optional[str], List[Tuple[int, int]]]:
+    """
+    Swap ALL workouts between two weeks.
+
+    Args:
+        db: Database session
+        user_id: User's UUID
+        week1_start: Start date of first week (Monday)
+        week2_start: Start date of second week (Monday)
+
+    Returns:
+        (success: bool, error_message: Optional[str], swapped_pairs: List[Tuple[schedule_id, schedule_id]])
+    """
+    # Get week end dates
+    week1_end = week1_start + timedelta(days=6)
+    week2_end = week2_start + timedelta(days=6)
+
+    # Fetch all workouts in both weeks
+    week1_workouts = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date >= week1_start,
+            Schedule.scheduled_date <= week1_end,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).order_by(Schedule.scheduled_date).all()
+
+    week2_workouts = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date >= week2_start,
+            Schedule.scheduled_date <= week2_end,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).order_by(Schedule.scheduled_date).all()
+
+    if not week1_workouts and not week2_workouts:
+        return (False, "No workouts found in either week", [])
+
+    # Capture before state for history
+    affected_ids = [w.id for w in week1_workouts] + [w.id for w in week2_workouts]
+    before_state = create_schedule_snapshot(db, affected_ids)
+
+    # Calculate offset between weeks (in days)
+    week_offset = (week2_start - week1_start).days
+
+    # Swap all week1 workouts forward
+    for workout in week1_workouts:
+        workout.scheduled_date = workout.scheduled_date + timedelta(days=week_offset)
+        workout.modified_at = datetime.utcnow()
+
+    # Swap all week2 workouts backward
+    for workout in week2_workouts:
+        workout.scheduled_date = workout.scheduled_date - timedelta(days=week_offset)
+        workout.modified_at = datetime.utcnow()
+
+    db.flush()
+
+    # Capture after state for history
+    after_state = create_schedule_snapshot(db, affected_ids)
+
+    # Log change
+    description = f"Swapped week starting {week1_start.strftime('%b %d')} with week starting {week2_start.strftime('%b %d')} ({len(affected_ids)} workouts)"
+    log_schedule_change(
+        db, str(user_id), "swap_weeks", description,
+        affected_ids, before_state, after_state, "swap_weeks"
+    )
+
+    db.commit()
+
+    swapped_pairs = [(w1.id, w2.id) for w1, w2 in zip(week1_workouts, week2_workouts)]
+
+    return (True, None, swapped_pairs)
+
+
+def skip_workout(
+    db: Session,
+    schedule_id: int,
+    reason: Optional[str] = None
+) -> Tuple[bool, Optional[str]]:
+    """
+    Mark a workout as skipped (preserves for adherence tracking).
+    Does NOT reschedule automatically.
+
+    Args:
+        db: Database session
+        schedule_id: Schedule entry to skip
+        reason: Optional reason for skipping
+
+    Returns:
+        (success: bool, error_message: Optional[str])
+    """
+    schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+
+    if not schedule:
+        return (False, "Workout not found")
+
+    if schedule.completed:
+        return (False, "Cannot skip a completed workout")
+
+    if schedule.skipped:
+        return (False, "Workout is already marked as skipped")
+
+    # Capture before state for history
+    affected_ids = [schedule_id]
+    before_state = create_schedule_snapshot(db, affected_ids)
+
+    # Mark as skipped
+    schedule.skipped = True
+    schedule.skipped_at = datetime.utcnow()
+    schedule.skip_reason = reason
+    schedule.modified_at = datetime.utcnow()
+    db.flush()
+
+    # Capture after state for history
+    after_state = create_schedule_snapshot(db, affected_ids)
+
+    # Log change
+    workout_name = schedule.workout.name if schedule.workout else "workout"
+    skip_date = schedule.scheduled_date.strftime('%b %d')
+    reason_text = f" (Reason: {reason})" if reason else ""
+    description = f"Skipped {workout_name} on {skip_date}{reason_text}"
+    log_schedule_change(
+        db, str(schedule.user_id), "skip", description,
+        affected_ids, before_state, after_state, "skip_workout"
+    )
+
+    db.commit()
+
+    return (True, None)
+
+
+def add_rest_day(
+    db: Session,
+    user_id: str,
+    rest_date: date,
+    shift_future_workouts: bool = True
+) -> Tuple[bool, Optional[str], int]:
+    """
+    Add a rest day, optionally shifting future workouts forward.
+
+    Args:
+        db: Database session
+        user_id: User's UUID
+        rest_date: Date to insert rest day
+        shift_future_workouts: If True, push all future workouts forward by 1 day
+
+    Returns:
+        (success: bool, error_message: Optional[str], workouts_shifted: int)
+    """
+    # Check if there's already a workout on this date
+    existing = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date == rest_date,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).first()
+
+    if existing:
+        workout_name = existing.workout.name if existing.workout else "a workout"
+        return (False, f"You already have '{workout_name}' on {rest_date}. Move it first.", 0)
+
+    shifted_count = 0
+
+    if shift_future_workouts:
+        # Get all future workouts (on or after rest_date)
+        future_workouts = db.query(Schedule).filter(
+            and_(
+                Schedule.user_id == user_id,
+                Schedule.scheduled_date >= rest_date,
+                Schedule.completed == False,
+                Schedule.skipped == False
+            )
+        ).order_by(Schedule.scheduled_date.desc()).all()  # Process in reverse to avoid conflicts
+
+        if future_workouts:
+            # Capture before state for history
+            affected_ids = [w.id for w in future_workouts]
+            before_state = create_schedule_snapshot(db, affected_ids)
+
+            # Shift each workout forward by 1 day
+            for workout in future_workouts:
+                workout.scheduled_date = workout.scheduled_date + timedelta(days=1)
+                workout.modified_at = datetime.utcnow()
+                shifted_count += 1
+
+            db.flush()
+
+            # Capture after state for history
+            after_state = create_schedule_snapshot(db, affected_ids)
+
+            # Log change
+            description = f"Added rest day on {rest_date.strftime('%b %d')}, shifted {shifted_count} workouts forward"
+            log_schedule_change(
+                db, str(user_id), "add_rest", description,
+                affected_ids, before_state, after_state, "add_rest_day"
+            )
+
+        db.commit()
+
+    return (True, None, shifted_count)
+
+
+def repeat_workout(
+    db: Session,
+    schedule_id: int,
+    repeat_date: date
+) -> Tuple[bool, Optional[str], Optional[int]]:
+    """
+    Duplicate a workout to another date.
+    Creates a new schedule entry with the same workout.
+
+    Args:
+        db: Database session
+        schedule_id: Original workout to repeat
+        repeat_date: Date to repeat the workout
+
+    Returns:
+        (success: bool, error_message: Optional[str], new_schedule_id: Optional[int])
+    """
+    original = db.query(Schedule).filter(Schedule.id == schedule_id).first()
+
+    if not original:
+        return (False, "Workout not found", None)
+
+    # Check for conflicts
+    conflict = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == original.user_id,
+            Schedule.scheduled_date == repeat_date,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).first()
+
+    if conflict:
+        workout_name = conflict.workout.name if conflict.workout else "a workout"
+        return (False, f"You already have '{workout_name}' on {repeat_date}", None)
+
+    # Capture before state for history (empty - we're creating new)
+    before_state = []
+
+    # Create duplicate schedule entry
+    repeated = Schedule(
+        user_id=original.user_id,
+        user_generated_program_id=original.user_generated_program_id,
+        partner_program_id=original.partner_program_id,
+        workout_id=original.workout_id,
+        scheduled_date=repeat_date,
+        completed=False,
+        skipped=False,
+        is_deload=original.is_deload,
+        deload_intensity_modifier=original.deload_intensity_modifier
+    )
+
+    db.add(repeated)
+    db.flush()
+    db.refresh(repeated)
+
+    # Capture after state for history
+    affected_ids = [repeated.id]
+    after_state = create_schedule_snapshot(db, affected_ids)
+
+    # Log change
+    workout_name = original.workout.name if original.workout else "workout"
+    orig_date = original.scheduled_date.strftime('%b %d')
+    new_date = repeat_date.strftime('%b %d')
+    description = f"Repeated {workout_name} from {orig_date} to {new_date}"
+    log_schedule_change(
+        db, str(original.user_id), "repeat", description,
+        affected_ids, before_state, after_state, "repeat_workout"
+    )
+
+    db.commit()
+
+    return (True, None, repeated.id)
+
+
+def apply_deload_week(
+    db: Session,
+    user_id: str,
+    week_start: date,
+    intensity_modifier: float = 0.7
+) -> Tuple[bool, Optional[str], int]:
+    """
+    Apply deload modifier to all workouts in a week.
+    Marks workouts with reduced intensity for recovery.
+
+    Args:
+        db: Database session
+        user_id: User's UUID
+        week_start: Start of deload week (Monday)
+        intensity_modifier: Intensity reduction (0.7 = 70% of prescribed, default)
+
+    Returns:
+        (success: bool, error_message: Optional[str], workouts_modified: int)
+    """
+    if not (0.3 <= intensity_modifier <= 1.0):
+        return (False, "Intensity modifier must be between 0.3 and 1.0", 0)
+
+    week_end = week_start + timedelta(days=6)
+
+    # Get all workouts in the week
+    workouts = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date >= week_start,
+            Schedule.scheduled_date <= week_end,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).all()
+
+    if not workouts:
+        return (False, f"No workouts found in week starting {week_start}", 0)
+
+    # Capture before state for history
+    affected_ids = [w.id for w in workouts]
+    before_state = create_schedule_snapshot(db, affected_ids)
+
+    # Apply deload modifier
+    modified_count = 0
+    for workout in workouts:
+        workout.is_deload = True
+        workout.deload_intensity_modifier = intensity_modifier
+        workout.modified_at = datetime.utcnow()
+        modified_count += 1
+
+    db.flush()
+
+    # Capture after state for history
+    after_state = create_schedule_snapshot(db, affected_ids)
+
+    # Log change
+    intensity_pct = int(intensity_modifier * 100)
+    description = f"Applied {intensity_pct}% deload week starting {week_start.strftime('%b %d')} ({modified_count} workouts)"
+    log_schedule_change(
+        db, str(user_id), "deload", description,
+        affected_ids, before_state, after_state, "apply_deload_week"
+    )
+
+    db.commit()
+
+    return (True, None, modified_count)
+
+
+def clear_date_range(
+    db: Session,
+    user_id: str,
+    start_date: date,
+    end_date: date,
+    preserve_completed: bool = True
+) -> Tuple[bool, Optional[str], int]:
+    """
+    Clear all workouts in a date range (vacation mode).
+
+    Args:
+        db: Database session
+        user_id: User's UUID
+        start_date: Range start
+        end_date: Range end
+        preserve_completed: If True, only delete incomplete workouts
+
+    Returns:
+        (success: bool, error_message: Optional[str], workouts_cleared: int)
+    """
+    if start_date > end_date:
+        return (False, "Start date must be before end date", 0)
+
+    # Build query
+    query = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date >= start_date,
+            Schedule.scheduled_date <= end_date
+        )
+    )
+
+    if preserve_completed:
+        query = query.filter(Schedule.completed == False)
+
+    # Get workouts to delete for history
+    workouts_to_delete = query.all()
+
+    if not workouts_to_delete:
+        return (True, None, 0)
+
+    # Capture before state for history
+    affected_ids = [w.id for w in workouts_to_delete]
+    before_state = create_schedule_snapshot(db, affected_ids)
+
+    # Delete workouts
+    cleared_count = query.delete(synchronize_session=False)
+    db.flush()
+
+    # Capture after state for history (empty - workouts deleted)
+    after_state = []
+
+    # Log change
+    description = f"Cleared {cleared_count} workouts from {start_date.strftime('%b %d')} to {end_date.strftime('%b %d')}"
+    log_schedule_change(
+        db, str(user_id), "clear", description,
+        affected_ids, before_state, after_state, "clear_date_range"
+    )
+
+    db.commit()
+
+    return (True, None, cleared_count)
+
+
+def reschedule_remaining_week(
+    db: Session,
+    user_id: str,
+    days_offset: int = 1
+) -> Tuple[bool, Optional[str], int]:
+    """
+    Push the rest of this week's workouts forward by N days.
+    Useful when user needs extra recovery mid-week.
+
+    Args:
+        db: Database session
+        user_id: User's UUID
+        days_offset: How many days to push forward (default: 1)
+
+    Returns:
+        (success: bool, error_message: Optional[str], workouts_rescheduled: int)
+    """
+    today = date.today()
+
+    # Get end of current week (Sunday)
+    days_until_sunday = 6 - today.weekday()
+    week_end = today + timedelta(days=days_until_sunday)
+
+    # Get remaining workouts this week
+    remaining_workouts = db.query(Schedule).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.scheduled_date > today,  # Future only
+            Schedule.scheduled_date <= week_end,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    ).order_by(Schedule.scheduled_date.desc()).all()  # Reverse order to avoid conflicts
+
+    if not remaining_workouts:
+        return (False, "No remaining workouts this week", 0)
+
+    # Capture before state for history
+    affected_ids = [w.id for w in remaining_workouts]
+    before_state = create_schedule_snapshot(db, affected_ids)
+
+    # Shift workouts
+    rescheduled_count = 0
+    for workout in remaining_workouts:
+        workout.scheduled_date = workout.scheduled_date + timedelta(days=days_offset)
+        workout.modified_at = datetime.utcnow()
+        rescheduled_count += 1
+
+    db.flush()
+
+    # Capture after state for history
+    after_state = create_schedule_snapshot(db, affected_ids)
+
+    # Log change
+    description = f"Pushed {rescheduled_count} remaining workouts forward by {days_offset} day{'s' if days_offset != 1 else ''}"
+    log_schedule_change(
+        db, str(user_id), "reschedule", description,
+        affected_ids, before_state, after_state, "reschedule_remaining_week"
+    )
+
+    db.commit()
+
+    return (True, None, rescheduled_count)
+
+
+def find_schedule_by_criteria(
+    db: Session,
+    user_id: str,
+    target_date: Optional[date] = None,
+    workout_name_fragment: Optional[str] = None,
+    week_start: Optional[date] = None
+) -> List[Schedule]:
+    """
+    Find schedule entries matching criteria.
+    Helper for voice agent to locate workouts by natural language.
+
+    Args:
+        db: Database session
+        user_id: User's UUID
+        target_date: Specific date (optional)
+        workout_name_fragment: Partial workout name (e.g., "leg", "upper")
+        week_start: Start of week to search within (optional)
+
+    Returns:
+        List of matching Schedule entries
+    """
+    query = db.query(Schedule).join(Workout).filter(
+        and_(
+            Schedule.user_id == user_id,
+            Schedule.completed == False,
+            Schedule.skipped == False
+        )
+    )
+
+    if target_date:
+        query = query.filter(Schedule.scheduled_date == target_date)
+
+    if week_start:
+        week_end = week_start + timedelta(days=6)
+        query = query.filter(
+            and_(
+                Schedule.scheduled_date >= week_start,
+                Schedule.scheduled_date <= week_end
+            )
+        )
+
+    if workout_name_fragment:
+        query = query.filter(Workout.name.ilike(f"%{workout_name_fragment}%"))
+
+    return query.order_by(Schedule.scheduled_date).all()
