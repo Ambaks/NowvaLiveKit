@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  ::selection {
+    @apply bg-accent/20 text-accent-dark;
+  }
+}
+
+@layer components {
+  .section-container {
+    @apply max-w-7xl mx-auto px-6 sm:px-8 lg:px-12;
+  }
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-accent-light via-accent to-accent-dark;
+  }
+
+  .glass-card {
+    @apply bg-background-tertiary/50 backdrop-blur-sm border border-border rounded-2xl;
+  }
+
+  .button-primary {
+    @apply bg-accent hover:bg-accent-hover text-white font-medium px-6 py-3 rounded-xl transition-all duration-200 hover:scale-105 active:scale-95 hover:shadow-glow;
+  }
+
+  .button-secondary {
+    @apply bg-background-tertiary hover:bg-background-secondary text-foreground font-medium px-6 py-3 rounded-xl border border-border hover:border-border-light transition-all duration-200;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

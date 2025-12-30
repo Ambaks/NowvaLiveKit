@@ -15,6 +15,13 @@ build/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Node.js / Frontend
+node_modules/
+package-lock.json
+dist/
+dist-ssr/
+*.local
+
 # Session files (contains encryption keys - DO NOT COMMIT)
 .session.dat
 .session.key
