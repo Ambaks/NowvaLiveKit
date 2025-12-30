@@ -1,8 +1,12 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.exc import OperationalError
 from .models import Base
 import os
 from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -51,7 +55,16 @@ def get_db():
     try:
         yield db
     finally:
-        db.close()
+        try:
+            db.close()
+        except OperationalError as e:
+            # Handle SSL connection closed errors during cleanup
+            # This can happen after long-running operations when the connection times out
+            if "SSL connection has been closed unexpectedly" in str(e):
+                logger.warning("Database connection already closed during cleanup (SSL timeout). This is expected after long operations.")
+            else:
+                # Re-raise other operational errors
+                raise
 
 
 def init_db():

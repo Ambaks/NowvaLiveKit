@@ -457,8 +457,9 @@ class NovaVoiceAgent(Agent):
                 return
 
             # Split: keep system prompt + last N turns, summarize the rest
-            system_items = [item for item in items if item.role == "system"]
-            non_system_items = [item for item in items if item.role != "system"]
+            # Note: Some items (like FunctionCall) don't have a 'role' attribute
+            system_items = [item for item in items if hasattr(item, 'role') and item.role == "system"]
+            non_system_items = [item for item in items if not hasattr(item, 'role') or item.role != "system"]
 
             if len(non_system_items) <= KEEP_LAST_TURNS:
                 print(f"[SUMMARY] Not enough non-system items to summarize ({len(non_system_items)} items)")
