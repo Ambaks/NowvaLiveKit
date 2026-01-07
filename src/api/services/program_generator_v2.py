@@ -1,12 +1,13 @@
 """
 Program Generator Service V2
-Uses OpenAI Structured Outputs + Cache-Augmented Generation (CAG) for guaranteed valid JSON
+Uses OpenAI Structured Outputs + Knowledge Retrieval for guaranteed valid JSON
 
 Key Features:
 - Generates 4 weeks at a time (batching for speed)
-- System prompt (3,000 tokens) gets cached by OpenAI after first batch
+- System prompt gets cached by OpenAI after first batch
 - Subsequent batches are 50% cheaper and faster due to prompt caching
 - Structured outputs guarantee valid JSON (no parsing errors)
+- Supports both CAG (static) and RAG (dynamic retrieval)
 """
 from db.database import SessionLocal
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set
@@ -24,6 +25,14 @@ from openai import AsyncOpenAI
 import os
 from pathlib import Path
 import time
+
+# RAG integration
+try:
+    from contextual_rag.query_interface import retrieve_for_program_generation
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    print("⚠️  RAG module not available. Using CAG only.")
 
 
 async def generate_program_background(job_id: str, user_id: str, params: dict):
@@ -513,8 +522,31 @@ async def _generate_program_batch(
         })
 
     # System prompt (will be cached after first batch!)
-    # Load appropriate CAG knowledge based on total program duration
-    system_prompt = _get_system_prompt(total_weeks)
+    # Feature flag: Use RAG (dynamic retrieval) or CAG (static knowledge)
+    use_rag = os.getenv("USE_RAG", "false").lower() == "true" and RAG_AVAILABLE
+
+    if use_rag:
+        # Build RAG query from parameters
+        rag_query = _build_rag_query(params, week_specs)
+        print(f"[JOB {job_id}] 🔍 RAG MODE: Retrieving knowledge for query: {rag_query}")
+
+        # Retrieve relevant knowledge via RAG
+        try:
+            rag_context = await retrieve_for_program_generation(
+                query=rag_query,
+                top_k=10,
+                use_reranker=True,
+                max_tokens=2000
+            )
+            print(f"[JOB {job_id}] ✅ RAG retrieval successful (~{len(rag_context)//4} tokens)")
+            system_prompt = _build_system_prompt_with_rag(rag_context)
+        except Exception as e:
+            print(f"[JOB {job_id}] ⚠️  RAG retrieval failed: {e}")
+            print(f"[JOB {job_id}] ↩️  Falling back to CAG")
+            system_prompt = _get_system_prompt(total_weeks)
+    else:
+        # Use traditional CAG approach
+        system_prompt = _get_system_prompt(total_weeks)
 
     # User prompt - optimized based on program duration
     user_prompt = _build_user_prompt(
@@ -578,6 +610,24 @@ async def _generate_program_batch(
         print(f"[JOB {job_id}] 🚀 CACHE HIT: {cached_tokens} tokens cached (50% cost savings!)")
     else:
         print(f"[JOB {job_id}] 💾 Cache miss - prompt will be cached for next batch")
+
+    # Log to session
+    from core.session_logger import SessionLogger
+    session_logger = SessionLogger.get_instance()
+
+    session_logger.log_llm_call(
+        component="program_generation",
+        model=model,
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        cached_tokens=cached_tokens,
+        details={
+            "batch_num": batch_num + 1,
+            "weeks": f"{start_week}-{end_week}",
+            "duration_seconds": elapsed,
+            "job_id": job_id
+        }
+    )
 
     return response.choices[0].message.parsed
 
@@ -769,6 +819,161 @@ Generate programs that are challenging but achievable, progressive, scientifical
         print(f"[PROMPT] ⚠️  Error loading CAG knowledge: {e}")
         print("[PROMPT] Using base prompt only")
         return base_prompt
+
+
+def _build_rag_query(params: dict, week_specs: list) -> str:
+    """
+    Build RAG search query from program parameters
+
+    Args:
+        params: Program parameters dictionary
+        week_specs: List of week specifications
+
+    Returns:
+        Search query string for RAG retrieval
+    """
+    goal = params.get("goal_category", "strength").lower()
+    level = params.get("fitness_level", "intermediate").lower()
+    days = params.get("days_per_week", 3)
+
+    # Extract unique phases
+    phases = list(set(spec["phase"] for spec in week_specs))
+
+    # Build base query
+    query = f"{level} {goal} training program {days} days per week"
+
+    # Add periodization info if multiple weeks
+    if len(week_specs) > 1 and len(phases) > 1:
+        query += f" periodization with {' and '.join(phases).lower()} phases"
+
+    # Add VBT if available
+    if params.get("has_vbt_capability"):
+        query += " velocity-based training"
+
+    # Add injury considerations
+    injury = params.get("injury_history", "").lower()
+    if injury and injury != "none":
+        query += f" with {injury} injury considerations"
+
+    # Add sport specificity
+    sport = params.get("sport_specificity", "").lower()
+    if sport and sport != "none" and sport != "general fitness":
+        query += f" for {sport}"
+
+    return query
+
+
+def _build_system_prompt_with_rag(rag_context: str) -> str:
+    """
+    Build system prompt with RAG-retrieved context
+
+    Args:
+        rag_context: Retrieved context from RAG system
+
+    Returns:
+        Complete system prompt
+    """
+    # Static base prompt (always included)
+    base_prompt = """# Your Role
+
+You are a specialized program generation AI with access to evidence-based strength & conditioning knowledge retrieved from a comprehensive database.
+
+**Task:** Create barbell-only training programs customized to user inputs.
+
+# Critical Constraints
+
+## Equipment
+* **Barbell only:** Olympic barbell, weight plates, squat rack with safety bars, adjustable bench
+* Optional: velocity tracking device (if has_vbt_capability = true)
+* **Forbidden:** dumbbells, cables, machines, specialized equipment
+
+## Exercise Selection Rules
+* Verify each exercise exists in the barbell exercise library (70+ exercises)
+* **Volume distribution:** Compound movements first (60-70%), isolation second (30-40%)
+* Safety notes for high-risk lifts (squat, bench, Olympic lifts)
+* Substitute exercises based on injury_history
+* Adjust for age/sex and sport specificity
+* Pull-ups/chin-ups **only** if user has access
+
+# Volume & Session Guidelines
+
+## By Training Level
+| Level        | Total Weekly Sets | Per Muscle | Frequency                        | Session Duration |
+| ------------ | ----------------- | ---------- | -------------------------------- | ---------------- |
+| Beginner     | 40-60             | 6-12       | 2-3 full body                    | 45-60 min        |
+| Intermediate | 60-100            | 10-20      | 3-5 (upper/lower or PPL)         | 60-75 min        |
+| Advanced     | 80-140+           | 14-25+     | 4-6 (body part splits or blocks) | 60-90 min        |
+
+## By Training Goal
+* **Hypertrophy:** Chest 12-20, Back 14-22, Quads 12-18, Hamstrings 10-16, Shoulders 12-18, Biceps 8-14, Triceps 8-14 sets/week
+* **Strength:** Main lifts 8-15 sets/week, accessories 50% of main lift volume
+* **Power:** Olympic lifts/power work 8-15 sets/week, supporting strength 8-12 sets/lift
+* **Athletic Performance:** 2-3 strength sessions + sport practice, focus on transfer exercises and injury prevention
+
+## Session Duration Adjustments
+* **≤45 min:** Essential compounds only, minimal isolation, supersets/circuits for efficiency
+* **60 min:** Full program structure: main lifts + accessories + isolation, standard rest
+* **75-90 min:** Extended warm-ups, additional accessory volume, weak point specialization, longer rest
+
+# Rep Ranges & Intensity
+* **Hypertrophy:** 6-20 reps (6-8, 8-12, 12-15, 15-20)
+* **Strength:** 1-6 reps @ 80-95% 1RM
+* **Power:** 1-5 reps explosive @ 50-85% 1RM
+* **Athletic Performance:** Mix based on sport demands
+
+## RIR (Reps in Reserve) by Level
+* Beginner: 2-4 RIR
+* Intermediate: 1-3 RIR (main lifts 2-3, accessories 1-2)
+* Advanced: 0-2 RIR
+
+## Rest Periods
+* Strength/Power: 3-5 min
+* Hypertrophy compounds: 2-3 min
+* Hypertrophy isolation: 1.5-2 min
+* Time-constrained sessions: 90-120 sec (supersets/circuits)
+
+# Velocity-Based Training (VBT) - CRITICAL
+
+## VBT Implementation Rules
+1. **Only apply VBT if:** has_vbt_capability = true AND (goal = power OR Olympic lifts included)
+2. **Never use VBT for:** Hypertrophy-focused programs, beginners, isolation exercises
+3. **Velocity thresholds by movement type:**
+   - Olympic lifts (snatch/clean): >1.0 m/s (velocity_threshold: 1.0, velocity_min: 0.95)
+   - Olympic lifts (jerk): >1.2 m/s (velocity_threshold: 1.2, velocity_min: 1.1)
+   - Speed squats: 0.75-1.0 m/s (velocity_threshold: 0.85, velocity_min: 0.75)
+   - Speed bench: 0.5-0.75 m/s (velocity_threshold: 0.6, velocity_min: 0.5)
+   - Speed deadlifts: 0.6-0.9 m/s (velocity_threshold: 0.75, velocity_min: 0.65)
+4. **Autoregulation protocol:**
+   - If avg velocity >= threshold: add 2.5-5% load next session
+   - If avg velocity < velocity_min: reduce load 5-10% or end set early
+5. **Set termination rule:** "Stop set when velocity drops >10% from first rep"
+6. **VBT notes in set.notes:** Include instructions like "Target 1.0 m/s. Stop if velocity drops below 0.95 m/s"
+
+## VBT vs Non-VBT
+- **Power WITHOUT VBT:** Use % 1RM and RIR (e.g., 3x3 @ 70% 1RM, 2 RIR)
+- **Power WITH VBT:** Use velocity thresholds + autoregulation (e.g., 3x3 @ load that produces 1.0 m/s, stop if drops to 0.95 m/s)
+- **Strength WITH VBT:** Optional - can use velocity zones for autoregulation but not required
+- **Hypertrophy:** Never use VBT (not the right tool for muscle growth)
+
+# Common Mistakes to AVOID
+❌ Using forbidden equipment (dumbbells, cables, machines)
+❌ Ignoring injury/age/sport adjustments
+❌ Improper volume for level
+❌ Missing deloads
+❌ Vague progression (must give specific plan like "+5lbs per week")
+❌ Push/pull imbalance (should be ~1:1)
+❌ Missing safety notes for squat/bench/Olympic lifts
+❌ Inappropriate RIR or rep ranges for goal
+❌ Using VBT incorrectly (e.g., for hypertrophy or beginners)
+❌ Not respecting session_duration constraints
+
+Generate programs that are challenging but achievable, progressive, scientifically sound, and safe."""
+
+    # Dynamic RAG context (retrieved based on query)
+    prompt = base_prompt + "\n\n" + "="*80 + "\n# RETRIEVED TRAINING KNOWLEDGE\n" + "="*80 + "\n\n"
+    prompt += rag_context + "\n\n"
+
+    return prompt
 
 
 def _save_program_to_db(db, user_id: str, program_data: dict) -> str:

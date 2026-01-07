@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.session_manager import SessionManager
 from core.ipc_communication import IPCServer
+from core.session_logger import SessionLogger
 from db import init_db, get_db
 from db.models import User
 from agents.console_launcher import run_console_voice_onboarding
@@ -36,6 +37,7 @@ class NowvaApp:
 
     def __init__(self):
         self.session_manager = SessionManager()
+        self.session_logger = SessionLogger.get_instance()
         self.ipc_server = None
         self.pose_process = None
         self.current_user = None
@@ -232,6 +234,10 @@ class NowvaApp:
 
     async def run(self):
         """Main application loop with voice agent coordination"""
+        # Start session logging
+        self.session_logger.start_session()
+        self.session_logger.log_system_event("app_started")
+
         print("\n" + "="*60)
         print("NOWVA - AI-Powered Smart Squat Rack")
         print("="*60)
@@ -334,6 +340,10 @@ class NowvaApp:
                 # Detect mode changes
                 if current_mode != last_mode:
                     print(f"\n[STATE CHANGE] {last_mode} → {current_mode}")
+                    self.session_logger.log_system_event("mode_change", {
+                        "from_mode": last_mode,
+                        "to_mode": current_mode
+                    })
                     last_mode = current_mode
 
                 # Handle workout mode
@@ -413,6 +423,14 @@ class NowvaApp:
         if self.ipc_server:
             print("Stopping IPC server...")
             self.ipc_server.stop()
+
+        # End session and generate summary
+        self.session_logger.log_system_event("app_shutdown")
+        summary = self.session_logger.end_session()
+
+        # Print summary
+        print("\n" + summary)
+        print(f"\nSession log saved to: {self.session_logger.get_log_path()}")
 
         print("\nGoodbye!")
 

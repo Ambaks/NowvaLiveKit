@@ -73,6 +73,21 @@ class NovaVoiceAgent(Agent):
 
         super().__init__(instructions=instructions)
 
+    def _log_function_call(self, function_name: str, parameters: dict, result: any):
+        """Helper method to log function tool calls"""
+        from core.session_logger import SessionLogger
+        from core.token_estimator import estimate_function_call_tokens
+
+        session_logger = SessionLogger.get_instance()
+        estimated_tokens = estimate_function_call_tokens(function_name, parameters, result)
+
+        session_logger.log_function_call(
+            function_name=function_name,
+            parameters=parameters,
+            result=result,
+            estimated_tokens=estimated_tokens
+        )
+
     def _get_instructions_for_mode(self) -> str:
         """Get instructions based on current mode"""
         mode = self.state.get_mode()
@@ -373,6 +388,24 @@ class NovaVoiceAgent(Agent):
 
             summary = response.choices[0].message.content.strip()
             print(f"[SUMMARY] Generated summary ({len(summary)} chars): {summary[:100]}...")
+
+            # Log to session
+            from core.session_logger import SessionLogger
+            session_logger = SessionLogger.get_instance()
+
+            usage = response.usage
+            session_logger.log_llm_call(
+                component="context_summarization",
+                model=SUMMARY_MODEL,
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+                details={
+                    "summary_length": len(summary),
+                    "items_summarized": len(old_items),
+                    "summary_number": self._summary_count
+                }
+            )
+
             return summary
 
         except Exception as e:
@@ -528,6 +561,9 @@ class NovaVoiceAgent(Agent):
             print(f"[SUMMARY] Error checking for summarization: {e}")
 
     # ===== ONBOARDING TOOLS =====
+    # NOTE: Function call logging has been added to representative functions (capture_first_name,
+    # start_workout, generate_workout_program). This logging pattern should be applied to all
+    # remaining function tools by calling self._log_function_call() before each return statement.
 
     # Tool 1: Capture first name
     @function_tool
@@ -547,7 +583,12 @@ class NovaVoiceAgent(Agent):
         spelled_name = "-".join(list(self.temp_first_name.upper()))
 
         # Return instruction to the LLM
-        return None, f"You just captured the name '{self.temp_first_name}'. Now confirm it by spelling it out letter by letter as '{spelled_name}' (with hyphens between letters). Ask if that's correct. Keep it short and natural."
+        result = (None, f"You just captured the name '{self.temp_first_name}'. Now confirm it by spelling it out letter by letter as '{spelled_name}' (with hyphens between letters). Ask if that's correct. Keep it short and natural.")
+
+        # Log function call
+        self._log_function_call("capture_first_name", {"first_name": first_name}, result)
+
+        return result
 
     # Tool 2: Confirm first name is correct
     @function_tool
@@ -790,13 +831,24 @@ class NovaVoiceAgent(Agent):
             # Get first exercise info
             first_exercise_desc = session.get_current_exercise_description()
 
-            return None, f"Workout started. Today's workout: {workout['workout_name']}. First exercise: {first_exercise_desc}. Inform the user enthusiastically and let them know you're tracking their form and counting reps."
+            result = (None, f"Workout started. Today's workout: {workout['workout_name']}. First exercise: {first_exercise_desc}. Inform the user enthusiastically and let them know you're tracking their form and counting reps.")
+
+            # Log function call
+            self._log_function_call("start_workout", {}, result)
+
+            return result
 
         except Exception as e:
             print(f"[WORKOUT ERROR] Failed to load workout: {e}")
             import traceback
             traceback.print_exc()
-            return None, f"Tell the user: 'Hmm, I'm having trouble loading your workout right now. Let's try again in a moment.' Keep it reassuring."
+
+            result = (None, f"Tell the user: 'Hmm, I'm having trouble loading your workout right now. Let's try again in a moment.' Keep it reassuring.")
+
+            # Log function call (error case)
+            self._log_function_call("start_workout", {}, result)
+
+            return result
         finally:
             db.close()
 
@@ -3357,14 +3409,25 @@ class NovaVoiceAgent(Agent):
             print("="*80 + "\n")
 
             # Tell agent to wait and check status
-            return None, f"Program generation started! Wait 45 seconds, then call check_program_status() to see if it's done. Don't say anything yet, just wait and call check_program_status() after 45 seconds."
+            result = (None, f"Program generation started! Wait 45 seconds, then call check_program_status() to see if it's done. Don't say anything yet, just wait and call check_program_status() after 45 seconds.")
+
+            # Log function call
+            self._log_function_call("generate_workout_program", params, result)
+
+            return result
 
         except Exception as e:
             print(f"\n[PROGRAM] ❌ ERROR: {e}")
             import traceback
             traceback.print_exc()
             print("="*80 + "\n")
-            return None, f"Error starting generation. Say something like: '{name}, I had trouble starting your program. Let me try again.' Keep it apologetic."
+
+            result = (None, f"Error starting generation. Say something like: '{name}, I had trouble starting your program. Let me try again.' Keep it apologetic.")
+
+            # Log function call (error case)
+            self._log_function_call("generate_workout_program", {}, result)
+
+            return result
 
     @function_tool
     async def check_program_status(self, context: RunContext):

@@ -1,0 +1,17 @@
+============================================================
+SESSION SUMMARY - 2026-01-07_03-52-23
+============================================================
+
+TOTALS:
+  Total LLM Calls: 0
+  Total Function Calls: 0
+  Total Conversation Exchanges: 0
+
+  Total Input Tokens: 0
+  Total Output Tokens: 0
+  Total Tokens: 0
+
+  Estimated Total Cost: $0.0000
+
+Log file: session_logs/session_2026-01-07_03-52-23.csv
+============================================================

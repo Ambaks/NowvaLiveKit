@@ -21,7 +21,7 @@ from db.progress_utils import (
     get_recent_activity_summary,
     get_workout_completion_rate
 )
-from api.schemas.workout_schemas import (
+from ..schemas.workout_schemas import (
     SetCompletionRequest,
     SetCompletionResponse,
     GetTodaysWorkoutResponse,

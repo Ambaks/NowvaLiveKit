@@ -4,7 +4,7 @@ Main application entry point for program generation API
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import programs, health
+from .routers import programs, health
 
 app = FastAPI(
     title="Nowva Program Generator API",

@@ -103,6 +103,20 @@ Determine the minimal scope needed to implement this change. Return JSON only.""
 
         result = json.loads(response.choices[0].message.content)
         print(f"[SCOPE] LLM detected: {result['scope']} - {result['reason']}")
+
+        # Log to session
+        from core.session_logger import SessionLogger
+        session_logger = SessionLogger.get_instance()
+
+        usage = response.usage
+        session_logger.log_llm_call(
+            component="program_update_scope_detection",
+            model="gpt-4o-mini",
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
+            details={"scope": result.get("scope"), "reason": result.get("reason")}
+        )
+
         return result
 
     except Exception as e:
@@ -615,6 +629,23 @@ Return JSON validation result."""
         else:
             print(f"[VALIDATION] ✅ Safe change, proceeding")
 
+        # Log to session
+        from core.session_logger import SessionLogger
+        session_logger = SessionLogger.get_instance()
+
+        usage = response.usage
+        session_logger.log_llm_call(
+            component="program_update_validation",
+            model="gpt-4o-mini",
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
+            details={
+                "is_risky": validation_result.get("is_risky"),
+                "warning": validation_result.get("warning"),
+                "alternative": validation_result.get("alternative")
+            }
+        )
+
         return validation_result
 
     except Exception as e:
@@ -753,6 +784,20 @@ Return the complete updated week in this JSON structure:
     updated_week = json.loads(result_text)
 
     print(f"[WEEK REGEN {job_id}] ✅ Week {week_number} regenerated")
+
+    # Log to session
+    from core.session_logger import SessionLogger
+    session_logger = SessionLogger.get_instance()
+
+    usage = response.usage
+    session_logger.log_llm_call(
+        component="program_update_week_regeneration",
+        model="gpt-4o",
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        details={"week_number": week_number, "job_id": job_id}
+    )
+
     return updated_week
 
 
@@ -847,6 +892,20 @@ Return the complete updated workout:
     updated_workout = json.loads(result_text)
 
     print(f"[WORKOUT REGEN {job_id}] ✅ Week {week_number}, Day {day_number} regenerated")
+
+    # Log to session
+    from core.session_logger import SessionLogger
+    session_logger = SessionLogger.get_instance()
+
+    usage = response.usage
+    session_logger.log_llm_call(
+        component="program_update_workout_regeneration",
+        model="gpt-4o",
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        details={"week_number": week_number, "day_number": day_number, "job_id": job_id}
+    )
+
     return updated_workout
 
 
@@ -1074,6 +1133,19 @@ Return the complete updated program in JSON format with this structure:
     updated_program = json.loads(result_text)
 
     print(f"[UPDATE JOB {job_id}] ✅ LLM returned updated program")
+
+    # Log to session
+    from core.session_logger import SessionLogger
+    session_logger = SessionLogger.get_instance()
+
+    usage = response.usage
+    session_logger.log_llm_call(
+        component="program_update_full_regeneration",
+        model="gpt-4o",
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        details={"job_id": job_id, "change_request_summary": change_request[:100]}
+    )
 
     return updated_program
 

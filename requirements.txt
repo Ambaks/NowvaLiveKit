@@ -52,6 +52,16 @@ fastapi>=0.109.0                       # Web framework
 uvicorn[standard]>=0.27.0              # ASGI server
 httpx>=0.26.0                          # Async HTTP client (for voice agent → FastAPI)
 openai>=1.0.0                          # OpenAI API client
+tiktoken>=0.5.0                        # Token counting for OpenAI models
+
+# =============================================================================
+# CONTEXTUAL RAG SYSTEM
+# =============================================================================
+chromadb>=0.4.24                       # Vector database
+voyageai>=0.2.0                        # Voyage AI embeddings
+cohere>=5.0.0                          # Cohere reranking
+rank-bm25>=0.2.2                       # BM25 lexical search
+anthropic>=0.18.0                      # Claude API for contextualization
 
 # =============================================================================
 # UTILITIES

@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from uuid import UUID
 
-from api.models.requests import ProgramGenerationRequest, ProgramUpdateRequest
-from api.models.responses import (
+from ..models.requests import ProgramGenerationRequest, ProgramUpdateRequest
+from ..models.responses import (
     JobResponse,
     JobStatusResponse,
     ProgramResponse,
@@ -15,13 +15,13 @@ from api.models.responses import (
     ProgramSummary,
     UpdateStatusResponse
 )
-from api.services.program_generator_v2 import generate_program_background  # V2: Structured outputs
-from api.services.program_updater import (
+from ..services.program_generator_v2 import generate_program_background  # V2: Structured outputs
+from ..services.program_updater import (
     update_program_background,
     validate_program_change_with_llm,
     _get_current_program_as_json
 )
-from api.services.job_manager import create_job, get_job_status
+from ..services.job_manager import create_job, get_job_status
 from db.database import get_db
 from db.models import UserGeneratedProgram, User
 from db.program_utils import get_program_summary_list

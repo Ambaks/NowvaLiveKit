@@ -1,0 +1,5 @@
+timestamp,event_type,component,model,input_tokens,output_tokens,total_tokens,cost_usd,details_json,transcript_user,transcript_agent
+2026-01-07T03:52:23.057855,system,app,,0,0,0,0.0,"{""event"": ""app_started""}",,
+2026-01-07T03:52:48.747526,system,app,,0,0,0,0.0,"{""event"": ""mode_change"", ""from_mode"": ""main_menu"", ""to_mode"": ""program_creation""}",,
+2026-01-07T03:57:18.895785,system,app,,0,0,0,0.0,"{""event"": ""app_shutdown""}",,
+2026-01-07T03:57:18.895901,system,app,,0,0,0,0.0,"{""event"": ""session_end""}",,
