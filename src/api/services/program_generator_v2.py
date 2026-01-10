@@ -35,6 +35,96 @@ except ImportError:
     print("⚠️  RAG module not available. Using CAG only.")
 
 
+def _save_prompt_log(
+    job_id: str,
+    batch_num: int,
+    system_prompt: str,
+    user_prompt: str,
+    rag_context: str = None,
+    rag_query: str = None
+):
+    """
+    Save prompts to disk for debugging and analysis
+
+    Args:
+        job_id: Generation job ID
+        batch_num: Batch number (1, 2, 3...)
+        system_prompt: Full system prompt
+        user_prompt: User prompt
+        rag_context: RAG retrieved context (if using RAG)
+        rag_query: RAG search query (if using RAG)
+    """
+    # Check if logging is enabled
+    if os.getenv("ENABLE_PROMPT_LOGGING", "false").lower() != "true":
+        return
+
+    # Create logs directory
+    log_dir = Path("program_generation_logs")
+    log_dir.mkdir(exist_ok=True)
+
+    # Create filename with job_id and batch number
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"prompts_{job_id}_batch{batch_num}_{timestamp}.txt"
+
+    # Build log content
+    log_content = []
+    log_content.append("=" * 80)
+    log_content.append(f"PROGRAM GENERATION PROMPT LOG")
+    log_content.append("=" * 80)
+    log_content.append(f"Job ID: {job_id}")
+    log_content.append(f"Batch: {batch_num}")
+    log_content.append(f"Timestamp: {timestamp}")
+    log_content.append("=" * 80)
+    log_content.append("")
+
+    # RAG info if available
+    if rag_query or rag_context:
+        log_content.append("=" * 80)
+        log_content.append("RAG RETRIEVAL")
+        log_content.append("=" * 80)
+        if rag_query:
+            log_content.append(f"Query: {rag_query}")
+            log_content.append("")
+        if rag_context:
+            log_content.append(f"Retrieved Context ({len(rag_context)} chars, ~{len(rag_context)//4} tokens):")
+            log_content.append("-" * 80)
+            log_content.append(rag_context)
+            log_content.append("-" * 80)
+        log_content.append("")
+
+    # System prompt
+    log_content.append("=" * 80)
+    log_content.append("SYSTEM PROMPT")
+    log_content.append("=" * 80)
+    log_content.append(f"Length: {len(system_prompt)} chars (~{len(system_prompt)//4} tokens)")
+    log_content.append("-" * 80)
+    log_content.append(system_prompt)
+    log_content.append("-" * 80)
+    log_content.append("")
+
+    # User prompt
+    log_content.append("=" * 80)
+    log_content.append("USER PROMPT")
+    log_content.append("=" * 80)
+    log_content.append(f"Length: {len(user_prompt)} chars (~{len(user_prompt)//4} tokens)")
+    log_content.append("-" * 80)
+    log_content.append(user_prompt)
+    log_content.append("-" * 80)
+    log_content.append("")
+
+    # Total
+    total_chars = len(system_prompt) + len(user_prompt)
+    log_content.append("=" * 80)
+    log_content.append(f"TOTAL: {total_chars} chars (~{total_chars//4} tokens)")
+    log_content.append("=" * 80)
+
+    # Write to file
+    with open(log_file, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(log_content))
+
+    print(f"[JOB {job_id}] 📝 Saved prompt log to: {log_file}")
+
+
 async def generate_program_background(job_id: str, user_id: str, params: dict):
     """
     Background task that generates a workout program using Cache-Augmented Generation (CAG).
@@ -89,6 +179,41 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         print(f"[JOB {job_id}] 🏋️ Generating {duration_weeks} weeks in {num_batches} batch(es) of up to {BATCH_SIZE} weeks...")
         print(f"[JOB {job_id}] 📦 Batch size: {BATCH_SIZE} (optimized for {total_workouts} total workouts: {duration_weeks} weeks × {workouts_per_week} days/week)")
 
+        # =====================================================================
+        # ONE-TIME RAG RETRIEVAL (before all batches for caching efficiency)
+        # =====================================================================
+        # Feature flag: Use RAG (dynamic retrieval) or CAG (static knowledge)
+        use_rag = os.getenv("USE_RAG", "false").lower() == "true" and RAG_AVAILABLE
+
+        system_prompt = None
+        rag_context = None
+        rag_query = None
+
+        if use_rag:
+            # Build RAG query from overall program parameters (NOT batch-specific)
+            rag_query = _build_rag_query(params, [])  # Empty week_specs for consistency
+            print(f"[JOB {job_id}] 🔍 RAG MODE: One-time retrieval for query: {rag_query}")
+
+            try:
+                rag_context = await retrieve_for_program_generation(
+                    query=rag_query,
+                    top_k=10,
+                    use_reranker=True,
+                    max_tokens=2000
+                )
+                print(f"[JOB {job_id}] ✅ RAG retrieval successful (~{len(rag_context)//4} tokens)")
+                print(f"[JOB {job_id}] 🔒 This RAG context will be reused for all {num_batches} batches (enables caching)")
+                system_prompt = _build_system_prompt_with_rag(rag_context)
+            except Exception as e:
+                print(f"[JOB {job_id}] ⚠️  RAG retrieval failed: {e}")
+                print(f"[JOB {job_id}] ↩️  Falling back to CAG")
+                system_prompt = _get_system_prompt(duration_weeks)
+                rag_query = None
+        else:
+            # Use traditional CAG approach
+            print(f"[JOB {job_id}] 📚 CAG MODE: Using static knowledge base")
+            system_prompt = _get_system_prompt(duration_weeks)
+
         # Timing tracking
         batch_times = []
         generation_start_time = time.time()
@@ -120,7 +245,10 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
                     end_week=end_week,
                     total_weeks=duration_weeks,
                     params=params,
-                    previous_weeks=all_weeks
+                    previous_weeks=all_weeks,
+                    system_prompt=system_prompt,  # Reuse same prompt for caching
+                    rag_context=rag_context,       # For logging only
+                    rag_query=rag_query            # For logging only
                 )
                 batch_elapsed = time.time() - batch_start
                 batch_times.append(batch_elapsed)
@@ -247,6 +375,176 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         db.close()
 
 
+def _generate_weeks_summary(previous_weeks: list, params: dict) -> str:
+    """
+    Generate TOON-optimized summary of previous weeks for context passing.
+
+    TOON Format: Token-Optimized Object Notation - compact, human-readable,
+    LLM-friendly format that reduces token usage by 70-75% vs JSON.
+
+    Args:
+        previous_weeks: List of WeekSchema objects from previous batches
+        params: User parameters (for split pattern context)
+
+    Returns:
+        Compact formatted summary string
+    """
+    if not previous_weeks:
+        return ""
+
+    # Track muscle groups across weeks
+    muscle_groups = ["Quads", "Hamstrings", "Glutes", "Chest", "Back", "Shoulders", "Triceps", "Biceps"]
+    muscle_abbrev = {"Quads": "Q", "Hamstrings": "H", "Glutes": "G", "Chest": "C",
+                     "Back": "B", "Shoulders": "S", "Triceps": "T", "Biceps": "Bi"}
+
+    summary = "=== PREVIOUS WEEKS CONTEXT ===\n\n"
+
+    # Section 1: Workout Details (compact notation)
+    summary += "WORKOUTS (Format: Exercise Sets×Reps@%1RM):\n"
+
+    weekly_volumes = {}
+    weekly_intensities = {}
+    exercise_variants = {}
+    total_sets_per_week = {}
+
+    for week in previous_weeks:
+        week_num = week.week_number
+        weekly_volumes[week_num] = {mg: 0 for mg in muscle_groups}
+        weekly_intensities[week_num] = []
+        total_sets_per_week[week_num] = 0
+
+        for workout in week.workouts:
+            workout_line = f"W{week_num}.D{workout.day_number}: "
+            exercises_str = []
+            workout_total_sets = 0
+
+            for exercise in workout.exercises:
+                # Track exercise variants
+                ex_name = exercise.exercise_name
+                if ex_name not in exercise_variants:
+                    exercise_variants[ex_name] = set()
+                exercise_variants[ex_name].add(week_num)
+
+                # Count sets for this exercise
+                num_sets = len(exercise.sets)
+                workout_total_sets += num_sets
+
+                # Get representative set (first set)
+                first_set = exercise.sets[0]
+                reps = first_set.reps
+                intensity = int(first_set.intensity_percent)
+
+                # Track intensity
+                weekly_intensities[week_num].append(intensity)
+
+                # Track muscle group volume
+                mg = exercise.muscle_group
+                if mg in weekly_volumes[week_num]:
+                    weekly_volumes[week_num][mg] += num_sets
+
+                # Shorten exercise name
+                ex_short = ex_name.replace("Barbell ", "").replace("Dumbbell ", "")
+                if len(ex_short) > 15:
+                    # Smart abbreviations
+                    ex_short = ex_short.replace("Back Squat", "Squat") \
+                                       .replace("Bench Press", "Bench") \
+                                       .replace("Romanian Deadlift", "RDL") \
+                                       .replace("Overhead Press", "OHP") \
+                                       .replace("Front Squat", "F.Squat") \
+                                       .replace("Incline ", "Inc.") \
+                                       .replace("Close-Grip ", "CG.") \
+                                       .replace("Tricep ", "Tri.") \
+                                       .replace("Extension", "Ext")
+
+                exercises_str.append(f"{ex_short} {num_sets}×{reps}@{intensity}%")
+
+            total_sets_per_week[week_num] += workout_total_sets
+            workout_line += ", ".join(exercises_str) + f" ({workout_total_sets}s)"
+            summary += workout_line + "\n"
+
+        summary += "\n"
+
+    # Section 2: Muscle Volume per Week
+    summary += "MUSCLE VOLUME/WEEK (sets):\n"
+    for week_num in sorted(weekly_volumes.keys()):
+        volumes = weekly_volumes[week_num]
+
+        # Group by body region
+        lower = f"Q{volumes['Quads']} H{volumes['Hamstrings']} G{volumes['Glutes']}"
+        upper_push = f"C{volumes['Chest']}"
+        upper_pull = f"B{volumes['Back']}"
+        shoulders = f"S{volumes['Shoulders']}"
+        arms = f"T{volumes['Triceps']} Bi{volumes['Biceps']}"
+
+        total = sum(volumes.values())
+
+        # Detect if deload week
+        is_deload = total < total_sets_per_week.get(week_num - 1, total) * 0.75
+        deload_note = " (DELOAD)" if is_deload else ""
+
+        summary += f"W{week_num}: {lower} | {upper_push} {upper_pull} | {shoulders} {arms} = {total} total{deload_note}\n"
+
+    summary += "\n"
+
+    # Section 3: Progression Patterns
+    summary += "PROGRESSION:\n"
+
+    # Volume progression
+    week_nums = sorted(total_sets_per_week.keys())
+    if len(week_nums) >= 2:
+        volume_changes = []
+        for i in range(1, len(week_nums)):
+            prev_vol = total_sets_per_week[week_nums[i-1]]
+            curr_vol = total_sets_per_week[week_nums[i]]
+            if prev_vol > 0:
+                pct_change = ((curr_vol - prev_vol) / prev_vol) * 100
+                volume_changes.append(f"W{week_nums[i-1]}→W{week_nums[i]} {pct_change:+.0f}%")
+        summary += f"- Volume: {', '.join(volume_changes)}\n"
+
+    # Intensity progression
+    if weekly_intensities:
+        intensity_ranges = []
+        for week_num in sorted(weekly_intensities.keys()):
+            intensities = weekly_intensities[week_num]
+            if intensities:
+                min_int = min(intensities)
+                max_int = max(intensities)
+                avg_int = sum(intensities) // len(intensities)
+                intensity_ranges.append(f"W{week_num}:{min_int}-{max_int}%(avg {avg_int}%)")
+        summary += f"- Intensity: {', '.join(intensity_ranges)}\n"
+
+    # Exercise variants used (group similar exercises)
+    if exercise_variants:
+        # Group by base movement
+        squat_vars = [ex for ex in exercise_variants.keys() if "Squat" in ex]
+        bench_vars = [ex for ex in exercise_variants.keys() if "Bench" in ex]
+        dead_vars = [ex for ex in exercise_variants.keys() if "Dead" in ex or "RDL" in ex]
+
+        if squat_vars:
+            squat_summary = ", ".join([ex.replace("Barbell ", "").replace("Back ", "")
+                                      for ex in squat_vars[:3]])  # Limit to 3
+            summary += f"- Squat variants: {squat_summary}\n"
+
+        if bench_vars:
+            bench_summary = ", ".join([ex.replace("Barbell ", "").replace("Press", "")
+                                      for ex in bench_vars[:3]])
+            summary += f"- Bench variants: {bench_summary}\n"
+
+        if dead_vars:
+            dead_summary = ", ".join([ex.replace("Barbell ", "") for ex in dead_vars[:3]])
+            summary += f"- Deadlift variants: {dead_summary}\n"
+
+    # Training split
+    if previous_weeks:
+        first_week = previous_weeks[0]
+        workout_names = [w.name for w in first_week.workouts]
+        summary += f"- Split pattern: {', '.join(workout_names)}\n"
+
+    summary += "\n"
+
+    return summary
+
+
 def _build_user_prompt(
     total_weeks: int,
     start_week: int,
@@ -350,10 +648,23 @@ def _build_user_prompt(
 
 """
 
-    # Multi-batch note
-    if batch_num > 0:
+    # Multi-batch context with TOON-formatted summary
+    if batch_num > 0 and previous_weeks:
         user_prompt += f"""**Note:** This is batch {batch_num + 1} of a multi-batch program. {len(previous_weeks)} weeks already generated.
 Keep the program metadata consistent with the overall {total_weeks}-week program design.
+
+"""
+        # Add TOON-formatted summary of previous weeks
+        weeks_summary = _generate_weeks_summary(previous_weeks, params)
+        user_prompt += weeks_summary
+
+        # Add instructions for using the context
+        user_prompt += """**Instructions for Using Previous Context:**
+1. Maintain progressive overload based on volume and intensity trends shown above
+2. Balance muscle group distribution to avoid overtraining specific areas
+3. Vary exercise selection - don't overuse the same movements from previous weeks
+4. Continue the established split pattern for consistency
+5. Ensure logical week-to-week progression in both intensity and volume
 
 """
 
@@ -382,65 +693,126 @@ Keep the program metadata consistent with the overall {total_weeks}-week program
     # Requirements - scaled by program length
     if is_short:
         # Simplified requirements for 1-2 week programs
+        goal_category = params.get('goal_category', '').lower()
+        goal_specific_requirements = ""
+
+        if goal_category == 'power':
+            goal_specific_requirements = """
+**CRITICAL POWER PROGRAM REQUIREMENTS (NON-NEGOTIABLE):**
+   - EVERY workout MUST include at least 1 Olympic lift (power clean, hang clean, clean & jerk, snatch, push press, push jerk)
+   - EVERY workout MUST include minimum 2 plyometric exercises (box jumps, broad jumps, vertical jumps, depth jumps, bounds, hurdle hops)
+   - Plyometric volume: 80-140 foot contacts per week (example: Box Jumps 4x5, Broad Jumps 3x3, Depth Jumps 3x3 per session)
+"""
+        elif goal_category == 'hypertrophy':
+            goal_specific_requirements = """
+**CRITICAL HYPERTROPHY PROGRAM REQUIREMENTS (NON-NEGOTIABLE):**
+   - Each day of the week MUST have DIFFERENT compound lifts (e.g., Day 1: Squat+Row, Day 2: Deadlift+Bench, Day 3: Front Squat+OHP)
+   - DO NOT program the same compounds (e.g., Back Squat + Bench Press) on multiple days - that's powerlifting, not hypertrophy
+   - Include variety in movement patterns: squat variations, hinge variations, horizontal/vertical push, horizontal/vertical pull
+   - Use multiple rep ranges across the week: 6-8, 8-12, 12-15, 15-20
+   - Accessories must vary across the week (no repeating same exercise twice in same week)
+   - Example CORRECT Day 1: Back Squat, Barbell Row, Barbell RDL, accessories
+   - Example CORRECT Day 2: Romanian Deadlift, Bench Press, accessories
+   - Example WRONG: Back Squat + Bench Press every single day
+"""
+
         user_prompt += f"""**Requirements:**
 1. Create exactly {params.get('days_per_week')} complete workouts per week
-2. Each workout: 4-6 exercises (keep it simple)
-3. Use ONLY barbell exercises
-4. Set appropriate RIR: Beginner 3-4, Intermediate 2-3, Advanced 1-2
-5. Structure workouts: main lifts first, accessories after
-6. Rest periods: 2-5 minutes depending on intensity
-
-**Exercise Selection (Keep Simple):**
-- Core lifts: Squat, bench, deadlift, row, overhead press
-- Accessories: RDL, curls, extensions, hip thrust
+2. Each workout: adjust the number of exercises based on the workout duration which is {params.get('session_duration')} minutes
+3. Use primarily barbell exercises. Plyometrics and bodyweight movements are always allowed (especially for power/athletic programs). DO NOT use dumbbells, cables, kettlebells, or bands unless user explicitly mentions having them in notes.{goal_specific_requirements}
+4. **Exercise selection:**
+   - Maximum 2 compound lifts per workout (squat/deadlift/bench/press/row/Olympic lift variations)
+   - Keep main compounds consistent throughout the program
+   - Vary accessories: Do NOT repeat the same accessory exercise twice in the same week (e.g., if Monday has barbell curls, Wednesday should have a different bicep exercise)
+5. Set appropriate RIR
+6. Structure workouts: main lifts first, accessories after
 
 Generate all {weeks_in_batch} week(s) now with complete workouts."""
 
     elif is_medium:
         # Moderate detail for 3-7 week programs
+        goal_category = params.get('goal_category', '').lower()
+        goal_specific_requirements = ""
+
+        if goal_category == 'power':
+            goal_specific_requirements = """
+
+**CRITICAL POWER PROGRAM REQUIREMENTS (NON-NEGOTIABLE):**
+   - EVERY workout MUST include at least 1 Olympic lift (power clean, hang clean, clean & jerk, snatch, push press, push jerk)
+   - EVERY workout MUST include minimum 2 plyometric exercises (box jumps, broad jumps, vertical jumps, depth jumps, bounds, hurdle hops)
+   - Plyometric volume: 80-140 foot contacts per week (example: Box Jumps 4x5, Broad Jumps 3x3, Depth Jumps 3x3 per session)
+"""
+        elif goal_category == 'hypertrophy':
+            goal_specific_requirements = """
+
+**CRITICAL HYPERTROPHY PROGRAM REQUIREMENTS (NON-NEGOTIABLE):**
+   - Each day of the week MUST have DIFFERENT compound lifts (e.g., Day 1: Squat+Row, Day 2: Deadlift+Bench, Day 3: Front Squat+OHP)
+   - DO NOT program the same compounds (e.g., Back Squat + Bench Press) on multiple days - that's powerlifting, not hypertrophy
+   - Include variety in movement patterns: squat variations, hinge variations, horizontal/vertical push, horizontal/vertical pull
+   - Use multiple rep ranges across the week: 6-8, 8-12, 12-15, 15-20
+   - Accessories must vary across the week (no repeating same exercise twice in same week)
+   - Example CORRECT Day 1: Back Squat, Barbell Row, Barbell RDL, accessories
+   - Example CORRECT Day 2: Romanian Deadlift, Bench Press, accessories
+   - Example WRONG: Back Squat + Bench Press every single day
+"""
+
         user_prompt += f"""**Requirements for Each Week:**
 1. Create exactly {params.get('days_per_week')} complete workouts
-2. Each workout: 4-8 exercises
-3. Use ONLY barbell exercises (+ bodyweight for pull-ups/dips if appropriate)
-4. Set intensity_percent for each set within the specified range
-5. Set appropriate RIR:
-   - Beginner: 2-3 RIR (conservative)
-   - Intermediate: 1-2 RIR (moderate)
-   - Advanced: 0-1 RIR (can approach failure)
-6. Structure workouts logically (main lifts first, accessories after)
-7. Balance muscle groups across the week
-
-**Exercise Selection:**
-- Lower: Squat, front squat, deadlift, RDL, split squat
-- Upper Push: Bench, incline bench, overhead press, close-grip bench
-- Upper Pull: Barbell row, Pendlay row
-- Accessories: Good mornings, hip thrust, curls, extensions
+2. Each workout: adjust the number of exercises based on the workout duration which is {params.get('session_duration')} minutes
+3. Use primarily barbell exercises. Plyometrics and bodyweight movements are always allowed (especially for power/athletic programs). DO NOT use dumbbells, cables, kettlebells, or bands unless user explicitly mentions having them in notes.{goal_specific_requirements}
+4. **Exercise selection:**
+   - Maximum 2 compound lifts per workout (squat/deadlift/bench/press/row/Olympic lift variations)
+   - Keep main compounds consistent throughout the program
+   - Vary accessories: Do NOT repeat the same accessory exercise twice in the same week (e.g., if Monday has barbell curls, Wednesday should have a different bicep exercise)
+   - Change accessories every 2-4 weeks for variety
+5. Set intensity_percent for each set within the specified range
+6. Set appropriate RIR
+7. Structure workouts logically (main lifts first, accessories after)
+8. Balance muscle groups across the week
 
 Generate all {weeks_in_batch} week(s) now with complete workouts for each week."""
 
     else:  # Long programs (8+ weeks)
         # Full detail for long programs
+        goal_category = params.get('goal_category', '').lower()
+        goal_specific_requirements = ""
+
+        if goal_category == 'power':
+            goal_specific_requirements = """
+
+**CRITICAL POWER PROGRAM REQUIREMENTS (NON-NEGOTIABLE):**
+   - EVERY workout MUST include at least 1 Olympic lift (power clean, hang clean, clean & jerk, snatch, push press, push jerk)
+   - EVERY workout MUST include minimum 2 plyometric exercises (box jumps, broad jumps, vertical jumps, depth jumps, bounds, hurdle hops)
+   - Plyometric volume: 80-140 foot contacts per week (example: Box Jumps 4x5, Broad Jumps 3x3, Depth Jumps 3x3 per session)
+"""
+        elif goal_category == 'hypertrophy':
+            goal_specific_requirements = """
+
+**CRITICAL HYPERTROPHY PROGRAM REQUIREMENTS (NON-NEGOTIABLE):**
+   - Each day of the week MUST have DIFFERENT compound lifts (e.g., Day 1: Squat+Row, Day 2: Deadlift+Bench, Day 3: Front Squat+OHP)
+   - DO NOT program the same compounds (e.g., Back Squat + Bench Press) on multiple days - that's powerlifting, not hypertrophy
+   - Include variety in movement patterns: squat variations, hinge variations, horizontal/vertical push, horizontal/vertical pull
+   - Use multiple rep ranges across the week: 6-8, 8-12, 12-15, 15-20
+   - Accessories must vary across the week (no repeating same exercise twice in same week)
+   - Example CORRECT Day 1: Back Squat, Barbell Row, Barbell RDL, accessories
+   - Example CORRECT Day 2: Romanian Deadlift, Bench Press, accessories
+   - Example WRONG: Back Squat + Bench Press every single day
+"""
+
         user_prompt += f"""**Requirements for Each Week:**
 1. Create exactly {params.get('days_per_week')} complete workouts
-2. Each workout should have 4-8 exercises
-3. Use ONLY barbell exercises (+ bodyweight for pull-ups/dips if appropriate)
-4. Set intensity_percent for each set within the specified range for that week
-5. Set appropriate RIR based on fitness level:
-   - Beginner: 2-3 RIR (conservative)
-   - Intermediate: 1-2 RIR (moderate)
-   - Advanced: 0-1 RIR (can approach failure)
-6. Structure workouts logically (main lifts first, accessories after)
-7. Balance muscle groups across the week
-8. Use appropriate rest periods:
-   - Strength sets (1-6 reps): 180-300 seconds
-   - Hypertrophy sets (6-12 reps): 90-180 seconds
-   - Accessory sets (12+ reps): 60-120 seconds
-
-**Exercise Selection Guidelines:**
-- Lower: Back squat, front squat, deadlift, RDL, Bulgarian split squat, hip thrust
-- Upper Push: Bench press, incline bench, overhead press, push press, close-grip bench
-- Upper Pull: Barbell row, weighted pull-ups
-- Olympic (for power): Clean, snatch, push jerk
+2. Each workout: adjust the number of exercises based on the workout duration which is {params.get('session_duration')} minutes
+3. Use primarily barbell exercises. Plyometrics and bodyweight movements are always allowed (especially for power/athletic programs). DO NOT use dumbbells, cables, kettlebells, or bands unless user explicitly mentions having them in notes.{goal_specific_requirements}
+4. **Exercise selection:**
+   - Maximum 2 compound lifts per workout (squat/deadlift/bench/press/row/Olympic lift variations)
+   - Keep main compounds consistent throughout the program (e.g., if Week 1 has back squat, keep it in subsequent weeks)
+   - Vary accessories: Do NOT repeat the same accessory exercise twice in the same week (e.g., if Monday has barbell curls, Wednesday should have a different bicep exercise)
+   - Change accessories every 2-4 weeks to prevent adaptation and maintain engagement
+5. Set intensity_percent for each set within the specified range for that week
+6. Set appropriate RIR
+7. Structure workouts logically (main lifts first, accessories after)
+8. Balance muscle groups across the week
+9. Use appropriate rest periods
 
 Generate all {weeks_in_batch} week(s) now with complete workouts for each week."""
 
@@ -454,7 +826,10 @@ async def _generate_program_batch(
     end_week: int,
     total_weeks: int,
     params: dict,
-    previous_weeks: list
+    previous_weeks: list,
+    system_prompt: str,
+    rag_context: str = None,
+    rag_query: str = None
 ) -> ProgramBatchSchema:
     """
     Generate a batch of up to 4 weeks using Cache-Augmented Generation (CAG).
@@ -472,6 +847,9 @@ async def _generate_program_batch(
         total_weeks: Total weeks in entire program
         params: User parameters
         previous_weeks: Previously generated weeks for context
+        system_prompt: Pre-built system prompt (same for all batches to enable caching)
+        rag_context: RAG context (for logging only, already in system_prompt)
+        rag_query: RAG query (for logging only)
 
     Returns:
         ProgramBatchSchema with metadata + 1-4 weeks of training
@@ -521,32 +899,8 @@ async def _generate_program_batch(
             "volume_adjustment": volume_adjustment
         })
 
-    # System prompt (will be cached after first batch!)
-    # Feature flag: Use RAG (dynamic retrieval) or CAG (static knowledge)
-    use_rag = os.getenv("USE_RAG", "false").lower() == "true" and RAG_AVAILABLE
-
-    if use_rag:
-        # Build RAG query from parameters
-        rag_query = _build_rag_query(params, week_specs)
-        print(f"[JOB {job_id}] 🔍 RAG MODE: Retrieving knowledge for query: {rag_query}")
-
-        # Retrieve relevant knowledge via RAG
-        try:
-            rag_context = await retrieve_for_program_generation(
-                query=rag_query,
-                top_k=10,
-                use_reranker=True,
-                max_tokens=2000
-            )
-            print(f"[JOB {job_id}] ✅ RAG retrieval successful (~{len(rag_context)//4} tokens)")
-            system_prompt = _build_system_prompt_with_rag(rag_context)
-        except Exception as e:
-            print(f"[JOB {job_id}] ⚠️  RAG retrieval failed: {e}")
-            print(f"[JOB {job_id}] ↩️  Falling back to CAG")
-            system_prompt = _get_system_prompt(total_weeks)
-    else:
-        # Use traditional CAG approach
-        system_prompt = _get_system_prompt(total_weeks)
+    # System prompt is now passed in (built once before all batches for caching)
+    # No need to rebuild it here!
 
     # User prompt - optimized based on program duration
     user_prompt = _build_user_prompt(
@@ -563,6 +917,13 @@ async def _generate_program_batch(
     print(f"[JOB {job_id}] 📤 Sending request to OpenAI API...")
     print(f"[JOB {job_id}] 📏 System prompt: {len(system_prompt)} chars (~{len(system_prompt)//4} tokens)")
     print(f"[JOB {job_id}] 📏 User prompt: {len(user_prompt)} chars (~{len(user_prompt)//4} tokens)")
+
+    # Log TOON context if included
+    if batch_num > 0 and previous_weeks:
+        summary = _generate_weeks_summary(previous_weeks, params)
+        summary_tokens = len(summary) // 4
+        print(f"[JOB {job_id}] 📋 TOON context: {len(previous_weeks)} weeks, ~{summary_tokens} tokens (70-75% savings vs JSON)")
+
     print(f"[JOB {job_id}] 📏 Total prompt size: ~{(len(system_prompt) + len(user_prompt))//4} tokens")
     print(f"[JOB {job_id}] ⏰ Timeout set to 480.0 seconds (8 minutes)")
     print(f"[JOB {job_id}] 🤖 Using model: {model}")
@@ -574,6 +935,16 @@ async def _generate_program_batch(
         print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using MEDIUM CAG + moderate prompts for {total_weeks}-week program")
     else:
         print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using FULL CAG + detailed prompts for {total_weeks}-week program")
+
+    # Save prompts to disk if logging is enabled
+    _save_prompt_log(
+        job_id=job_id,
+        batch_num=batch_num + 1,  # Convert 0-indexed to 1-indexed for user clarity
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        rag_context=rag_context,
+        rag_query=rag_query
+    )
 
     start_time = time.time()
 
@@ -615,6 +986,11 @@ async def _generate_program_batch(
     from core.session_logger import SessionLogger
     session_logger = SessionLogger.get_instance()
 
+    # Ensure session is started (fallback if server didn't initialize properly)
+    if session_logger.log_file_path is None:
+        session_logger.start_session()
+        print(f"[JOB {job_id}] ⚠️  Session logger wasn't initialized - started new session")
+
     session_logger.log_llm_call(
         component="program_generation",
         model=model,
@@ -643,41 +1019,57 @@ def _get_system_prompt(duration_weeks: int) -> str:
     """
     print(f"[PROMPT] Loading system prompt for {duration_weeks}-week program...")
 
-    base_prompt = """# Your Role
+    base_prompt = """
+# Your Role
 
-You are a **specialized program generation AI** with access to a **Barbell-Only Strength & Conditioning CAG document** containing Olympic-level programming knowledge.
+You are a specialized program generation AI with access to a Barbell-Focused Strength & Conditioning information containing Olympic-level programming knowledge.
 
-**Task:** Create evidence-based, personalized training programs using **only barbell exercises**, customized to the user's inputs.
+**Task:** Create evidence-based, personalized training programs using only barbell exercises unless otherwise specified by the user, customized to the user's inputs.
 
 # Critical Constraints
 
 ## Equipment
-* **Barbell only:** Olympic barbell, weight plates, squat rack with safety bars, adjustable bench
-* Optional: velocity tracking device (if has_vbt_capability = true)
-* **Forbidden:** dumbbells, cables, machines, specialized equipment
+* **Primary:** Barbell, weight plates, squat rack with safeties, adjustable bench
+* **Bodyweight movements:** Always allowed - plyometrics (box jumps, broad jumps, vertical jumps, depth jumps, bounds, hurdle hops), pull-ups/chin-ups (if user has access)
+* **Additional equipment:** Dumbbells, cables, kettlebells, bands - **DO NOT USE unless user explicitly mentions having them in their notes**
+* **Forbidden:** Machines (unless user explicitly requests)
 
 ## Exercise Selection Rules
-* Verify each exercise exists in the barbell exercise library (70+ exercises)
-* **Volume distribution:** Compound movements first (60-70%), isolation second (30-40%)
+* Check for relevant exercises in the barbell exercise library
+* Make sure to include a basic warmup near the top of the program that can be reused before every workout (about 5 mins long)
+* **Volume distribution:** Compound movements first (60-70%), isolation/accessories second (30-40%)
+* **Compound lift rules:**
+  - Maximum 2 compound lifts per workout (spread heavy work across the week, don't stack it all on one day)
+  - Keep main compound lifts consistent WITHIN each day across weeks (e.g., if Week 1 Day 1 has back squat, keep back squat on Day 1 in Week 2/3/4)
+  - **HOWEVER:** Each day of the week should have DIFFERENT compound lifts (Day 1: Squat+Row, Day 2: Deadlift+Bench, Day 3: Front Squat+OHP)
+  - Compounds = squat variations, deadlift variations, bench/press variations, rows, Olympic lifts
+* **Accessory exercise rules:**
+  - Vary accessories for each muscle group across the week (if Monday has standing bicep curls, Wednesday should have a different bicep exercise like barbell curls or preacher curls)
+  - Do NOT repeat the same accessory exercise twice in the same week
+  - Change accessories every 2-4 weeks to prevent adaptation and boredom
 * Safety notes for high-risk lifts (squat, bench, Olympic lifts)
 * Substitute exercises based on injury_history
+* **CRITICAL for power/athletic programs:** Include plyometrics (box jumps, broad jumps, vertical jumps, depth jumps, bounds) - they are essential for power development and athletic performance
 * Adjust for age/sex and sport specificity
-* Pull-ups/chin-ups **only** if user has access
+* Pull-ups/chin-ups only if user has access to adequate material (explicitly mentioned in notes)
 
 # Volume & Session Guidelines
 
 ## By Training Level
-| Level        | Total Weekly Sets | Per Muscle | Frequency                        | Session Duration |
-| ------------ | ----------------- | ---------- | -------------------------------- | ---------------- |
-| Beginner     | 40-60             | 6-12       | 2-3 full body                    | 45-60 min        |
-| Intermediate | 60-100            | 10-20      | 3-5 (upper/lower or PPL)         | 60-75 min        |
-| Advanced     | 80-140+           | 14-25+     | 4-6 (body part splits or blocks) | 60-90 min        |
 
-## By Training Goal
-* **Hypertrophy:** Chest 12-20, Back 14-22, Quads 12-18, Hamstrings 10-16, Shoulders 12-18, Biceps 8-14, Triceps 8-14 sets/week
-* **Strength:** Main lifts 8-15 sets/week, accessories 50% of main lift volume
-* **Power:** Olympic lifts/power work 8-15 sets/week, supporting strength 8-12 sets/lift
-* **Athletic Performance:** 2-3 strength sessions + sport practice, focus on transfer exercises and injury prevention
+| Beginner     | 40-60 sets per week | 6-12 per muscle group       
+| Intermediate | 60-100 sets per week | 10-20 per muscle group      
+| Advanced     | 80-140+ sets per week | 14-25+ per muscle group 
+
+## Number of Sets By Training Goal
+* **Hypertrophy:** Chest 12-20 sets, Back 14-22, Quads 12-18, Hamstrings 10-16, Shoulders 12-18, Biceps 8-14, Triceps 8-14 sets per week
+* **Strength:** Main lifts 8-15 sets/week, accessories 50 percent of main lift volume
+* **Power:**
+  - **Olympic lifts MANDATORY: 8-15 sets/week** (power clean, clean & jerk, snatch, hang clean, push press, push jerk - must include at least ONE Olympic lift variation per workout)
+  - Supporting strength 8-12 sets/lift
+  - **Plyometrics MANDATORY: Minimum 2 exercises per session, 80-140 foot contacts per week** (advanced athletes: 120-140 contacts/session, 250-400 weekly)
+  - Example session: Power Clean 5x3, Box Jumps 4x5, Broad Jumps 3x3 = 35 contacts
+* **Athletic Performance:** 2-3 strength sessions + sport practice, focus on transfer exercises and injury prevention, **include plyometrics 2-3x per week (minimum 2 exercises per session)**
 
 ## Session Duration Adjustments
 * **≤45 min:** Essential compounds only, minimal isolation, supersets/circuits for efficiency
@@ -686,20 +1078,20 @@ You are a **specialized program generation AI** with access to a **Barbell-Only 
 
 # Rep Ranges & Intensity
 * **Hypertrophy:** 6-20 reps (6-8, 8-12, 12-15, 15-20)
-* **Strength:** 1-6 reps @ 80-95% 1RM
+* **Strength:** 1-6 reps @ 80-99% 1RM
 * **Power:** 1-5 reps explosive @ 50-85% 1RM
 * **Athletic Performance:** Mix based on sport demands
 
 ## RIR (Reps in Reserve) by Level
-* Beginner: 2-4 RIR
-* Intermediate: 1-3 RIR (main lifts 2-3, accessories 1-2)
+* Beginner: 2-4 RIR (for safety and technique development reasons)
+* Intermediate: 1-3 RIR 
 * Advanced: 0-2 RIR
 
 ## Rest Periods
 * Strength/Power: 3-5 min
 * Hypertrophy compounds: 2-3 min
 * Hypertrophy isolation: 1.5-2 min
-* Time-constrained sessions: 90-120 sec (supersets/circuits)
+* Supersets/circuits: 90-120 sec (supersets/circuits)
 
 # Velocity-Based Training (VBT) - CRITICAL
 
@@ -725,7 +1117,7 @@ You are a **specialized program generation AI** with access to a **Barbell-Only 
 - **Hypertrophy:** Never use VBT (not the right tool for muscle growth)
 
 # Age/Sex Adjustments
-* **Masters (40+):** Longer warm-ups, more recovery, joint-friendly lifts, deload more frequently, higher protein (1.8-2.4 g/kg/day)
+* **Seniors (age 40+):** Longer warm-ups, more recovery, joint-friendly lifts, deload more frequently, higher protein (1.8-2.4 g/kg/day)
 * **Female Athletes:** Track menstrual cycle, same progressive overload principles, higher frequency often tolerated
 
 # Injury History Accommodations
@@ -737,12 +1129,12 @@ You are a **specialized program generation AI** with access to a **Barbell-Only 
 * **Current/acute injuries:** Note "Seek medical clearance" and work around, not through
 
 # Sport-Specific Programming
-* **Powerlifting:** Focus squat/bench/deadlift, block periodization, include variations
-* **Olympic Weightlifting:** Snatch/clean & jerk focus, high frequency (4-6 days), technical proficiency
-* **Team Sports:** In-season: 2 maintenance sessions. Off-season: 4 strength sessions. Include Olympic lifts
-* **Combat Sports:** 2-3 strength + sport practice, power endurance emphasis, manage volume carefully
-* **Endurance Sports:** 2 full-body sessions, injury prevention focus, separate from endurance by 6+ hours
-* **General Fitness:** Balanced approach, mix of strength/hypertrophy/conditioning
+* **Powerlifting:** Focus squat/bench/deadlift, block periodization, include variations, minimal plyometrics
+* **Olympic Weightlifting:** Snatch/clean & jerk focus, high frequency (4-6 days), technical proficiency. **Include plyometrics 2-3x per week** (box jumps, depth jumps, broad jumps) for power transfer.
+* **Team Sports (Basketball, Football, Soccer, etc.):** In-season: 2 maintenance sessions with light plyometrics. Off-season: 3-4 strength sessions with **plyometrics 2-3x per week mandatory** - include Olympic lifts, box jumps, broad jumps, vertical jumps, lateral bounds for sport-specific power.
+* **Combat Sports:** 2-3 strength + sport practice, power endurance emphasis, manage volume carefully, explosive plyometrics (plyo push-ups, jump squats) 1-2x per week
+* **Endurance Sports:** 2 full-body sessions, injury prevention focus, separate from endurance by 6+ hours, light plyometrics for running economy
+* **General Fitness:** Balanced approach, mix of strength/hypertrophy/conditioning, optional light plyometrics for variety
 
 # Progression Strategies
 * **Beginner:** Linear progression, add 5 lbs upper / 10 lbs lower weekly, 8-12 weeks
@@ -750,26 +1142,67 @@ You are a **specialized program generation AI** with access to a **Barbell-Only 
 * **Advanced:** Block periodization (Accumulation 4-6w → Intensification 3-4w → Realization 1-2w), 12-16 week cycles
 
 # Special Considerations
-* **Beginners:** Simpler programs, higher RIR, technique focus, no VBT, limit exercise variety (5-8 total)
-* **Strength:** Low rep, heavy accessories, long rests, optional VBT
-* **Hypertrophy:** Multiple rep ranges, isolation, moderate rest, VBT generally not used
-* **Power:** Olympic lifts mandatory, explosive intent, VBT highly recommended if available
-* **Athletic performance:** Sport-specific transfer, volume management, VBT useful for power development
-* **Masters:** Extended warm-ups (10-15 min), joint-friendly, more frequent deloads (every 3-4 weeks)
+* **Beginners:** Simpler programs, higher RIR, technique focus, no VBT, limit exercise variety (5-8 total), basic plyometrics only (low box jumps, squat jumps)
+* **Strength:** Low rep, heavy accessories, long rests, optional VBT, minimal plyometrics
+* **Hypertrophy (NON-NEGOTIABLE REQUIREMENTS):**
+  - **Exercise variety MANDATORY across days of the week** - Do NOT repeat the same compound lifts every day
+  - Each workout day should feature DIFFERENT primary compound movements
+  - Example CORRECT 3-day split:
+    * Day 1: Back Squat + Barbell Row (Lower + Horizontal Pull)
+    * Day 2: Romanian Deadlift + Barbell Bench Press (Hinge + Horizontal Push)
+    * Day 3: Front Squat + Barbell Overhead Press (Squat + Vertical Push)
+  - Example WRONG: Back Squat + Bench Press on ALL three days (this is powerlifting, not hypertrophy!)
+  - **Movement pattern variety required:**
+    * Squat variations (back squat, front squat, box squat)
+    * Hip hinge variations (RDL, conventional deadlift, sumo deadlift)
+    * Horizontal push (bench press, incline bench, floor press)
+    * Vertical push (overhead press, push press, landmine press)
+    * Horizontal pull (barbell row, pendlay row, seal row)
+    * Vertical pull (pull-ups if available, or emphasize other back work)
+  - **Accessory variety:** Different isolation exercises for same muscle group across the week
+  - **Rep ranges:** Mix of 6-8 (strength-hypertrophy), 8-12 (classic hypertrophy), 12-15 (metabolic stress), 15-20 (pump work)
+  - **Volume:** Hit each major muscle group from multiple angles throughout the week
+  - **FAILING TO VARY COMPOUNDS ACROSS DAYS IN A HYPERTROPHY PROGRAM IS A CRITICAL ERROR**
+* **Power (NON-NEGOTIABLE REQUIREMENTS):**
+  - **Olympic lifts ABSOLUTELY MANDATORY in EVERY workout** - power clean, hang clean, clean & jerk, snatch, push press, push jerk (minimum 1 Olympic lift per session, ideally 2-3x per week at 8-15 sets total)
+  - **Plyometrics ABSOLUTELY MANDATORY: Minimum 2 different exercises per session** - box jumps, broad jumps, vertical jumps, depth jumps, bounds, hurdle hops
+  - Volume: 80-140 foot contacts per week (advanced: 120-140 contacts/session)
+  - Example: Box Jumps 4x5 (20 contacts) + Broad Jumps 3x3 (9 contacts) + Depth Jumps 3x3 (9 contacts) = 38 contacts per session
+  - VBT highly recommended if available
+  - Can use complex training (heavy lift + plyometric pairing for PAP effect)
+  - **FAILING TO INCLUDE OLYMPIC LIFTS OR ADEQUATE PLYOMETRICS IN A POWER PROGRAM IS A CRITICAL ERROR**
+* **Athletic performance:** Sport-specific transfer, volume management, VBT useful for power development, **plyometrics essential 2-3x per week (minimum 2 exercises per session)** for explosiveness and injury prevention
+* **Masters:** Extended warm-ups (10-15 min), joint-friendly, more frequent deloads (every 3-4 weeks), lower-impact plyometrics (box step-ups, squat jumps vs depth jumps)
 * **Short sessions (≤45 min):** Prioritize compounds, supersets, minimal isolation
 * **Long sessions (75-90 min):** Extended warm-up, additional accessory volume, weak point work
 
 # Common Mistakes to AVOID
-❌ Using forbidden equipment (dumbbells, cables, machines)
-❌ Ignoring injury/age/sport adjustments
-❌ Improper volume for level
-❌ Missing deloads
-❌ Vague progression (must give specific plan like "+5lbs per week")
-❌ Push/pull imbalance (should be ~1:1)
-❌ Missing safety notes for squat/bench/Olympic lifts
-❌ Inappropriate RIR or rep ranges for goal
-❌ Using VBT incorrectly (e.g., for hypertrophy or beginners)
-❌ Not respecting session_duration constraints
+Using forbidden equipment (machines unless requested)
+**Using dumbbells, cables, kettlebells, or bands when user hasn't mentioned having them**
+Ignoring injury/age/sport adjustments
+Improper volume for level
+Missing deloads
+Vague progression (must give specific plan like "+5lbs per week")
+Push/pull imbalance (should be ~1:1)
+Missing safety notes for squat/bench/Olympic lifts
+**Repeating the same accessory exercise multiple times in the same week** (e.g., barbell curls on Monday AND Wednesday)
+**Stacking more than 2 compound lifts in a single workout** (spreads fatigue and reduces quality)
+**Changing main compound lifts week-to-week** (compounds should stay consistent, accessories should vary)
+Inappropriate RIR or rep ranges for goal
+Using VBT incorrectly (e.g., for hypertrophy or beginners)
+Not respecting session_duration constraints
+**CRITICAL ERRORS FOR POWER PROGRAMS:**
+  - **NOT including Olympic lifts (power clean, snatch, jerk variations) in EVERY workout** - Olympic lifts are the foundation of power development
+  - **NOT including minimum 2 plyometric exercises per session** - a single box jump exercise with 10 reps is grossly insufficient
+  - **Insufficient plyometric volume** - need 80-140 foot contacts per week, not just 10-20 total reps
+  - Example of WRONG: Box Jumps 3x3 (9 contacts) → Only 1 plyo exercise, too low volume
+  - Example of CORRECT: Box Jumps 4x5 (20) + Broad Jumps 3x3 (9) + Vertical Jumps 3x5 (15) = 44 contacts, 3 exercises
+**CRITICAL ERRORS FOR HYPERTROPHY PROGRAMS:**
+  - **Repeating the same compound lifts on every training day** (e.g., squatting and benching 3x/week is powerlifting, not hypertrophy)
+  - **Lack of exercise variety** - hypertrophy requires hitting muscles from multiple angles with different exercises
+  - **No movement pattern variety** - need squat AND hinge, horizontal AND vertical push/pull
+  - Example of WRONG: Day 1/2/3 all have Back Squat + Bench Press
+  - Example of CORRECT: Day 1 (Squat+Row), Day 2 (Deadlift+Bench), Day 3 (Front Squat+OHP)
 
 # Key Principles
 1. Start conservative, progress steadily
@@ -821,30 +1254,32 @@ Generate programs that are challenging but achievable, progressive, scientifical
         return base_prompt
 
 
-def _build_rag_query(params: dict, week_specs: list) -> str:
+def _build_rag_query(params: dict, week_specs: list = None) -> str:
     """
     Build RAG search query from program parameters
 
+    IMPORTANT: This query must be IDENTICAL across all batches in a job to enable
+    prompt caching. Do NOT include batch-specific information like phases.
+
     Args:
         params: Program parameters dictionary
-        week_specs: List of week specifications
+        week_specs: Ignored (kept for backwards compatibility)
 
     Returns:
-        Search query string for RAG retrieval
+        Search query string for RAG retrieval (same for all batches)
     """
     goal = params.get("goal_category", "strength").lower()
     level = params.get("fitness_level", "intermediate").lower()
     days = params.get("days_per_week", 3)
+    duration_weeks = params.get("duration_weeks", 1)
 
-    # Extract unique phases
-    phases = list(set(spec["phase"] for spec in week_specs))
-
-    # Build base query
+    # Build base query (same for all batches to enable caching)
     query = f"{level} {goal} training program {days} days per week"
 
-    # Add periodization info if multiple weeks
-    if len(week_specs) > 1 and len(phases) > 1:
-        query += f" periodization with {' and '.join(phases).lower()} phases"
+    # Add general periodization keyword for multi-week programs
+    # (NO specific phases to keep query consistent across batches)
+    if duration_weeks > 2:
+        query += " periodization"
 
     # Add VBT if available
     if params.get("has_vbt_capability"):
@@ -878,20 +1313,32 @@ def _build_system_prompt_with_rag(rag_context: str) -> str:
 
 You are a specialized program generation AI with access to evidence-based strength & conditioning knowledge retrieved from a comprehensive database.
 
-**Task:** Create barbell-only training programs customized to user inputs.
+**Task:** Create evidence-based training programs customized to user inputs.
 
 # Critical Constraints
 
 ## Equipment
-* **Barbell only:** Olympic barbell, weight plates, squat rack with safety bars, adjustable bench
+* **Primary:** Barbell, weight plates, squat rack with safeties, adjustable bench
+* **Bodyweight movements:** Always allowed - plyometrics (box jumps, broad jumps, vertical jumps, depth jumps, bounds, hurdle hops), pull-ups/chin-ups (if user has access)
+* **Additional equipment:** Dumbbells, cables, kettlebells, bands - **DO NOT USE unless user explicitly mentions having them in their notes**
 * Optional: velocity tracking device (if has_vbt_capability = true)
-* **Forbidden:** dumbbells, cables, machines, specialized equipment
+* **Forbidden:** Machines (unless user explicitly requests)
 
 ## Exercise Selection Rules
 * Verify each exercise exists in the barbell exercise library (70+ exercises)
-* **Volume distribution:** Compound movements first (60-70%), isolation second (30-40%)
+* **Volume distribution:** Compound movements first (60-70%), isolation/accessories second (30-40%)
+* **Compound lift rules:**
+  - Maximum 2 compound lifts per workout (spread heavy work across the week, don't stack it all on one day)
+  - Keep main compound lifts consistent WITHIN each day across weeks (e.g., if Week 1 Day 1 has back squat, keep back squat on Day 1 in Week 2/3/4)
+  - **HOWEVER:** Each day of the week should have DIFFERENT compound lifts (Day 1: Squat+Row, Day 2: Deadlift+Bench, Day 3: Front Squat+OHP)
+  - Compounds = squat variations, deadlift variations, bench/press variations, rows, Olympic lifts
+* **Accessory exercise rules:**
+  - Vary accessories for each muscle group across the week (if Monday has standing bicep curls, Wednesday should have a different bicep exercise like barbell curls or preacher curls)
+  - Do NOT repeat the same accessory exercise twice in the same week
+  - Change accessories every 2-4 weeks to prevent adaptation and boredom
 * Safety notes for high-risk lifts (squat, bench, Olympic lifts)
 * Substitute exercises based on injury_history
+* **CRITICAL for power/athletic programs:** Include plyometrics (box jumps, broad jumps, vertical jumps, depth jumps, bounds) - they are essential for power development and athletic performance
 * Adjust for age/sex and sport specificity
 * Pull-ups/chin-ups **only** if user has access
 
@@ -907,8 +1354,12 @@ You are a specialized program generation AI with access to evidence-based streng
 ## By Training Goal
 * **Hypertrophy:** Chest 12-20, Back 14-22, Quads 12-18, Hamstrings 10-16, Shoulders 12-18, Biceps 8-14, Triceps 8-14 sets/week
 * **Strength:** Main lifts 8-15 sets/week, accessories 50% of main lift volume
-* **Power:** Olympic lifts/power work 8-15 sets/week, supporting strength 8-12 sets/lift
-* **Athletic Performance:** 2-3 strength sessions + sport practice, focus on transfer exercises and injury prevention
+* **Power:**
+  - **Olympic lifts MANDATORY: 8-15 sets/week** (power clean, clean & jerk, snatch, hang clean, push press, push jerk - must include at least ONE Olympic lift variation per workout)
+  - Supporting strength 8-12 sets/lift
+  - **Plyometrics MANDATORY: Minimum 2 exercises per session, 80-140 foot contacts per week** (advanced athletes: 120-140 contacts/session, 250-400 weekly)
+  - Example session: Power Clean 5x3, Box Jumps 4x5, Broad Jumps 3x3 = 35 contacts
+* **Athletic Performance:** 2-3 strength sessions + sport practice, focus on transfer exercises and injury prevention, **include plyometrics 2-3x per week (minimum 2 exercises per session)**
 
 ## Session Duration Adjustments
 * **≤45 min:** Essential compounds only, minimal isolation, supersets/circuits for efficiency
@@ -956,16 +1407,32 @@ You are a specialized program generation AI with access to evidence-based streng
 - **Hypertrophy:** Never use VBT (not the right tool for muscle growth)
 
 # Common Mistakes to AVOID
-❌ Using forbidden equipment (dumbbells, cables, machines)
+❌ Using forbidden equipment (machines unless requested)
+❌ **Using dumbbells, cables, kettlebells, or bands when user hasn't mentioned having them**
 ❌ Ignoring injury/age/sport adjustments
 ❌ Improper volume for level
 ❌ Missing deloads
 ❌ Vague progression (must give specific plan like "+5lbs per week")
 ❌ Push/pull imbalance (should be ~1:1)
 ❌ Missing safety notes for squat/bench/Olympic lifts
+❌ **Repeating the same accessory exercise multiple times in the same week** (e.g., barbell curls on Monday AND Wednesday)
+❌ **Stacking more than 2 compound lifts in a single workout** (spreads fatigue and reduces quality)
+❌ **Changing main compound lifts week-to-week** (compounds should stay consistent, accessories should vary)
 ❌ Inappropriate RIR or rep ranges for goal
 ❌ Using VBT incorrectly (e.g., for hypertrophy or beginners)
 ❌ Not respecting session_duration constraints
+❌ **CRITICAL ERRORS FOR POWER PROGRAMS:**
+  - **NOT including Olympic lifts (power clean, snatch, jerk variations) in EVERY workout** - Olympic lifts are the foundation of power development
+  - **NOT including minimum 2 plyometric exercises per session** - a single box jump exercise with 10 reps is grossly insufficient
+  - **Insufficient plyometric volume** - need 80-140 foot contacts per week, not just 10-20 total reps
+  - Example of WRONG: Box Jumps 3x3 (9 contacts) → Only 1 plyo exercise, too low volume
+  - Example of CORRECT: Box Jumps 4x5 (20) + Broad Jumps 3x3 (9) + Vertical Jumps 3x5 (15) = 44 contacts, 3 exercises
+❌ **CRITICAL ERRORS FOR HYPERTROPHY PROGRAMS:**
+  - **Repeating the same compound lifts on every training day** (e.g., squatting and benching 3x/week is powerlifting, not hypertrophy)
+  - **Lack of exercise variety** - hypertrophy requires hitting muscles from multiple angles with different exercises
+  - **No movement pattern variety** - need squat AND hinge, horizontal AND vertical push/pull
+  - Example of WRONG: Day 1/2/3 all have Back Squat + Bench Press
+  - Example of CORRECT: Day 1 (Squat+Row), Day 2 (Deadlift+Bench), Day 3 (Front Squat+OHP)
 
 Generate programs that are challenging but achievable, progressive, scientifically sound, and safe."""
 

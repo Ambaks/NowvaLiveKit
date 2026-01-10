@@ -9,5 +9,4 @@ echo "Starting Nowva FastAPI Backend"
 echo "=========================================="
 echo ""
 
-cd src
-uvicorn api.main:app --reload --port 8000
+PYTHONPATH='src' uvicorn api.main:app --reload --port 8000

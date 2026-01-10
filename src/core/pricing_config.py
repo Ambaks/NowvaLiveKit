@@ -1,7 +1,7 @@
 """
 Pricing Configuration for All AI Services
 Centralized pricing data for cost calculation
-Updated: 2025-01-04
+Updated: 2026-01-07
 """
 
 # =============================================================================
@@ -23,6 +23,35 @@ OPENAI_PRICING = {
         "text_output": 20.00 / 1_000_000,
         "audio_input": 100.00 / 1_000_000,   # $100 per 1M tokens
         "audio_output": 200.00 / 1_000_000   # $200 per 1M tokens
+    },
+    # Realtime API Models (newer naming convention)
+    "gpt-realtime": {
+        "text_input": 5.00 / 1_000_000,      # Same as gpt-4o-realtime-preview
+        "text_output": 20.00 / 1_000_000,
+        "audio_input": 100.00 / 1_000_000,
+        "audio_output": 200.00 / 1_000_000
+    },
+    "gpt-realtime-mini": {
+        "text_input": 0.60 / 1_000_000,      # $0.60 per 1M tokens
+        "text_output": 2.40 / 1_000_000,     # $2.40 per 1M tokens
+        "audio_input": 40.00 / 1_000_000,    # $40 per 1M tokens
+        "audio_output": 80.00 / 1_000_000    # $80 per 1M tokens
+    },
+    # GPT-5 Models (preview/internal - using estimated pricing)
+    "gpt-5.2": {
+        "input": 3.00 / 1_000_000,       # Estimated: slightly higher than gpt-4o
+        "output": 12.00 / 1_000_000,     # Estimated: slightly higher than gpt-4o
+        "cached_input": 1.50 / 1_000_000 # 50% discount
+    },
+    "gpt-5-mini": {
+        "input": 0.150 / 1_000_000,      # Same as gpt-4o-mini (per OPTIMIZATION_SUMMARY.md)
+        "output": 0.600 / 1_000_000,
+        "cached_input": 0.075 / 1_000_000
+    },
+    "gpt-5-nano": {
+        "input": 0.10 / 1_000_000,       # Estimated: cheaper than mini
+        "output": 0.40 / 1_000_000,
+        "cached_input": 0.05 / 1_000_000
     }
 }
 
@@ -74,7 +103,7 @@ def calculate_cost(
     Args:
         input_tokens: Number of input tokens
         output_tokens: Number of output tokens
-        model: Model name (e.g., "gpt-4o", "gpt-4o-mini", "claude-3-5-haiku-20241022")
+        model: Model name (e.g., "gpt-4o", "gpt-5.2", "gpt-realtime-mini", "claude-3-5-haiku-20241022")
         cached_input_tokens: Number of cached input tokens (for prompt caching)
         is_audio_input: Whether input is audio (for Realtime API)
         is_audio_output: Whether output is audio (for Realtime API)
@@ -90,6 +119,9 @@ def calculate_cost(
         # Input cost
         if "realtime" in model and is_audio_input:
             cost += input_tokens * pricing["audio_input"]
+        elif "realtime" in model:
+            # Realtime model with text input
+            cost += input_tokens * pricing["text_input"]
         elif cached_input_tokens > 0:
             # Calculate cost for non-cached tokens
             cost += (input_tokens - cached_input_tokens) * pricing["input"]
@@ -101,6 +133,9 @@ def calculate_cost(
         # Output cost
         if "realtime" in model and is_audio_output:
             cost += output_tokens * pricing["audio_output"]
+        elif "realtime" in model:
+            # Realtime model with text output
+            cost += output_tokens * pricing["text_output"]
         else:
             cost += output_tokens * pricing["output"]
 
@@ -121,7 +156,19 @@ def calculate_cost(
         return cost
 
     else:
-        return 0.0  # Unknown model
+        # Unknown model - use GPT-4o pricing as fallback estimate
+        print(f"⚠️  Warning: Unknown model '{model}' - using GPT-4o pricing as estimate")
+        pricing = OPENAI_PRICING["gpt-4o"]
+        cost = 0.0
+
+        if cached_input_tokens > 0:
+            cost += (input_tokens - cached_input_tokens) * pricing["input"]
+            cost += cached_input_tokens * pricing.get("cached_input", pricing["input"])
+        else:
+            cost += input_tokens * pricing["input"]
+
+        cost += output_tokens * pricing["output"]
+        return cost
 
 
 def calculate_rag_retrieval_cost(

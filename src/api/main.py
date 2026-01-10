@@ -35,6 +35,12 @@ async def startup_event():
     print("🚀 Nowva FastAPI Backend Starting...")
     print("="*80)
 
+    # Initialize session logger for pricing tracking
+    from core.session_logger import SessionLogger
+    session_logger = SessionLogger.get_instance()
+    session_logger.start_session()
+    print("📊 Session logging enabled - pricing will be tracked")
+
     # Clean up stuck jobs from previous server runs
     from sqlalchemy import create_engine, text
     import os
@@ -70,6 +76,13 @@ async def shutdown_event():
     """Run on application shutdown"""
     print("\n" + "="*80)
     print("🛑 Nowva FastAPI Backend Shutting Down...")
+    print("="*80)
+
+    # Save session logs and print summary
+    from core.session_logger import SessionLogger
+    session_logger = SessionLogger.get_instance()
+    summary = session_logger.end_session()
+    print(summary)
     print("="*80 + "\n")
 
 

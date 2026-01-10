@@ -92,6 +92,10 @@ class SessionLogger:
         details: Dict[str, Any] = None
     ):
         """Log an LLM API call"""
+        # Auto-start session if not started (fallback safety)
+        if self.log_file_path is None:
+            self.start_session()
+
         if cost is None:
             cost = calculate_cost(
                 input_tokens, output_tokens, model,

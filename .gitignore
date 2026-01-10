@@ -66,6 +66,13 @@ Thumbs.db
 *.log
 logs/
 
+# Session logs and program generation logs
+session_logs/
+program_generation_logs/
+src/session_logs/*.csv
+src/session_logs/*.txt
+src/program_generation_logs/*.txt
+
 # Temporary files
 *.tmp
 *.bak
