@@ -7,10 +7,8 @@ import { FormInterface } from '@/components/generator/FormInterface';
 export const ProgramGenerator = () => {
   const [emailSubmitted, setEmailSubmitted] = useState(false);
   const [interactionMode, setInteractionMode] = useState<'voice' | 'form' | null>(null);
-  const [userEmail, setUserEmail] = useState('');
 
-  const handleEmailSubmit = (email: string) => {
-    setUserEmail(email);
+  const handleEmailSubmit = (_email: string) => {
     setEmailSubmitted(true);
   };
 

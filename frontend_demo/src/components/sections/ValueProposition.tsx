@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { motion } from 'framer-motion';
-import { BookOpen, User, Zap, Dumbbell, TrendingDown, Activity, Sparkles, Star } from 'lucide-react';
+import { BookOpen, User, Zap, Dumbbell, TrendingDown, Activity, Sparkles } from 'lucide-react';
 import { useInView } from '@/hooks/useInView';
 
 const features = [

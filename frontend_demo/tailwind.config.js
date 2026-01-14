@@ -12,6 +12,10 @@ export default {
           secondary: '#F9FAFB',
           tertiary: '#FFFFFF',
         },
+        surface: {
+          DEFAULT: '#FFFFFF',
+          light: '#F3F4F6',
+        },
         foreground: {
           DEFAULT: '#171717',
           secondary: '#737373',
