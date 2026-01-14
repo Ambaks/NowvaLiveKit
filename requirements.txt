@@ -54,6 +54,12 @@ httpx>=0.26.0                          # Async HTTP client (for voice agent → 
 openai>=1.0.0                          # OpenAI API client
 tiktoken>=0.5.0                        # Token counting for OpenAI models
 
+# PDF Generation (for program exports)
+weasyprint>=60.0.0                     # HTML to PDF conversion
+jinja2>=3.1.0                          # HTML templating
+cssselect>=1.2.0                       # CSS selector support
+pillow>=10.0.0                         # Image handling
+
 # =============================================================================
 # CONTEXTUAL RAG SYSTEM
 # =============================================================================

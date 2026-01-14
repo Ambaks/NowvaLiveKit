@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ program.program_name }}</title>
+    <style>
+        /* Program-specific color variables */
+        :root {
+            --primary-color: {{ colors.primary }};
+            --primary-light: {{ colors.primary_light }};
+            --primary-dark: {{ colors.primary_dark }};
+            --gradient-start: {{ colors.gradient_start }};
+            --gradient-end: {{ colors.gradient_end }};
+            --accent-color: {{ colors.accent }};
+        }
+
+        /* Base PDF Styles */
+        @page {
+          size: A4;
+          margin: 2cm 1.5cm;
+
+          @bottom-right {
+            content: "Page " counter(page) " of " counter(pages);
+            font-size: 9pt;
+            color: #6B7280;
+          }
+        }
+
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+          font-size: 10pt;
+          line-height: 1.6;
+          color: #171717;
+          background: white;
+        }
+
+        h1 {
+          font-size: 28pt;
+          font-weight: 700;
+          line-height: 1.2;
+          margin-bottom: 16pt;
+          color: #000;
+        }
+
+        h2 {
+          font-size: 20pt;
+          font-weight: 700;
+          line-height: 1.3;
+          margin-top: 24pt;
+          margin-bottom: 12pt;
+          color: #171717;
+          border-bottom: 2px solid var(--primary-color);
+          padding-bottom: 8pt;
+        }
+
+        h3 {
+          font-size: 14pt;
+          font-weight: 600;
+          line-height: 1.4;
+          margin-top: 16pt;
+          margin-bottom: 8pt;
+          color: #171717;
+        }
+
+        h4 {
+          font-size: 11pt;
+          font-weight: 600;
+          margin-bottom: 4pt;
+          color: #374151;
+        }
+
+        p {
+          margin-bottom: 8pt;
+          line-height: 1.6;
+        }
+
+        .cover-page {
+          page-break-after: always;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          min-height: 29.7cm;
+          text-align: center;
+          background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+          color: white;
+          margin: -2cm -1.5cm;
+          padding: 4cm 2cm;
+          position: relative;
+        }
+
+        .cover-logo {
+          position: absolute;
+          top: 0cm;
+          left: 0cm;
+          max-width: 300px;
+          max-height: 160px;
+          width: auto;
+          height: auto;
+          filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+        }
+
+        .cover-title {
+          font-size: 36pt;
+          font-weight: 800;
+          line-height: 1.2;
+          margin-bottom: 16pt;
+          text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .cover-subtitle {
+          font-size: 16pt;
+          font-weight: 400;
+          margin-bottom: 32pt;
+          opacity: 0.95;
+        }
+
+        .cover-divider {
+          width: 120pt;
+          height: 3px;
+          background: white;
+          opacity: 0.8;
+          margin: 32pt auto;
+        }
+
+        .cover-meta {
+          font-size: 11pt;
+          line-height: 1.8;
+          opacity: 0.95;
+          margin-top: 16pt;
+        }
+
+        .cover-meta-row {
+          margin-bottom: 8pt;
+        }
+
+        .cover-footer {
+          margin-top: 48pt;
+          font-size: 9pt;
+          opacity: 0.85;
+        }
+
+        .week-section {
+          page-break-before: auto;
+          margin-bottom: 32pt;
+        }
+
+        .week-header {
+          background: linear-gradient(90deg, var(--primary-light), var(--primary-color));
+          color: white;
+          padding: 12pt 16pt;
+          border-radius: 6pt;
+          margin-bottom: 16pt;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          page-break-after: avoid;
+        }
+
+        .week-title {
+          font-size: 16pt;
+          font-weight: 700;
+          margin: 0;
+        }
+
+        .phase-badge {
+          background: rgba(255, 255, 255, 0.25);
+          padding: 4pt 12pt;
+          border-radius: 12pt;
+          font-size: 9pt;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5pt;
+        }
+
+        .week-notes {
+          background: #F9FAFB;
+          border-left: 3px solid var(--primary-color);
+          padding: 12pt;
+          margin-bottom: 16pt;
+          font-size: 9pt;
+          color: #374151;
+          border-radius: 0 4pt 4pt 0;
+        }
+
+        .workout-day {
+          page-break-inside: avoid;
+          margin-bottom: 24pt;
+        }
+
+        .workout-header {
+          background: #F3F4F6;
+          padding: 10pt 12pt;
+          border-left: 4px solid var(--accent-color);
+          margin-bottom: 8pt;
+          border-radius: 4pt;
+        }
+
+        .workout-title {
+          font-size: 12pt;
+          font-weight: 700;
+          color: #111827;
+          margin: 0 0 4pt 0;
+        }
+
+        .workout-description {
+          font-size: 9pt;
+          color: #6B7280;
+          margin: 0;
+        }
+
+        .exercise-table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 16pt;
+          font-size: 9pt;
+        }
+
+        .exercise-table thead {
+          background: var(--primary-color);
+          color: white;
+        }
+
+        .exercise-table th {
+          padding: 8pt 6pt;
+          text-align: left;
+          font-weight: 600;
+          font-size: 9pt;
+          border-right: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .exercise-table th:last-child {
+          border-right: none;
+        }
+
+        .exercise-table tbody tr {
+          border-bottom: 1px solid #E5E7EB;
+        }
+
+        .exercise-table tbody tr:nth-child(even) {
+          background: #F9FAFB;
+        }
+
+        .exercise-table td {
+          padding: 8pt 6pt;
+          vertical-align: top;
+        }
+
+        .exercise-name {
+          font-weight: 600;
+          color: #111827;
+        }
+
+        .category-badge {
+          display: inline-block;
+          padding: 2pt 8pt;
+          border-radius: 10pt;
+          font-size: 7pt;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.3pt;
+          color: white;
+          margin-left: 4pt;
+        }
+
+        .badge-power {
+          background: #EF4444;
+        }
+
+        .badge-hypertrophy {
+          background: #8B5CF6;
+        }
+
+        .badge-strength {
+          background: #3B82F6;
+        }
+
+        .intensity-indicator {
+          display: inline-block;
+          width: 40pt;
+          height: 12pt;
+          border-radius: 2pt;
+          text-align: center;
+          line-height: 12pt;
+          font-weight: 600;
+          font-size: 8pt;
+          color: white;
+        }
+
+        .vbt-indicator {
+          color: #06B6D4;
+          font-weight: 700;
+          font-size: 8pt;
+        }
+
+        .exercise-notes {
+          background: #FEF3C7;
+          border-left: 3px solid #F59E0B;
+          padding: 8pt;
+          margin: 4pt 0;
+          font-size: 8pt;
+          color: #92400E;
+          font-style: italic;
+          border-radius: 0 3pt 3pt 0;
+        }
+
+        .stats-section {
+          page-break-inside: avoid;
+          page-break-after: always;
+          background: #F9FAFB;
+          padding: 16pt;
+          border-radius: 8pt;
+          margin-top: 24pt;
+        }
+
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 16pt;
+          margin-top: 12pt;
+        }
+
+        .stat-card {
+          background: white;
+          padding: 12pt;
+          border-radius: 6pt;
+          text-align: center;
+          border: 1px solid #E5E7EB;
+        }
+
+        .stat-value {
+          font-size: 24pt;
+          font-weight: 700;
+          color: var(--primary-color);
+          margin-bottom: 4pt;
+        }
+
+        .stat-label {
+          font-size: 9pt;
+          color: #6B7280;
+          text-transform: uppercase;
+          letter-spacing: 0.5pt;
+        }
+
+        .text-center {
+          text-align: center;
+        }
+
+        .text-small {
+          font-size: 8pt;
+          color: #6B7280;
+        }
+
+        .page-break {
+          page-break-after: always;
+        }
+
+        .avoid-break {
+          page-break-inside: avoid;
+        }
+    </style>
+</head>
+<body>
+    <!-- Cover Page -->
+    <div class="cover-page">
+        <!-- Company Logo (top right) -->
+        <img src="assets/images/logo.png" alt="Company Logo" class="cover-logo">
+
+        <div class="cover-title">{{ program.program_name }}</div>
+        <div class="cover-subtitle">{{ program.description }}</div>
+
+        <div class="cover-divider"></div>
+
+        <div class="cover-meta">
+            {% if user.name %}
+            <div class="cover-meta-row"><strong>Created for:</strong> {{ user.name }}</div>
+            {% endif %}
+            <div class="cover-meta-row"><strong>Duration:</strong> {{ program.duration_weeks }} weeks</div>
+            <div class="cover-meta-row"><strong>Primary Goal:</strong> {{ program.goal }}</div>
+            {% if program.vbt_enabled %}
+            <div class="cover-meta-row"><strong>VBT Training:</strong> Enabled</div>
+            {% endif %}
+        </div>
+
+        <div class="cover-footer">
+            <p>Generated: {{ generated_date }}</p>
+            <p style="margin-top: 8pt; font-size: 8pt;">Powered by NowvaLiveKit</p>
+        </div>
+    </div>
+
+    <!-- Program Overview -->
+    <h2>Program Overview</h2>
+    <p>{{ program.description }}</p>
+
+    {% if program.progression_strategy %}
+    <h3>Progression Strategy</h3>
+    <p>{{ program.progression_strategy }}</p>
+    {% endif %}
+
+    {% if program.overall_notes %}
+    <div class="week-notes">
+        <strong>Important Notes:</strong><br>
+        {{ program.overall_notes }}
+    </div>
+    {% endif %}
+
+    <!-- Statistics -->
+    <div class="stats-section avoid-break">
+        <h3 style="margin-top: 0;">Program Statistics</h3>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_workouts }}</div>
+                <div class="stat-label">Total Workouts</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.unique_exercises }}</div>
+                <div class="stat-label">Unique Exercises</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_sets }}</div>
+                <div class="stat-label">Total Sets</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Weekly Breakdown -->
+    {% for week in program.weeks %}
+    <div class="week-section">
+        <div class="week-header">
+            <div>
+                <div class="week-title">Week {{ week.week_number }}</div>
+            </div>
+            <div class="phase-badge">{{ week.phase }}</div>
+        </div>
+
+        {% if week.notes %}
+        <div class="week-notes">
+            <strong>Week {{ week.week_number }} Notes:</strong> {{ week.notes }}
+        </div>
+        {% endif %}
+
+        <!-- Workouts -->
+        {% for workout in week.workouts %}
+        <div class="workout-day avoid-break">
+            <div class="workout-header">
+                <div class="workout-title">Day {{ workout.day_number }} - {{ workout.name }}</div>
+                <p class="workout-description">{{ workout.description }}</p>
+            </div>
+
+            <table class="exercise-table">
+                <thead>
+                    <tr>
+                        <th style="width: 5%;">#</th>
+                        <th style="width: 35%;">Exercise</th>
+                        <th style="width: 8%;">Sets</th>
+                        <th style="width: 12%;">Reps</th>
+                        <th style="width: 12%;">Intensity</th>
+                        {% if program.vbt_enabled %}
+                        <th style="width: 12%;">VBT</th>
+                        {% endif %}
+                        <th style="width: 10%;">Rest</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for exercise in workout.exercises %}
+                    <tr>
+                        <td>{{ exercise.order }}</td>
+                        <td>
+                            <div class="exercise-name">{{ exercise.exercise_name }}</div>
+                            <div class="text-small">{{ exercise.muscle_group }}</div>
+                        </td>
+                        <td>{{ exercise.sets|length }}</td>
+                        <td>
+                            {% if exercise.sets|length > 0 %}
+                                {% set first_set = exercise.sets[0] %}
+                                {% set reps_list = exercise.sets|map(attribute='reps')|list %}
+                                {% if reps_list|length == 1 or reps_list|unique|list|length == 1 %}
+                                    {{ first_set.reps }}
+                                {% else %}
+                                    {{ reps_list|join(', ') }}
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if exercise.sets|length > 0 %}
+                                {% set first_set = exercise.sets[0] %}
+                                {% if first_set.intensity_percent %}
+                                    <span class="intensity-indicator" style="background: {{ get_intensity_color(first_set.intensity_percent) }};">
+                                        {{ first_set.intensity_percent|round }}%
+                                    </span>
+                                {% else %}
+                                    <span class="text-small">BW</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        {% if program.vbt_enabled %}
+                        <td>
+                            {% if exercise.sets|length > 0 and exercise.sets[0].velocity_threshold %}
+                                <span class="vbt-indicator">{{ exercise.sets[0].velocity_threshold }} m/s</span>
+                            {% else %}
+                                <span class="text-small">—</span>
+                            {% endif %}
+                        </td>
+                        {% endif %}
+                        <td>
+                            {% if exercise.sets|length > 0 %}
+                                {{ (exercise.sets[0].rest_seconds / 60)|round(1) }} min
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+
+    <!-- Footer / Disclaimer -->
+    <div class="page-break"></div>
+    <div style="padding: 32pt 0; text-align: center; color: #6B7280;">
+        <h3 style="color: #374151;">Important Safety Information</h3>
+        <p style="font-size: 9pt; line-height: 1.6; max-width: 600pt; margin: 16pt auto;">
+            This program is designed for general fitness purposes. Always consult with a qualified healthcare
+            professional before beginning any exercise program. Stop immediately if you experience pain, dizziness,
+            or discomfort. Proper form and technique are essential for safety and effectiveness.
+        </p>
+        <p style="font-size: 8pt; margin-top: 24pt; color: #9CA3AF;">
+            Program ID: #{{ program.id|default('N/A') }} • Generated: {{ generated_date }}
+        </p>
+    </div>
+</body>
+</html>

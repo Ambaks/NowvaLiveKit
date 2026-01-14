@@ -32,6 +32,8 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[datetime] = None
     program_id: Optional[str] = None
     error_message: Optional[str] = None
+    pdf_url: Optional[str] = None  # URL to download PDF
+    markdown_url: Optional[str] = None  # URL to download markdown
 
     class Config:
         json_schema_extra = {
@@ -55,6 +57,8 @@ class ProgramResponse(BaseModel):
     description: str
     duration_weeks: int
     created_at: datetime
+    pdf_url: Optional[str] = None
+    markdown_url: Optional[str] = None
 
     class Config:
         from_attributes = True  # Allows loading from SQLAlchemy models

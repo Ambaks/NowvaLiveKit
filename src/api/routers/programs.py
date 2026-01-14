@@ -3,8 +3,11 @@ Programs Router
 Endpoints for program generation and status checking
 """
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from uuid import UUID
+import os
+from pathlib import Path
 
 from ..models.requests import ProgramGenerationRequest, ProgramUpdateRequest
 from ..models.responses import (
@@ -27,6 +30,29 @@ from db.models import UserGeneratedProgram, User
 from db.program_utils import get_program_summary_list
 
 router = APIRouter()
+
+
+def _get_program_file_path(user_id: str, program_id: str, extension: str) -> Path:
+    """Get the path to a program file (PDF or markdown)"""
+    programs_dir = Path("programs")
+    filename = f"program_{user_id}_{program_id}.{extension}"
+    return programs_dir / filename
+
+
+def _get_program_file_urls(user_id: str, program_id: str) -> tuple[str | None, str | None]:
+    """
+    Get URLs for program PDF and markdown files if they exist.
+
+    Returns:
+        (pdf_url, markdown_url) tuple where URLs are None if files don't exist
+    """
+    pdf_path = _get_program_file_path(user_id, program_id, "pdf")
+    md_path = _get_program_file_path(user_id, program_id, "md")
+
+    pdf_url = f"/api/programs/{program_id}/download/pdf" if pdf_path.exists() else None
+    md_url = f"/api/programs/{program_id}/download/markdown" if md_path.exists() else None
+
+    return pdf_url, md_url
 
 
 @router.post("/generate", response_model=JobResponse, status_code=202)
@@ -112,7 +138,7 @@ async def get_generation_status(
         job_id: UUID of the generation job
 
     Returns:
-        Job status information
+        Job status information including PDF/markdown download URLs
 
     Raises:
         404: Job not found
@@ -133,6 +159,11 @@ async def get_generation_status(
 
     if job.status == "completed" and job.program_id:
         response.program_id = str(job.program_id)
+
+        # Get PDF and markdown URLs if files exist
+        pdf_url, md_url = _get_program_file_urls(job.user_id, str(job.program_id))
+        response.pdf_url = pdf_url
+        response.markdown_url = md_url
     elif job.status == "failed":
         response.error_message = job.error_message
 
@@ -151,7 +182,7 @@ async def get_program(
         program_id: Integer ID of the program
 
     Returns:
-        Program information
+        Program information including PDF/markdown download URLs
 
     Raises:
         404: Program not found
@@ -163,12 +194,17 @@ async def get_program(
     if not program:
         raise HTTPException(status_code=404, detail="Program not found")
 
+    # Get PDF and markdown URLs if files exist
+    pdf_url, md_url = _get_program_file_urls(str(program.user_id), str(program_id))
+
     return ProgramResponse(
         id=str(program.id),
         name=program.name,
         description=program.description,
         duration_weeks=program.duration_weeks,
-        created_at=program.created_at
+        created_at=program.created_at,
+        pdf_url=pdf_url,
+        markdown_url=md_url
     )
 
 
@@ -382,3 +418,87 @@ async def validate_program_change(
     )
 
     return validation_result
+
+
+@router.get("/{program_id}/download/pdf")
+async def download_program_pdf(
+    program_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Download the PDF file for a program.
+
+    Args:
+        program_id: ID of the program
+
+    Returns:
+        PDF file download
+
+    Raises:
+        404: Program or PDF file not found
+    """
+    # Verify program exists
+    program = db.query(UserGeneratedProgram).filter(
+        UserGeneratedProgram.id == program_id
+    ).first()
+
+    if not program:
+        raise HTTPException(status_code=404, detail=f"Program {program_id} not found")
+
+    # Get PDF path
+    pdf_path = _get_program_file_path(str(program.user_id), str(program_id), "pdf")
+
+    if not pdf_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"PDF file not found for program {program_id}. It may still be generating."
+        )
+
+    # Return file response
+    return FileResponse(
+        path=str(pdf_path),
+        filename=f"{program.name.replace(' ', '_')}.pdf",
+        media_type="application/pdf"
+    )
+
+
+@router.get("/{program_id}/download/markdown")
+async def download_program_markdown(
+    program_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Download the Markdown file for a program.
+
+    Args:
+        program_id: ID of the program
+
+    Returns:
+        Markdown file download
+
+    Raises:
+        404: Program or markdown file not found
+    """
+    # Verify program exists
+    program = db.query(UserGeneratedProgram).filter(
+        UserGeneratedProgram.id == program_id
+    ).first()
+
+    if not program:
+        raise HTTPException(status_code=404, detail=f"Program {program_id} not found")
+
+    # Get markdown path
+    md_path = _get_program_file_path(str(program.user_id), str(program_id), "md")
+
+    if not md_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Markdown file not found for program {program_id}. It may still be generating."
+        )
+
+    # Return file response
+    return FileResponse(
+        path=str(md_path),
+        filename=f"{program.name.replace(' ', '_')}.md",
+        media_type="text/markdown"
+    )

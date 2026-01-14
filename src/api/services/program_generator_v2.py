@@ -13,6 +13,8 @@ from db.database import SessionLocal
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set
 from .job_manager import update_job_status
 from .markdown_generator import generate_program_markdown
+from .html_generator import generate_html, detect_program_type
+from .phase_mapper import plan_program_phases
 from ..schemas.program_schemas import (
     ProgramBatchSchema,
     WeekSchema,
@@ -25,6 +27,17 @@ from openai import AsyncOpenAI
 import os
 from pathlib import Path
 import time
+
+# PDF generation (optional - requires WeasyPrint system dependencies)
+try:
+    from .pdf_generator import generate_pdf_from_html
+    PDF_AVAILABLE = True
+except (ImportError, OSError) as e:
+    PDF_AVAILABLE = False
+    print(f"⚠️  PDF generation not available: {e}")
+    print("   To enable PDF generation, install system dependencies:")
+    print("   brew install pango glib gdk-pixbuf cairo libffi")
+    print("   Then set DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib")
 
 # RAG integration
 try:
@@ -180,6 +193,20 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         print(f"[JOB {job_id}] 📦 Batch size: {BATCH_SIZE} (optimized for {total_workouts} total workouts: {duration_weeks} weeks × {workouts_per_week} days/week)")
 
         # =====================================================================
+        # PHASE PLANNING (intelligent phase structure for all program durations)
+        # =====================================================================
+        print(f"[JOB {job_id}] 📋 Planning phase structure...")
+        phase_mapper = plan_program_phases(
+            goal=params["goal_category"],
+            duration_weeks=duration_weeks,
+            params=params
+        )
+        phase_summary = phase_mapper.get_phase_progression_summary()
+        deload_summary = phase_mapper.get_deload_schedule_summary()
+        print(f"[JOB {job_id}] ✅ Phase plan: {phase_summary}")
+        print(f"[JOB {job_id}] ✅ {deload_summary}")
+
+        # =====================================================================
         # ONE-TIME RAG RETRIEVAL (before all batches for caching efficiency)
         # =====================================================================
         # Feature flag: Use RAG (dynamic retrieval) or CAG (static knowledge)
@@ -248,7 +275,8 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
                     previous_weeks=all_weeks,
                     system_prompt=system_prompt,  # Reuse same prompt for caching
                     rag_context=rag_context,       # For logging only
-                    rag_query=rag_query            # For logging only
+                    rag_query=rag_query,           # For logging only
+                    phase_mapper=phase_mapper      # Phase planning for intelligent week specs
                 )
                 batch_elapsed = time.time() - batch_start
                 batch_times.append(batch_elapsed)
@@ -623,7 +651,7 @@ def _build_user_prompt(
     # Metadata requirements - simplified for short programs
     if is_short:
         user_prompt += """**Task 1: Create Program Metadata**
-1. Program name should be clear and descriptive
+1. Program name should be SHORT and catchy (3-6 words max, e.g., "Bench Boost 4-Week")
 2. Description should explain the program's focus
 3. Progression strategy (if applicable for 2-week programs)
 4. Overall notes should cover warm-ups, form, and safety
@@ -631,7 +659,7 @@ def _build_user_prompt(
 """
     elif is_medium:
         user_prompt += """**Task 1: Create Program Metadata**
-1. Program name should be descriptive and motivating
+1. Program name should be SHORT and catchy (3-6 words max, e.g., "Hypertrophy Block 8-Week")
 2. Description should explain what the program achieves
 3. Progression strategy should explain how intensity/volume increases
 4. Deload guidance if program is 5-7 weeks (typically week 4 or 6)
@@ -640,7 +668,7 @@ def _build_user_prompt(
 """
     else:  # Long programs
         user_prompt += """**Task 1: Create/Reuse Program Metadata**
-1. Program name should be descriptive and motivating
+1. Program name should be SHORT and catchy (3-6 words max, e.g., "Powerlifting Prep 12-Week")
 2. Description should explain what the program achieves and who it's for
 3. Progression strategy should explain how intensity/volume increases week-to-week
 4. Include guidance on deload weeks (typically every 4th week at 60-70% intensity)
@@ -673,22 +701,46 @@ Keep the program metadata consistent with the overall {total_weeks}-week program
 
 """
 
-    # Week specifications - simplified for short programs
-    for spec in week_specs:
-        if is_short:
-            # Minimal detail for 1-2 week programs
-            user_prompt += f"""**Week {spec['week_num']}:** {spec['phase']} - {spec['intensity_range']} intensity, {params.get('days_per_week')} days
+    # Week specifications - adaptive verbosity based on program duration and batch size
+    # Verbose mode: short programs OR small batches (≤2 weeks)
+    # Condensed mode: large batches (>2 weeks)
+    is_verbose = is_short or weeks_in_batch <= 2
 
-"""
-        else:
-            # Full detail for 3+ week programs
+    for spec in week_specs:
+        if is_verbose:
+            # Verbose mode: full detail
             user_prompt += f"""**Week {spec['week_num']} Specifications:**
-- Phase: {spec['phase']}
-- Target Intensity: {spec['intensity_range']} of 1RM
-- Volume: {spec['volume_adjustment']}
+- Phase: {spec['phase']}"""
+            if 'sets_x_reps' in spec:
+                user_prompt += f"""
+- Target Sets × Reps: {spec['sets_x_reps']}"""
+            user_prompt += f"""
+- Target Intensity: {spec['intensity_range']} of 1RM"""
+            if 'rest_period' in spec:
+                user_prompt += f"""
+- Rest Periods: {spec['rest_period']}"""
+            user_prompt += f"""
+- Volume: {spec['volume_adjustment']}"""
+            if 'exercise_selection' in spec:
+                user_prompt += f"""
+- Exercise Selection: {spec['exercise_selection']}"""
+            if 'notes' in spec and spec['notes']:
+                user_prompt += f"""
+- **Phase Notes**: {spec['notes']}"""
+            user_prompt += f"""
 - Days per week: {params.get('days_per_week')}
 
 """
+        else:
+            # Condensed mode: key parameters only
+            base_info = f"""**Week {spec['week_num']}:** {spec['phase']} | """
+            if 'sets_x_reps' in spec:
+                base_info += f"{spec['sets_x_reps']} @ "
+            base_info += f"{spec['intensity_range']}"
+            if 'rest_period' in spec:
+                base_info += f" | Rest: {spec['rest_period']}"
+            base_info += f" | {spec['volume_adjustment']}"
+            user_prompt += base_info + "\n\n"
 
     # Requirements - scaled by program length
     if is_short:
@@ -829,7 +881,8 @@ async def _generate_program_batch(
     previous_weeks: list,
     system_prompt: str,
     rag_context: str = None,
-    rag_query: str = None
+    rag_query: str = None,
+    phase_mapper = None
 ) -> ProgramBatchSchema:
     """
     Generate a batch of up to 4 weeks using Cache-Augmented Generation (CAG).
@@ -867,37 +920,73 @@ async def _generate_program_batch(
 
     print(f"[JOB {job_id}] 📋 Batch will generate weeks: {week_numbers}")
 
-    # Build intensity/phase specifications for each week
+    # Build phase specifications for each week using PhaseMapper
     week_specs = []
-    for week_num in week_numbers:
-        base_intensity = 75.0
-        weekly_increase = 1.5
-        is_deload = (week_num % 4 == 0)
 
-        if is_deload:
-            intensity_range = "60-70%"
-            phase = "Deload"
-            volume_adjustment = "Reduce volume by 40-50%"
+    if phase_mapper is not None:
+        # Use intelligent phase mapping from templates
+        mapped_phases = phase_mapper.get_phases_for_batch(start_week, end_week)
+
+        for mapped_phase in mapped_phases:
+            week_specs.append({
+                "week_num": mapped_phase.week_number,
+                "phase": mapped_phase.phase_name,
+                "sets_x_reps": mapped_phase.sets_x_reps,
+                "rest_period": mapped_phase.rest_period,
+                "intensity_range": mapped_phase.intensity_range,
+                "volume_adjustment": mapped_phase.volume_adjustment,
+                "exercise_selection": mapped_phase.exercise_selection,
+                "notes": mapped_phase.notes
+            })
+    else:
+        # Fallback to old logic for backward compatibility
+        goal_category = params.get('goal_category', 'hypertrophy').lower()
+
+        if goal_category == 'strength':
+            base_intensity = 80.0
+            weekly_increase = 5.0
+            intensity_spread = 7.0
+        elif goal_category == 'power':
+            base_intensity = 70.0
+            weekly_increase = 3.0
+            intensity_spread = 15.0
         else:
-            weeks_into_block = week_num - (week_num // 4)
-            intensity = base_intensity + (weekly_increase * (weeks_into_block - 1))
-            intensity_range = f"{intensity:.1f}-{intensity+10:.1f}%"
+            base_intensity = 75.0
+            weekly_increase = 1.5
+            intensity_spread = 10.0
 
-            if week_num >= total_weeks - 1:
-                phase = "Peak"
-            elif week_num >= total_weeks - 3:
-                phase = "Taper"
+        for week_num in week_numbers:
+            is_deload = (week_num % 4 == 0)
+
+            if is_deload:
+                intensity_range = "60-70%"
+                phase = "Deload"
+                volume_adjustment = "Reduce volume by 40-50%"
             else:
-                phase = "Build"
+                weeks_into_block = week_num - (week_num // 4)
+                intensity = base_intensity + (weekly_increase * (weeks_into_block - 1))
 
-            volume_adjustment = "Normal training volume"
+                if goal_category == 'strength' and week_num >= total_weeks - 1:
+                    intensity = max(intensity, 90.0)
+                    intensity_spread = 7.0
 
-        week_specs.append({
-            "week_num": week_num,
-            "phase": phase,
-            "intensity_range": intensity_range,
-            "volume_adjustment": volume_adjustment
-        })
+                intensity_range = f"{intensity:.1f}-{intensity+intensity_spread:.1f}%"
+
+                if week_num >= total_weeks - 1:
+                    phase = "Peak"
+                elif week_num >= total_weeks - 3:
+                    phase = "Taper"
+                else:
+                    phase = "Build"
+
+                volume_adjustment = "Normal training volume"
+
+            week_specs.append({
+                "week_num": week_num,
+                "phase": phase,
+                "intensity_range": intensity_range,
+                "volume_adjustment": volume_adjustment
+            })
 
     # System prompt is now passed in (built once before all batches for caching)
     # No need to rebuild it here!
@@ -928,13 +1017,6 @@ async def _generate_program_batch(
     print(f"[JOB {job_id}] ⏰ Timeout set to 480.0 seconds (8 minutes)")
     print(f"[JOB {job_id}] 🤖 Using model: {model}")
 
-    # Log optimization strategy
-    if total_weeks <= 2:
-        print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using SHORT CAG + simplified prompts for {total_weeks}-week program")
-    elif total_weeks <= 7:
-        print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using MEDIUM CAG + moderate prompts for {total_weeks}-week program")
-    else:
-        print(f"[JOB {job_id}] 🚀 OPTIMIZATION: Using FULL CAG + detailed prompts for {total_weeks}-week program")
 
     # Save prompts to disk if logging is enabled
     _save_prompt_log(
@@ -1108,7 +1190,7 @@ You are a specialized program generation AI with access to a Barbell-Focused Str
    - If avg velocity >= threshold: add 2.5-5% load next session
    - If avg velocity < velocity_min: reduce load 5-10% or end set early
 5. **Set termination rule:** "Stop set when velocity drops >10% from first rep"
-6. **VBT notes in set.notes:** Include instructions like "Target 1.0 m/s. Stop if velocity drops below 0.95 m/s"
+6. **VBT notes in exercise notes:** Include instructions like "Target 1.0 m/s. Stop if velocity drops below 0.95 m/s" in the exercise-level notes field
 
 ## VBT vs Non-VBT
 - **Power WITHOUT VBT:** Use % 1RM and RIR (e.g., 3x3 @ 70% 1RM, 2 RIR)
@@ -1368,7 +1450,7 @@ You are a specialized program generation AI with access to evidence-based streng
 
 # Rep Ranges & Intensity
 * **Hypertrophy:** 6-20 reps (6-8, 8-12, 12-15, 15-20)
-* **Strength:** 1-6 reps @ 80-95% 1RM
+* **Strength:** 1-6 reps @ 80-99% 1RM
 * **Power:** 1-5 reps explosive @ 50-85% 1RM
 * **Athletic Performance:** Mix based on sport demands
 
@@ -1398,7 +1480,7 @@ You are a specialized program generation AI with access to evidence-based streng
    - If avg velocity >= threshold: add 2.5-5% load next session
    - If avg velocity < velocity_min: reduce load 5-10% or end set early
 5. **Set termination rule:** "Stop set when velocity drops >10% from first rep"
-6. **VBT notes in set.notes:** Include instructions like "Target 1.0 m/s. Stop if velocity drops below 0.95 m/s"
+6. **VBT notes in exercise notes:** Include instructions like "Target 1.0 m/s. Stop if velocity drops below 0.95 m/s" in the exercise-level notes field
 
 ## VBT vs Non-VBT
 - **Power WITHOUT VBT:** Use % 1RM and RIR (e.g., 3x3 @ 70% 1RM, 2 RIR)
@@ -1574,7 +1656,7 @@ def _save_program_to_db(db, user_id: str, program_data: dict) -> str:
 
 def _generate_markdown_file(db, program_id: int, user_id: str, params: dict, batch_data):
     """
-    Generate a markdown file for the completed program.
+    Generate markdown, HTML, and PDF files for the completed program.
 
     Args:
         db: Database session
@@ -1606,6 +1688,9 @@ def _generate_markdown_file(db, program_id: int, user_id: str, params: dict, bat
     vbt_setup_notes = getattr(batch_data, 'vbt_setup_notes', None)
     deload_schedule = getattr(batch_data, 'deload_schedule', None)
     injury_accommodations = getattr(batch_data, 'injury_accommodations', None)
+    goal = getattr(batch_data, 'goal', None)
+    progression_strategy = getattr(batch_data, 'progression_strategy', None)
+    overall_notes = getattr(batch_data, 'overall_notes', None)
 
     # Generate the markdown
     markdown_path = generate_program_markdown(
@@ -1619,4 +1704,143 @@ def _generate_markdown_file(db, program_id: int, user_id: str, params: dict, bat
         injury_accommodations=injury_accommodations
     )
 
+    # Generate PDF
+    try:
+        print(f"[JOB - Program {program_id}] 📄 Generating PDF...")
+        print(f"[JOB - Program {program_id}] PDF_AVAILABLE = {PDF_AVAILABLE}")
+
+        # Build program data structure for HTML/PDF generation
+        program_data = _build_program_data_dict(program, workouts, vbt_enabled, vbt_setup_notes, deload_schedule, injury_accommodations, goal, progression_strategy, overall_notes)
+
+        # User data for cover page
+        user_data = {
+            'name': params.get('name'),
+            'email': params.get('email'),
+            'age': params.get('age'),
+        }
+
+        # Generate HTML
+        html_content = generate_html(program_data, user_data)
+        print(f"[JOB - Program {program_id}] ✅ HTML generated ({len(html_content)} chars)")
+
+        # Generate PDF (if available)
+        if PDF_AVAILABLE:
+            pdf_filename = f"program_{user_id}_{program_id}.pdf"
+            pdf_path = os.path.join("programs", pdf_filename)
+            print(f"[JOB - Program {program_id}] Calling generate_pdf_from_html...")
+
+            # Set base_url to templates directory so assets can be found
+            templates_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "templates"))
+            base_url = f"file://{templates_dir}/"
+
+            generate_pdf_from_html(html_content, pdf_path, base_url=base_url)
+            print(f"[JOB - Program {program_id}] ✅ PDF generated: {pdf_path}")
+
+            # Verify PDF was created
+            if os.path.exists(pdf_path):
+                size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+                print(f"[JOB - Program {program_id}] 📊 PDF size: {size_mb:.2f} MB")
+            else:
+                print(f"[JOB - Program {program_id}] ❌ PDF file not found after generation!")
+        else:
+            print(f"[JOB - Program {program_id}] ⚠️ PDF generation skipped (WeasyPrint not available)")
+    except Exception as e:
+        print(f"[JOB - Program {program_id}] ⚠️ PDF generation failed (non-fatal): {e}")
+        import traceback
+        traceback.print_exc()
+        # Don't fail the entire job if PDF generation fails
+
     return markdown_path
+
+
+def _build_program_data_dict(program, workouts, vbt_enabled, vbt_setup_notes, deload_schedule, injury_accommodations, goal, progression_strategy, overall_notes):
+    """
+    Build a dictionary representation of the program for HTML/PDF generation.
+
+    Args:
+        program: UserGeneratedProgram model instance
+        workouts: List of Workout model instances with loaded relationships
+        vbt_enabled: Whether VBT is enabled
+        vbt_setup_notes: VBT setup notes
+        deload_schedule: Deload schedule notes
+        injury_accommodations: Injury accommodation notes
+        goal: Primary training goal
+        progression_strategy: Progression strategy description
+        overall_notes: Additional program notes
+
+    Returns:
+        Dictionary with complete program data
+    """
+    # Group workouts by week
+    weeks_dict = {}
+    for workout in workouts:
+        week_num = workout.week_number
+        if week_num not in weeks_dict:
+            weeks_dict[week_num] = {
+                'week_number': week_num,
+                'phase': workout.phase or 'Build',
+                'notes': None,
+                'workouts': []
+            }
+
+        # Build exercises list
+        exercises = []
+        for workout_exercise in sorted(workout.workout_exercises, key=lambda we: we.order_number):
+            exercise_data = {
+                'order': workout_exercise.order_number,
+                'exercise_name': workout_exercise.exercise.name if workout_exercise.exercise else 'Unknown',
+                'category': workout_exercise.exercise.category if workout_exercise.exercise else 'Strength',
+                'muscle_group': workout_exercise.exercise.muscle_group if workout_exercise.exercise else '',
+                'notes': workout_exercise.notes,
+                'sets': []
+            }
+
+            # Build sets list
+            for set_obj in sorted(workout_exercise.sets, key=lambda s: s.set_number):
+                # Convert RPE to RIR (RIR ≈ 10 - RPE)
+                rir_value = (10 - float(set_obj.rpe)) if set_obj.rpe else None
+
+                set_data = {
+                    'set_number': set_obj.set_number,
+                    'reps': set_obj.reps,
+                    'intensity_percent': set_obj.intensity_percent,
+                    'rir': rir_value,
+                    'rest_seconds': set_obj.rest_seconds,
+                    'velocity_threshold': set_obj.velocity_threshold,
+                    'velocity_min': set_obj.velocity_min,
+                    'velocity_max': set_obj.velocity_max
+                }
+                exercise_data['sets'].append(set_data)
+
+            exercises.append(exercise_data)
+
+        # Build workout dict
+        workout_data = {
+            'day_number': workout.day_number,
+            'name': workout.name,
+            'description': workout.description or '',
+            'exercises': exercises
+        }
+
+        weeks_dict[week_num]['workouts'].append(workout_data)
+
+    # Convert weeks dict to sorted list
+    weeks_list = [weeks_dict[week_num] for week_num in sorted(weeks_dict.keys())]
+
+    # Build complete program data
+    program_data = {
+        'id': program.id,
+        'program_name': program.name,
+        'description': program.description or '',
+        'duration_weeks': program.duration_weeks,
+        'goal': goal or '',
+        'progression_strategy': progression_strategy or '',
+        'overall_notes': overall_notes or '',
+        'vbt_enabled': vbt_enabled,
+        'vbt_setup_notes': vbt_setup_notes,
+        'deload_schedule': deload_schedule,
+        'injury_accommodations': injury_accommodations,
+        'weeks': weeks_list
+    }
+
+    return program_data

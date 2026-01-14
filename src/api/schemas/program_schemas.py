@@ -64,17 +64,21 @@ class WorkoutSchema(BaseModel):
 class WeekSchema(BaseModel):
     """Schema for a single week of training"""
     week_number: int = Field(ge=1, description="Week number in the program")
-    phase: str = Field(description="Training phase: Build, Deload, Peak, or Taper")
+    phase: str = Field(description="Training phase (e.g., 'Hypertrophy I', 'Strength II', 'Deload', 'Peak', 'Taper')")
     workouts: List[WorkoutSchema] = Field(description="All workouts for this week")
     notes: Optional[str] = Field(
         default=None,
         description="Week-specific notes (e.g., 'This is a deload week, reduce volume by 40%')"
     )
+    phase_description: Optional[str] = Field(
+        default=None,
+        description="Detailed phase description and goals for this week"
+    )
 
 
 class ProgramMetadataSchema(BaseModel):
     """Schema for high-level program metadata (generated first, before weeks)"""
-    program_name: str = Field(description="Descriptive program name")
+    program_name: str = Field(description="Short, catchy program name (3-6 words max, e.g., 'Power Builder 12-Week', 'Bench Specialization Block')")
     description: str = Field(description="Program overview and what it achieves")
     duration_weeks: int = Field(ge=1, le=52, description="Total program duration in weeks")
     goal: str = Field(description="Primary training goal (Strength, Hypertrophy, Power)")
@@ -107,7 +111,7 @@ class ProgramBatchSchema(BaseModel):
     - Batch 2: Weeks 5-8 (cache hit, 50% cost + faster) - metadata optional
     - Batch 3: Weeks 9-12 (cache hit, 50% cost + faster) - metadata optional
     """
-    program_name: str = Field(description="Descriptive program name (required for first batch)")
+    program_name: str = Field(description="Short, catchy program name (3-6 words max, e.g., 'Power Builder 12-Week', 'Bench Specialization Block')")
     description: str = Field(description="Program overview and what it achieves (required for first batch)")
     duration_weeks: int = Field(ge=1, le=52, description="Total program duration in weeks (required for first batch)")
     goal: str = Field(description="Primary training goal: Strength, Hypertrophy, or Power (required for first batch)")
@@ -132,6 +136,10 @@ class ProgramBatchSchema(BaseModel):
     deload_schedule: Optional[str] = Field(
         default=None,
         description="Which weeks are deloads and how to implement them"
+    )
+    phase_progression: Optional[str] = Field(
+        default=None,
+        description="High-level phase progression summary (e.g., 'Weeks 1-4: Hypertrophy I → Week 5: Deload → Weeks 6-9: Hypertrophy II')"
     )
     injury_accommodations: Optional[str] = Field(
         default=None,
