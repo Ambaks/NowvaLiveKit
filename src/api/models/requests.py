@@ -41,6 +41,10 @@ class ProgramGenerationRequest(BaseModel):
         max_length=2000,
         description="Any additional notes, preferences, or context from the user (e.g., 'prefer front squats', 'training for marathon in 3 months', 'avoid overhead pressing')"
     )
+    send_email: Optional[bool] = Field(
+        default=False,
+        description="Whether to send program PDF via email when generation completes (for website users)"
+    )
 
     class Config:
         json_schema_extra = {

@@ -4,7 +4,7 @@ Main application entry point for program generation API
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import programs, health
+from .routers import programs, health, livekit
 
 app = FastAPI(
     title="Nowva Program Generator API",
@@ -26,6 +26,7 @@ app.add_middleware(
 # Include routers
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(programs.router, prefix="/api/programs", tags=["programs"])
+app.include_router(livekit.router, prefix="/api/livekit", tags=["livekit"])
 
 
 @app.on_event("startup")

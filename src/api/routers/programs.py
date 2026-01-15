@@ -55,6 +55,61 @@ def _get_program_file_urls(user_id: str, program_id: str) -> tuple[str | None, s
     return pdf_url, md_url
 
 
+@router.post("/check-eligibility")
+async def check_program_eligibility(
+    request: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Check if an email address is eligible to generate a new program.
+    Used by website frontend before starting the voice conversation.
+
+    Returns:
+        200 OK with eligibility info if allowed
+        429 Too Many Requests if rate limited
+    """
+    from datetime import datetime, timedelta
+
+    email = request.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    # Find user by email
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        # New user - always eligible
+        return {
+            "eligible": True,
+            "message": "Welcome! You're eligible to generate your first program."
+        }
+
+    # Check if user has generated a program in the last 7 days
+    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    recent_program = db.query(UserGeneratedProgram).filter(
+        UserGeneratedProgram.user_id == user.id,
+        UserGeneratedProgram.created_at >= one_week_ago
+    ).order_by(UserGeneratedProgram.created_at.desc()).first()
+
+    if recent_program:
+        # Calculate when they can generate next
+        next_allowed = recent_program.created_at + timedelta(days=7)
+        time_remaining = next_allowed - datetime.utcnow()
+        days_remaining = time_remaining.days
+        hours_remaining = (time_remaining.seconds // 3600)
+
+        raise HTTPException(
+            status_code=429,
+            detail=f"You can only generate one program per week. Please try again in {days_remaining} days and {hours_remaining} hours."
+        )
+
+    # Eligible to generate
+    return {
+        "eligible": True,
+        "message": "You're eligible to generate a new program!"
+    }
+
+
 @router.post("/generate", response_model=JobResponse, status_code=202)
 async def start_program_generation(
     request: ProgramGenerationRequest,
@@ -68,10 +123,30 @@ async def start_program_generation(
     Returns:
         202 Accepted with job information
     """
+    from datetime import datetime, timedelta
+
     # Verify user exists
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail=f"User {request.user_id} not found")
+
+    # Rate limiting: Check if user has generated a program in the last 7 days
+    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    recent_program = db.query(UserGeneratedProgram).filter(
+        UserGeneratedProgram.user_id == request.user_id,
+        UserGeneratedProgram.created_at >= one_week_ago
+    ).order_by(UserGeneratedProgram.created_at.desc()).first()
+
+    if recent_program:
+        # Calculate when they can generate next
+        next_allowed = recent_program.created_at + timedelta(days=7)
+        days_remaining = (next_allowed - datetime.utcnow()).days
+        hours_remaining = ((next_allowed - datetime.utcnow()).seconds // 3600)
+
+        raise HTTPException(
+            status_code=429,
+            detail=f"You can only generate one program per week. Please try again in {days_remaining} days and {hours_remaining} hours."
+        )
 
     # Create job record
     job = create_job(
@@ -113,7 +188,8 @@ async def start_program_generation(
             "injury_history": request.injury_history,
             "specific_sport": request.specific_sport,
             "has_vbt_capability": request.has_vbt_capability,
-            "user_notes": request.user_notes
+            "user_notes": request.user_notes,
+            "send_email": request.send_email
         }
     )
 

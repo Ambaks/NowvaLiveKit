@@ -27,6 +27,12 @@ export default {
           light: '#60A5FA',
           dark: '#1D4ED8',
         },
+        purple: {
+          DEFAULT: '#8B5CF6',
+          hover: '#7C3AED',
+          light: '#A78BFA',
+          dark: '#6D28D9',
+        },
         border: {
           DEFAULT: '#E5E5E5',
           light: '#D4D4D4',
@@ -68,6 +74,9 @@ export default {
       boxShadow: {
         'glow': '0 0 20px rgba(59, 130, 246, 0.3)',
         'glow-lg': '0 0 40px rgba(59, 130, 246, 0.4)',
+        'glow-purple': '0 0 20px rgba(139, 92, 246, 0.3)',
+        'glow-purple-lg': '0 0 40px rgba(139, 92, 246, 0.4)',
+        'glow-gradient': '0 0 30px rgba(59, 130, 246, 0.2), 0 0 60px rgba(139, 92, 246, 0.2)',
       },
       animation: {
         'fade-in': 'fadeIn 0.6s ease-out forwards',
@@ -106,6 +115,8 @@ export default {
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
         'gradient-mesh': 'radial-gradient(at 40% 20%, hsla(217, 91%, 60%, 0.15) 0px, transparent 50%), radial-gradient(at 80% 0%, hsla(217, 91%, 60%, 0.1) 0px, transparent 50%), radial-gradient(at 80% 100%, hsla(217, 91%, 60%, 0.1) 0px, transparent 50%)',
+        'gradient-purple-blue': 'linear-gradient(135deg, #667eea 0%, #764ba2 25%, #f093fb 50%, #4facfe 100%)',
+        'gradient-voice': 'linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%)',
       },
     },
   },

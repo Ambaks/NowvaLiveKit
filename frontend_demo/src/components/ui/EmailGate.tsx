@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { motion } from 'framer-motion';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { Sparkles, Zap, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Zap, CheckCircle2, Loader2 } from 'lucide-react';
 
 interface EmailGateProps {
   onSubmit: (email: string) => void;
@@ -13,12 +13,15 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
   const [error, setError] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
+  const [isChecking, setIsChecking] = useState(false);
+
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   const validateEmail = (email: string) => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
     if (!validateEmail(email)) {
@@ -26,8 +29,33 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
       return;
     }
 
-    localStorage.setItem('nowva_user_email', email);
-    onSubmit(email);
+    setIsChecking(true);
+    setError('');
+
+    try {
+      // Check if user is eligible to generate a program
+      const response = await fetch(`${apiUrl}/api/programs/check-eligibility`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to check eligibility');
+      }
+
+      // User is eligible - proceed
+      localStorage.setItem('nowva_user_email', email);
+      onSubmit(email);
+    } catch (err) {
+      console.error('Eligibility check failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to check eligibility');
+    } finally {
+      setIsChecking(false);
+    }
   };
 
   const benefits = [
@@ -178,10 +206,20 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
                 <Button
                   type="submit"
                   size="lg"
+                  disabled={isChecking}
                   className="sm:w-auto w-full whitespace-nowrap group"
                 >
-                  <span>Start Now</span>
-                  <Zap className="w-4 h-4 ml-2 group-hover:scale-110 transition-transform" />
+                  {isChecking ? (
+                    <>
+                      <span>Checking...</span>
+                      <Loader2 className="w-4 h-4 ml-2 animate-spin" />
+                    </>
+                  ) : (
+                    <>
+                      <span>Start Now</span>
+                      <Zap className="w-4 h-4 ml-2 group-hover:scale-110 transition-transform" />
+                    </>
+                  )}
                 </Button>
               </div>
             </motion.form>

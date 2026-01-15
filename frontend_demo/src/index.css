@@ -31,7 +31,7 @@
   }
 
   .gradient-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-accent-light via-accent to-accent-dark;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#8B5CF6] via-[#3B82F6] to-[#A78BFA];
   }
 
   .glass-card {
@@ -39,7 +39,7 @@
   }
 
   .button-primary {
-    @apply bg-accent hover:bg-accent-hover text-white font-medium px-6 py-3 rounded-xl transition-all duration-200 hover:scale-105 active:scale-95 hover:shadow-glow;
+    @apply bg-gradient-to-r from-[#8B5CF6] to-[#3B82F6] hover:from-[#7C3AED] hover:to-[#2563EB] text-white font-medium px-6 py-3 rounded-xl transition-all duration-200 hover:scale-105 active:scale-95 hover:shadow-glow-gradient;
   }
 
   .button-secondary {

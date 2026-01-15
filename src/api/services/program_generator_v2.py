@@ -47,6 +47,14 @@ except ImportError:
     RAG_AVAILABLE = False
     print("⚠️  RAG module not available. Using CAG only.")
 
+# Email service
+try:
+    from services.email_service import send_program_email
+    EMAIL_AVAILABLE = True
+except ImportError:
+    EMAIL_AVAILABLE = False
+    print("⚠️  Email service not available. Install resend: pip install resend")
+
 
 def _save_prompt_log(
     job_id: str,
@@ -364,6 +372,61 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
             traceback.print_exc()
         markdown_elapsed = time.time() - markdown_start
 
+        # Send email with PDF (95% → 100%) - ONLY for website users
+        update_job_status(db, job_id, "in_progress", progress=95)
+        email_start = time.time()
+        email_sent = False
+        send_email_requested = params.get("send_email", False)
+
+        try:
+            if send_email_requested and EMAIL_AVAILABLE and PDF_AVAILABLE:
+                print(f"\n[JOB {job_id}] 📧 Sending program email (website user)...")
+
+                # Get user email from database
+                from db.models import User
+                user = db.query(User).filter(User.id == user_id).first()
+                if user and user.email:
+                    user_email = user.email
+                    user_name = params.get("name", user.name)
+
+                    # Build PDF path
+                    pdf_filename = f"program_{user_id}_{program_id}.pdf"
+                    pdf_path = os.path.join("programs", pdf_filename)
+
+                    # Check if PDF exists
+                    if os.path.exists(pdf_path):
+                        # Send email
+                        result = send_program_email(
+                            to_email=user_email,
+                            user_name=user_name,
+                            program_id=program_id,
+                            pdf_path=pdf_path
+                        )
+
+                        if result:
+                            email_sent = True
+                            print(f"[JOB {job_id}] ✅ Email sent to {user_email}")
+                        else:
+                            print(f"[JOB {job_id}] ⚠️  Email failed to send (check logs)")
+                    else:
+                        print(f"[JOB {job_id}] ⚠️  PDF not found, skipping email: {pdf_path}")
+                else:
+                    print(f"[JOB {job_id}] ⚠️  No email address for user, skipping email")
+            else:
+                if not send_email_requested:
+                    print(f"[JOB {job_id}] ℹ️  Email not requested (full app user), skipping email")
+                elif not EMAIL_AVAILABLE:
+                    print(f"[JOB {job_id}] ⚠️  Email service not available, skipping email")
+                elif not PDF_AVAILABLE:
+                    print(f"[JOB {job_id}] ⚠️  PDF not available, skipping email")
+
+        except Exception as email_error:
+            # Don't fail the job if email sending fails
+            print(f"[JOB {job_id}] ⚠️  Email sending failed (non-fatal): {email_error}")
+            import traceback
+            traceback.print_exc()
+        email_elapsed = time.time() - email_start
+
         # Mark complete
         total_elapsed = time.time() - total_start_time
         update_job_status(db, job_id, "completed", progress=100, program_id=str(program_id))
@@ -383,6 +446,7 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
         print(f"  Total AI generation: {generation_elapsed:.2f}s")
         print(f"  Database save: {db_save_elapsed:.2f}s")
         print(f"  Markdown generation: {markdown_elapsed:.2f}s")
+        print(f"  Email sending: {email_elapsed:.2f}s {' ✅ sent' if email_sent else ' (skipped)'}")
         print(f"  TOTAL TIME: {total_elapsed:.2f}s ({total_elapsed/60:.2f} minutes)")
         print(f"{'='*80}\n")
 
