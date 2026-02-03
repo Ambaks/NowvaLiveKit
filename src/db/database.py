@@ -21,14 +21,18 @@ if not DATABASE_URL:
     )
 
 # Create SQLAlchemy engine with connection pool settings for cloud databases
+# Pool settings adjusted for multi-worker setup:
+# - 4 Gunicorn workers × 15 connections = 60 connections
+# - 3 Celery workers × 6 greenlets = 18 connections
+# Total: ~78 connections (below Neon's typical 100 limit)
 engine = create_engine(
     DATABASE_URL,
     echo=False,  # Set to True to see SQL queries in logs (useful for debugging)
     future=True,
     pool_pre_ping=True,  # Test connections before using them
     pool_recycle=3600,   # Recycle connections after 1 hour
-    pool_size=10,        # Connection pool size
-    max_overflow=20,     # Max overflow connections
+    pool_size=5,         # Connection pool size (reduced per process)
+    max_overflow=10,     # Max overflow connections (reduced per process)
     connect_args={
         "keepalives": 1,
         "keepalives_idle": 30,

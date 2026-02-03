@@ -2,8 +2,11 @@
 Nowva FastAPI Backend
 Main application entry point for program generation API
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
 from .routers import programs, health, livekit
 
 app = FastAPI(
@@ -27,6 +30,15 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(programs.router, prefix="/api/programs", tags=["programs"])
 app.include_router(livekit.router, prefix="/api/livekit", tags=["livekit"])
+
+# Serve frontend static files
+frontend_dist = Path(__file__).parent.parent.parent / "frontend_demo" / "dist"
+if frontend_dist.exists():
+    # Serve static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+    print(f"✓ Serving frontend assets from {frontend_dist / 'assets'}")
+else:
+    print("⚠️  Frontend dist folder not found. Run 'npm run build' in frontend_demo/")
 
 
 @app.on_event("startup")
@@ -87,12 +99,32 @@ async def shutdown_event():
     print("="*80 + "\n")
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
-    """Root endpoint"""
-    return {
-        "service": "Nowva Program Generator API",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/api/health"
-    }
+    """Serve frontend index.html"""
+    frontend_dist = Path(__file__).parent.parent.parent / "frontend_demo" / "dist"
+    if frontend_dist.exists():
+        return FileResponse(str(frontend_dist / "index.html"))
+    else:
+        return {
+            "service": "Nowva Program Generator API",
+            "version": "1.0.0",
+            "docs": "/docs",
+            "health": "/api/health",
+            "warning": "Frontend not built. Run: cd frontend_demo && npm run build"
+        }
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_frontend(full_path: str):
+    """Serve frontend for all non-API routes (SPA routing)"""
+    # API routes are handled by routers
+    if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Serve index.html for SPA routing
+    frontend_dist = Path(__file__).parent.parent.parent / "frontend_demo" / "dist"
+    if frontend_dist.exists():
+        return FileResponse(str(frontend_dist / "index.html"))
+    else:
+        raise HTTPException(status_code=404, detail="Frontend not built")

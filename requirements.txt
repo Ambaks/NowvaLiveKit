@@ -50,9 +50,15 @@ seaborn>=0.12.0
 # =============================================================================
 fastapi>=0.109.0                       # Web framework
 uvicorn[standard]>=0.27.0              # ASGI server
+gunicorn>=21.2.0                       # WSGI server for production
 httpx>=0.26.0                          # Async HTTP client (for voice agent → FastAPI)
 openai>=1.0.0                          # OpenAI API client
 tiktoken>=0.5.0                        # Token counting for OpenAI models
+
+# Job Queue & Task Processing
+celery[redis]>=5.3.0                   # Distributed task queue
+redis>=5.0.0                           # Redis client for broker/backend
+gevent>=23.9.0                         # Greenlet-based concurrency for I/O tasks
 
 # PDF Generation (for program exports)
 weasyprint>=60.0.0                     # HTML to PDF conversion

@@ -8,8 +8,12 @@ from uuid import UUID
 
 class ProgramGenerationRequest(BaseModel):
     """Request model for starting program generation"""
-    # Original required parameters
+    # User identification
     user_id: UUID
+    name: str = Field(min_length=1, max_length=200, description="User's name")
+    email: str = Field(min_length=1, max_length=200, description="User's email address")
+
+    # Original required parameters
     height_cm: float = Field(gt=0, lt=300, description="Height in centimeters")
     weight_kg: float = Field(gt=0, lt=500, description="Weight in kilograms")
     goal_category: str = Field(pattern="^(power|strength|hypertrophy|athletic_performance)$", description="Primary training goal")

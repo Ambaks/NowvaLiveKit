@@ -49,7 +49,7 @@ except ImportError:
 
 # Email service
 try:
-    from services.email_service import send_program_email
+    from services.email_service import send_program_email_async
     EMAIL_AVAILABLE = True
 except ImportError:
     EMAIL_AVAILABLE = False
@@ -395,8 +395,8 @@ async def generate_program_background(job_id: str, user_id: str, params: dict):
 
                     # Check if PDF exists
                     if os.path.exists(pdf_path):
-                        # Send email
-                        result = send_program_email(
+                        # Send email (async)
+                        result = await send_program_email_async(
                             to_email=user_email,
                             user_name=user_name,
                             program_id=program_id,

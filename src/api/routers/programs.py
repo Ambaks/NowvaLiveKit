@@ -2,7 +2,7 @@
 Programs Router
 Endpoints for program generation and status checking
 """
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -113,22 +113,31 @@ async def check_program_eligibility(
 @router.post("/generate", response_model=JobResponse, status_code=202)
 async def start_program_generation(
     request: ProgramGenerationRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
-    Start generating a workout program.
+    Start generating a workout program via Celery.
     Returns immediately with a job_id to track progress.
 
     Returns:
         202 Accepted with job information
     """
     from datetime import datetime, timedelta
+    from ..celery_tasks import generate_program_task
 
-    # Verify user exists
+    # Get or create user
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail=f"User {request.user_id} not found")
+        # Create new user with the provided information
+        user = User(
+            id=request.user_id,
+            email=request.email,
+            name=request.name
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        print(f"[API] Created new user {user.id} ({user.email}) for program generation")
 
     # Rate limiting: Check if user has generated a program in the last 7 days
     one_week_ago = datetime.utcnow() - timedelta(days=7)
@@ -168,9 +177,8 @@ async def start_program_generation(
         user_notes=request.user_notes
     )
 
-    # Start background task
-    background_tasks.add_task(
-        generate_program_background,
+    # Dispatch to Celery
+    task = generate_program_task.delay(
         job_id=str(job.id),
         user_id=str(request.user_id),
         params={
@@ -193,7 +201,7 @@ async def start_program_generation(
         }
     )
 
-    print(f"[API] Started program generation job {job.id} for user {user.name}")
+    print(f"[API] Dispatched Celery task {task.id} for job {job.id} (user: {user.name})")
 
     return JobResponse(
         job_id=str(job.id),
@@ -319,11 +327,10 @@ async def list_user_programs(
 async def start_program_update(
     program_id: int,
     request: ProgramUpdateRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
-    Start updating an existing workout program.
+    Start updating an existing workout program via Celery.
     Returns immediately with a job_id to track progress.
 
     Args:
@@ -336,6 +343,8 @@ async def start_program_update(
     Raises:
         404: Program not found
     """
+    from ..celery_tasks import update_program_task
+
     # Verify program exists and get its user_id
     program = db.query(UserGeneratedProgram).filter(
         UserGeneratedProgram.id == program_id
@@ -375,9 +384,8 @@ async def start_program_update(
         "fitness_level": request.fitness_level
     }
 
-    # Start background task
-    background_tasks.add_task(
-        update_program_background,
+    # Dispatch to Celery
+    task = update_program_task.delay(
         job_id=str(job.id),
         user_id=user_id,
         program_id=program_id,
@@ -385,7 +393,7 @@ async def start_program_update(
         user_profile=user_profile
     )
 
-    print(f"[API] Started program update job {job.id} for program {program_id}")
+    print(f"[API] Dispatched Celery update task {task.id} for program {program_id}")
 
     return JobResponse(
         job_id=str(job.id),

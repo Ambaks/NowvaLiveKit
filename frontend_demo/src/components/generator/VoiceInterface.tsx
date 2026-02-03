@@ -1,29 +1,29 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Phone, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Mic, Phone, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import {
   LiveKitRoom,
   useVoiceAssistant,
-  BarVisualizer,
   RoomAudioRenderer,
   VoiceAssistantControlBar,
+  useRoomContext,
 } from '@livekit/components-react';
-import { Room } from 'livekit-client';
 import '@livekit/components-styles';
 
 interface VoiceInterfaceProps {
   onComplete?: () => void;
 }
 
-type ConnectionState = 'initial' | 'requesting-token' | 'connecting' | 'connected' | 'disconnected' | 'error';
+type ConnectionState = 'initial' | 'requesting-token' | 'connecting' | 'connected' | 'completing' | 'disconnected' | 'error';
 
 export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
   const [connectionState, setConnectionState] = useState<ConnectionState>('initial');
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [roomName, setRoomName] = useState<string | null>(null);
+  const [programGenerated, setProgramGenerated] = useState<boolean>(false);
 
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const livekitUrl = import.meta.env.VITE_LIVEKIT_URL || '';
@@ -66,13 +66,14 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
   }, [email, apiUrl]);
 
   const handleDisconnect = useCallback(() => {
-    setConnectionState('disconnected');
-    setToken(null);
-    setRoomName(null);
-    if (onComplete) {
-      onComplete();
+    // Only transition to disconnected if not already completing
+    // This handles early disconnects by the user
+    if (connectionState !== 'completing') {
+      setConnectionState('disconnected');
+      setToken(null);
+      setRoomName(null);
     }
-  }, [onComplete]);
+  }, [connectionState]);
 
   const handleConnected = useCallback(() => {
     setConnectionState('connected');
@@ -102,6 +103,20 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
     );
   }
 
+  const handleProgramGenerating = useCallback(() => {
+    setProgramGenerated(true);
+    setConnectionState('completing');
+    // Disconnect after 5 seconds
+    setTimeout(() => {
+      setConnectionState('disconnected');
+      setToken(null);
+      setRoomName(null);
+      if (onComplete) {
+        onComplete();
+      }
+    }, 5000);
+  }, [onComplete]);
+
   // Show the LiveKit room when we have a token
   if (token && roomName && connectionState !== 'disconnected') {
     return (
@@ -121,7 +136,10 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
           onError={handleError}
           className="livekit-room"
         >
-          <VoiceAssistantUI connectionState={connectionState} roomName={roomName} />
+          <VoiceAssistantUI
+            connectionState={connectionState}
+            onProgramGenerating={handleProgramGenerating}
+          />
         </LiveKitRoom>
       </motion.div>
     );
@@ -187,9 +205,9 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
             </motion.div>
           )}
 
-          {connectionState === 'disconnected' && (
+          {connectionState === 'disconnected' && programGenerated && (
             <motion.div
-              key="disconnected"
+              key="disconnected-success"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -203,6 +221,32 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
               <p className="text-foreground-tertiary text-sm mt-4">
                 You can generate a new program once per week.
               </p>
+            </motion.div>
+          )}
+
+          {connectionState === 'disconnected' && !programGenerated && (
+            <motion.div
+              key="disconnected-early"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <AlertCircle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+              <h3 className="text-heading-lg font-semibold mb-2">Conversation Ended Early</h3>
+              <p className="text-foreground-secondary mb-6">
+                The conversation was disconnected before your program could be generated.
+                No program was created.
+              </p>
+              <button
+                onClick={() => {
+                  setConnectionState('initial');
+                  setProgramGenerated(false);
+                  setError(null);
+                }}
+                className="bg-accent hover:bg-accent/90 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
+              >
+                Try Again
+              </button>
             </motion.div>
           )}
 
@@ -274,20 +318,77 @@ function AnimatedSoundBars({ isActive }: { isActive: boolean }) {
 }
 
 // Inner component that has access to LiveKit hooks
-function VoiceAssistantUI({ connectionState, roomName }: { connectionState: ConnectionState; roomName: string }) {
+function VoiceAssistantUI({
+  connectionState,
+  onProgramGenerating
+}: {
+  connectionState: ConnectionState;
+  onProgramGenerating: () => void;
+}) {
   const { state, audioTrack } = useVoiceAssistant();
+  const room = useRoomContext();
   const isActive = state === 'speaking' || state === 'thinking';
+
+  // Listen for data messages from the agent
+  useEffect(() => {
+    if (!room) return;
+
+    const handleDataReceived = (payload: Uint8Array) => {
+      try {
+        const decoder = new TextDecoder();
+        const text = decoder.decode(payload);
+        const data = JSON.parse(text);
+
+        console.log('[VoiceInterface] Received data message:', data);
+
+        if (data.type === 'program_generating') {
+          console.log('[VoiceInterface] Program generation started, triggering completion screen');
+          onProgramGenerating();
+        }
+      } catch (error) {
+        console.error('[VoiceInterface] Error parsing data message:', error);
+      }
+    };
+
+    room.on('dataReceived', handleDataReceived);
+
+    return () => {
+      room.off('dataReceived', handleDataReceived);
+    };
+  }, [room, onProgramGenerating]);
+
+  // Show completion state when completing
+  if (connectionState === 'completing') {
+    return (
+      <Card className="p-12 text-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0 }}
+        >
+          <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
+          <h3 className="text-heading-lg font-semibold mb-2">Program Submitted!</h3>
+          <p className="text-foreground-secondary">
+            Your personalized workout program is being generated now.
+            You'll receive it via email within the next 10 minutes!
+          </p>
+          <p className="text-foreground-tertiary text-sm mt-4">
+            Be sure to check your spam folder if you don't see it.
+          </p>
+        </motion.div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="p-8">
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-3 mb-4">
           <h3 className="text-heading-lg font-semibold">Talking with Nova</h3>
-          <Badge variant={connectionState === 'connected' ? 'default' : 'secondary'}>
+          <Badge variant={connectionState === 'connected' ? 'success' : 'secondary'}>
             {connectionState === 'connected' ? 'Connected' : 'Connecting...'}
           </Badge>
         </div>
-        <p className="text-foreground-secondary text-sm">Room: {roomName}</p>
       </div>
 
       {/* Audio visualization with animated sound bars */}

@@ -52,7 +52,7 @@ class WebsiteVoiceAgent(Agent):
         self.state = state
 
         # Store reference to session (will be set later)
-        self.session = None
+        self._session_ref = None
 
         # Get prompt
         instructions = get_website_agent_prompt()
@@ -78,7 +78,7 @@ class WebsiteVoiceAgent(Agent):
             first_name: User's first name
 
         Returns:
-            Instruction to immediately call create_user_account()
+            Instruction to start collecting program parameters
         """
         function_name = "capture_name"
         parameters = {"first_name": first_name}
@@ -87,12 +87,12 @@ class WebsiteVoiceAgent(Agent):
             # Validate name
             first_name = first_name.strip()
             if not first_name or len(first_name) < 1:
-                result = None, "Name is too short. Say: 'Sorry, I didn't catch that. What's your first name?'"
+                result = None, "Name is too short. Ask for first name again."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
             if len(first_name) > 50:
-                result = None, "Name is too long. Say: 'That's a long name! Can you tell me just your first name?'"
+                result = None, "Name is too long. Ask for just first name."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -100,141 +100,16 @@ class WebsiteVoiceAgent(Agent):
             self.state["name"] = first_name
             logger.info(f"[WEBSITE AGENT] Name captured: {first_name}")
 
-            result = None, f"Name captured. Now immediately call create_user_account() to set up their profile."
+            result = None, f"Name captured. Now start collecting program parameters with Question 1 (height and weight)."
             self._log_function_call(function_name, parameters, result)
             return result
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to capture name: {e}")
-            result = None, "Error capturing name. Say: 'Sorry, can you tell me your name again?'"
+            result = None, "Error capturing name. Ask for name again."
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
-    async def create_user_account(self, context: RunContext):
-        """
-        Create User account in database with email and name from state.
-        Generates username and password automatically.
-
-        Returns:
-            Instruction to start collecting program parameters
-        """
-        function_name = "create_user_account"
-        parameters = {}
-
-        try:
-            email = self.state.get("email")
-            name = self.state.get("name")
-
-            if not email:
-                result = None, "Error: No email in state. User should restart from website."
-                self._log_function_call(function_name, parameters, result)
-                return result
-
-            if not name:
-                result = None, "Error: No name captured. Call capture_name() first."
-                self._log_function_call(function_name, parameters, result)
-                return result
-
-            # Generate username from email
-            username = self._generate_username_from_email(email)
-
-            # Generate random password hash
-            password_hash = self._generate_password_hash()
-
-            # Create user in database
-            db = SessionLocal()
-            try:
-                # Check if user with this email already exists
-                existing_user = db.query(User).filter(User.email == email).first()
-                if existing_user:
-                    # User exists - use their ID
-                    user_id = existing_user.id
-                    logger.info(f"[WEBSITE AGENT] Existing user found: {email}, using ID: {user_id}")
-
-                    # Update their name if changed
-                    if existing_user.name != name:
-                        existing_user.name = name
-                        db.commit()
-                        logger.info(f"[WEBSITE AGENT] Updated name to: {name}")
-                else:
-                    # Create new user
-                    new_user = User(
-                        id=uuid.uuid4(),
-                        username=username,
-                        name=name,
-                        email=email,
-                        password_hash=password_hash
-                    )
-                    db.add(new_user)
-                    db.commit()
-                    user_id = new_user.id
-                    logger.info(f"[WEBSITE AGENT] Created new user: {email}, ID: {user_id}")
-
-                # Store user_id and username in state
-                self.state["user_id"] = user_id
-                self.state["username"] = username
-
-                result = None, "Account created! Now start collecting program parameters with Question 1 (height and weight)."
-                self._log_function_call(function_name, parameters, result)
-                return result
-
-            except Exception as e:
-                logger.error(f"[ERROR] Database error creating user: {e}")
-                db.rollback()
-                result = None, "Error creating account. Say: 'I'm having trouble setting up your account. Let's try again.'"
-                self._log_function_call(function_name, parameters, result)
-                return result
-            finally:
-                db.close()
-
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to create user account: {e}")
-            result = None, "Error creating account. Say: 'I'm having trouble setting up your account. Let's try again.'"
-            self._log_function_call(function_name, parameters, result)
-            return result
-
-    def _generate_username_from_email(self, email: str) -> str:
-        """
-        Generate unique username from email address.
-
-        Args:
-            email: Email address
-
-        Returns:
-            Generated username (e.g., john.doe_4829)
-        """
-        # Get email prefix (before @)
-        email_prefix = email.split('@')[0]
-
-        # Remove special characters except dots and underscores
-        email_prefix = re.sub(r'[^\w\.]', '', email_prefix)
-
-        # Add random 4-digit suffix for uniqueness
-        random_suffix = secrets.randbelow(10000)
-
-        username = f"{email_prefix}_{random_suffix:04d}"
-
-        return username
-
-    def _generate_password_hash(self) -> str:
-        """
-        Generate random password hash for user account.
-        Since website users don't log in, we just need a valid hash.
-
-        Returns:
-            Random password hash
-        """
-        # Generate random password
-        random_password = secrets.token_urlsafe(32)
-
-        # For now, just store the random string
-        # In production, you'd use bcrypt or similar:
-        # import bcrypt
-        # password_hash = bcrypt.hashpw(random_password.encode(), bcrypt.gensalt())
-        # return password_hash.decode()
-
-        return random_password
 
     # =========================================================================
     # PROGRAM CREATION TOOLS - Copied from voice_agent.py
@@ -253,42 +128,21 @@ class WebsiteVoiceAgent(Agent):
         parameters = {"height_value": height_value, "weight_value": weight_value}
 
         try:
-            user_id = self.state.get("user_id")
-            if not user_id:
-                result = None, "Error: No user account. Call create_user_account() first."
-                self._log_function_call(function_name, parameters, result)
-                return result
-
             # Parse and validate height
             height_cm = self._normalize_height_to_cm(height_value)
             if height_cm is None or height_cm < 50 or height_cm > 300:
-                result = None, "That height doesn't seem right. Say: 'Hmm, that height doesn't sound quite right. Can you tell me your height again? For example, five foot nine, or 175 centimeters.' Keep it friendly."
+                result = None, "Height invalid. Ask for height again with examples (e.g., 5'9\" or 175cm)."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
             # Parse and validate weight
             weight_kg = self._normalize_weight_to_kg(weight_value)
             if weight_kg is None or weight_kg < 30 or weight_kg > 300:
-                result = None, "That weight doesn't seem right. Say: 'Hmm, that weight doesn't sound quite right. Can you tell me your weight again? For example, 185 pounds or 80 kilograms.' Keep it friendly."
+                result = None, "Weight invalid. Ask for weight again with examples (e.g., 185lbs or 80kg)."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
-            # Save to database
-            db = SessionLocal()
-            try:
-                db_user = db.query(User).filter(User.id == user_id).first()
-                if db_user:
-                    db_user.height_cm = height_cm
-                    db_user.weight_kg = weight_kg
-                    db.commit()
-                    logger.info(f"[PROGRAM] Saved to database: height={height_cm} cm, weight={weight_kg} kg")
-            except Exception as e:
-                logger.error(f"[ERROR] Failed to save height/weight to database: {e}")
-                db.rollback()
-            finally:
-                db.close()
-
-            # Save to state
+            # Save to state (will update DB at the end)
             if "program_creation" not in self.state:
                 self.state["program_creation"] = {}
             self.state["program_creation"]["height_cm"] = height_cm
@@ -319,15 +173,9 @@ class WebsiteVoiceAgent(Agent):
         parameters = {"age": age, "sex": sex}
 
         try:
-            user_id = self.state.get("user_id")
-            if not user_id:
-                result = None, "Error: No user account. Call create_user_account() first."
-                self._log_function_call(function_name, parameters, result)
-                return result
-
             # Validate age
             if age < 13 or age > 100:
-                result = None, "That age seems unusual. Say: 'Hmm, that age doesn't seem right. How old are you?' Keep it friendly."
+                result = None, "Age out of range (13-100). Ask for age again."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -338,26 +186,11 @@ class WebsiteVoiceAgent(Agent):
             elif sex_normalized in ["f", "female", "woman", "girl"]:
                 sex_normalized = "female"
             else:
-                result = None, "I didn't catch the sex. Say: 'Sorry, are you male or female?' Keep it simple."
+                result = None, "Sex unclear. Ask if male or female."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
-            # Save to database
-            db = SessionLocal()
-            try:
-                db_user = db.query(User).filter(User.id == user_id).first()
-                if db_user:
-                    db_user.age = age
-                    db_user.sex = sex_normalized
-                    db.commit()
-                    logger.info(f"[PROGRAM] Saved to database: age={age}, sex={sex_normalized}")
-            except Exception as e:
-                logger.error(f"[ERROR] Failed to save age/sex to database: {e}")
-                db.rollback()
-            finally:
-                db.close()
-
-            # Save to state
+            # Save to state (will update DB at the end)
             if "program_creation" not in self.state:
                 self.state["program_creation"] = {}
             self.state["program_creation"]["age"] = age
@@ -467,7 +300,7 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate duration
             if duration_weeks < 2 or duration_weeks > 52:
-                result = None, "That duration is out of range. Say: 'Program duration should be between 2 and 52 weeks. How many weeks would you like?'"
+                result = None, "Duration out of range (2-52 weeks). Ask for duration again."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -502,7 +335,7 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate frequency
             if days_per_week < 1 or days_per_week > 7:
-                result = None, "That frequency is out of range. Say: 'Training frequency should be between 1 and 7 days per week. How many days can you train?'"
+                result = None, "Frequency out of range (1-7 days/week). Ask for frequency again."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -537,7 +370,7 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate duration
             if duration_minutes < 30 or duration_minutes > 180:
-                result = None, "That duration is out of range. Say: 'Session duration should be between 30 and 180 minutes. How long can you train per session?'"
+                result = None, "Duration out of range (30-180 minutes). Ask for session duration again."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -649,6 +482,7 @@ class WebsiteVoiceAgent(Agent):
     async def capture_fitness_level(self, context: RunContext, fitness_level: str):
         """
         Call this when the user describes their fitness level.
+        This is the LAST question - after this, update the user in DB and generate program.
 
         Args:
             fitness_level: "beginner", "intermediate", or "advanced"
@@ -673,7 +507,10 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Fitness level: {level_normalized}")
 
-            result = None, "Captured. Now immediately ask Question 11 about VBT equipment."
+            # Set VBT to false by default for website users
+            self.state["program_creation"]["has_vbt_capability"] = False
+
+            result = None, "All parameters collected! Now immediately call update_user_profile() to save their info to the database, then generate the program."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -684,31 +521,69 @@ class WebsiteVoiceAgent(Agent):
             return result
 
     @function_tool
-    async def capture_vbt_equipment(self, context: RunContext, has_equipment: bool):
+    async def update_user_profile(self, context: RunContext):
         """
-        Call this when the user responds about VBT equipment availability.
+        Update user profile in database with all collected information.
+        Called after all questions are answered, before generating the program.
 
-        Args:
-            has_equipment: True if user has VBT equipment, False otherwise
+        Returns:
+            Instruction to generate the workout program
         """
-        function_name = "capture_vbt_equipment"
-        parameters = {"has_equipment": has_equipment}
+        function_name = "update_user_profile"
+        parameters = {}
 
         try:
-            # Save to state
-            if "program_creation" not in self.state:
-                self.state["program_creation"] = {}
-            self.state["program_creation"]["has_vbt_capability"] = has_equipment
+            user_id = self.state.get("user_id")
+            if not user_id:
+                result = None, "Error: No user ID. Cannot update profile."
+                self._log_function_call(function_name, parameters, result)
+                return result
 
-            logger.info(f"[PROGRAM] VBT equipment: {has_equipment}")
+            name = self.state.get("name")
+            program_params = self.state.get("program_creation", {})
 
-            result = None, "Captured. All parameters collected! Say: 'Perfect! I have everything I need. Your program is on its way...' Then immediately call generate_workout_program()."
-            self._log_function_call(function_name, parameters, result)
-            return result
+            # Update user in database
+            db = SessionLocal()
+            try:
+                db_user = db.query(User).filter(User.id == user_id).first()
+                if db_user:
+                    # Update name
+                    if name:
+                        db_user.name = name
+
+                    # Update physical stats
+                    if "height_cm" in program_params:
+                        db_user.height_cm = program_params["height_cm"]
+                    if "weight_kg" in program_params:
+                        db_user.weight_kg = program_params["weight_kg"]
+                    if "age" in program_params:
+                        db_user.age = program_params["age"]
+                    if "sex" in program_params:
+                        db_user.sex = program_params["sex"]
+
+                    db.commit()
+                    logger.info(f"[WEBSITE AGENT] Updated user profile for {self.state.get('email')}")
+
+                    result = None, "Profile updated successfully. Tell user you're submitting for generation, then immediately call generate_workout_program()."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                else:
+                    result = None, "Error: User not found in database."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+
+            except Exception as e:
+                logger.error(f"[ERROR] Failed to update user profile: {e}")
+                db.rollback()
+                result = None, "Error updating profile. Continuing to program generation anyway. Call generate_workout_program()."
+                self._log_function_call(function_name, parameters, result)
+                return result
+            finally:
+                db.close()
 
         except Exception as e:
-            logger.error(f"[ERROR] Failed to capture VBT equipment: {e}")
-            result = None, "Error capturing VBT equipment. Say: 'Sorry, do you have VBT equipment? Just yes or no.'"
+            logger.error(f"[ERROR] Failed to update user profile: {e}")
+            result = None, "Error updating profile. Continuing to program generation anyway. Call generate_workout_program()."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -779,6 +654,8 @@ class WebsiteVoiceAgent(Agent):
             # Prepare request payload (include send_email flag for website users)
             payload = {
                 "user_id": str(user_id),
+                "name": self.state.get("name"),
+                "email": user_email,
                 "height_cm": program_params["height_cm"],
                 "weight_kg": program_params["weight_kg"],
                 "age": program_params["age"],
@@ -815,47 +692,58 @@ class WebsiteVoiceAgent(Agent):
 
                     logger.info(f"[PROGRAM] Program generation started. Job ID: {job_id}")
 
+                    # Send data message to frontend to trigger completion UI
+                    try:
+                        import json
+                        await context.room.local_participant.publish_data(
+                            json.dumps({
+                                "type": "program_generating",
+                                "job_id": job_id,
+                                "email": user_email
+                            }).encode(),
+                            reliable=True
+                        )
+                        logger.info("[PROGRAM] Sent 'program_generating' data message to frontend")
+                    except Exception as e:
+                        logger.error(f"[PROGRAM] Failed to send data message: {e}")
+
                     # Tell user they'll receive email and call end_conversation()
-                    result = None, f"Program generation started! Tell user: 'Perfect! Your personalized program is being created now. You'll receive it at {user_email} within the next 10 minutes. Be sure to check your spam folder if you don't see it! The program includes your full workout schedule, exercise details, and progression plan. Can't wait for you to get started!' Then immediately call end_conversation() to gracefully disconnect."
+                    result = None, f"Program generation started successfully. Inform user their program is being created and will arrive at {user_email} within 10 minutes. Mention checking spam folder. Then immediately call end_conversation()."
                     self._log_function_call(function_name, parameters, result)
                     return result
                 else:
                     # Error
                     logger.error(f"[PROGRAM] API error: {response.status_code} - {response.text}")
-                    result = None, f"Error starting program generation. Say: 'I'm having trouble generating your program. Our team will reach out to you at {user_email}.'"
+                    result = None, f"Error starting program generation. Tell user there's an issue and team will contact them at {user_email}."
                     self._log_function_call(function_name, parameters, result)
                     return result
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to generate program: {e}")
-            result = None, f"Error generating program. Say: 'I'm having trouble generating your program. Our team will reach out to you at {self.state.get('email')}.'"
+            result = None, f"Error generating program. Tell user there's an issue and team will contact them at {self.state.get('email')}."
             self._log_function_call(function_name, parameters, result)
             return result
 
     @function_tool
     async def end_conversation(self, context: RunContext):
         """
-        End the conversation gracefully by disconnecting from the LiveKit room.
+        End the conversation gracefully.
         Call this AFTER telling the user their program is being generated.
         """
         function_name = "end_conversation"
         parameters = {}
 
         try:
-            if self.session is None:
-                logger.error("[WEBSITE AGENT] Cannot disconnect - no session reference")
-                result = None, "Error: No session available to disconnect."
-                self._log_function_call(function_name, parameters, result)
-                return result
+            logger.info("[WEBSITE AGENT] Gracefully ending conversation...")
 
-            logger.info("[WEBSITE AGENT] Gracefully ending conversation and disconnecting...")
+            # Disconnect from the room to free up resources
+            try:
+                await context.room.disconnect()
+                logger.info("[WEBSITE AGENT] Disconnected from room successfully")
+            except Exception as disconnect_error:
+                logger.warning(f"[WEBSITE AGENT] Error disconnecting from room: {disconnect_error}")
 
-            # Disconnect the session gracefully
-            await self.session.shutdown(drain=True)
-
-            logger.info("[WEBSITE AGENT] ✅ Session disconnected successfully")
-
-            result = None, "Conversation ended successfully."
+            result = None, "Conversation ended successfully. Session will close."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -991,12 +879,52 @@ async def entrypoint(ctx: agents.JobContext):
 
     logger.info(f"[WEBSITE AGENT] Using email: {email}")
 
+    # Create user account immediately (before conversation starts)
+    db = SessionLocal()
+    user_id = None
+    username = None
+    try:
+        # Check if user exists
+        existing_user = db.query(User).filter(User.email == email).first()
+        if existing_user:
+            user_id = existing_user.id
+            username = existing_user.username
+            logger.info(f"[WEBSITE AGENT] Existing user found: {email}, ID: {user_id}")
+        else:
+            # Generate username from email
+            email_prefix = email.split('@')[0]
+            email_prefix = re.sub(r'[^\w\.]', '', email_prefix)
+            random_suffix = secrets.randbelow(10000)
+            username = f"{email_prefix}_{random_suffix:04d}"
+
+            # Generate random password hash
+            password_hash = secrets.token_urlsafe(32)
+
+            # Create new user (name will be updated later)
+            new_user = User(
+                id=uuid.uuid4(),
+                username=username,
+                name="",  # Will be updated after asking
+                email=email,
+                password_hash=password_hash
+            )
+            db.add(new_user)
+            db.commit()
+            user_id = new_user.id
+            logger.info(f"[WEBSITE AGENT] Created new user: {email}, ID: {user_id}")
+    except Exception as e:
+        logger.error(f"[ERROR] Failed to create user: {e}")
+        db.rollback()
+        return
+    finally:
+        db.close()
+
     # Initialize ephemeral state (simple dict)
     state = {
         "email": email,
         "name": None,
-        "user_id": None,
-        "username": None,
+        "user_id": user_id,
+        "username": username,
         "program_creation": {}
     }
 
@@ -1023,19 +951,22 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     # Store session reference in agent so it can disconnect later
-    agent.session = session
+    agent._session_ref = session
 
     # Start session and make agent speak first
+    # The session will run until end_conversation() is called (which disconnects from room)
+    # or until the user disconnects
+    logger.info("[WEBSITE AGENT] Starting session...")
     await session.start(room=ctx.room, agent=agent)
 
     # Send initial greeting so agent speaks first (don't wait for user)
     await asyncio.sleep(1.5)  # Brief delay to ensure connection is fully established
 
-    # Send initial greeting message
-    initial_greeting = "Hi there! I'm Nova, your AI fitness coach. I'm excited to help you create a personalized workout program. What's your first name?"
+    logger.info("[WEBSITE AGENT] Generating initial greeting...")
+    # Use generate_reply instead of say for realtime models
+    await session.generate_reply(instructions="Greet the user warmly and ask for their first name. Follow the STEP 1 instructions exactly.")
 
-    logger.info(f"[WEBSITE AGENT] Sending initial greeting: {initial_greeting}")
-    await session.say(initial_greeting)
+    logger.info("[WEBSITE AGENT] Session ended.")
 
 
 if __name__ == "__main__":

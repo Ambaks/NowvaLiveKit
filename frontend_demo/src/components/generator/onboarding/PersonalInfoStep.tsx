@@ -31,16 +31,6 @@ export const PersonalInfoStep = ({ data, onChange }: PersonalInfoStepProps) => {
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-2">Email</label>
-          <Input
-            type="email"
-            placeholder="john@example.com"
-            value={data.email}
-            onChange={(e) => onChange('email', e.target.value)}
-          />
-        </div>
-
-        <div>
           <label className="block text-sm font-medium mb-2">Age</label>
           <Input
             type="number"

@@ -46,7 +46,7 @@ export const Onboarding = ({ onComplete }: OnboardingProps) => {
 
   const [formData, setFormData] = useState<OnboardingData>({
     name: '',
-    email: '',
+    email: localStorage.getItem('nowva_user_email') || '',
     age: '',
     sex: '',
     height_cm: '',
