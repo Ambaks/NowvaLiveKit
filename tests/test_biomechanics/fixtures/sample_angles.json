@@ -1,0 +1,25 @@
+{
+  "description": "Expected joint angles for the half-squat pose",
+  "pose": "half_squat",
+  "units": "degrees",
+  "notes": "Angles computed from the sample_3d_points fixture",
+  "angles": {
+    "hip_flexion_l": 70.0,
+    "hip_flexion_r": 70.0,
+    "hip_adduction_l": 0.0,
+    "hip_adduction_r": 0.0,
+    "hip_rotation_l": 0.0,
+    "hip_rotation_r": 0.0,
+    "knee_flexion_l": 80.0,
+    "knee_flexion_r": 80.0,
+    "ankle_dorsiflexion_l": 25.0,
+    "ankle_dorsiflexion_r": 25.0,
+    "trunk_flexion": 30.0,
+    "trunk_lateral_flexion": 0.0,
+    "trunk_rotation": 0.0,
+    "pelvis_tilt": 10.0,
+    "pelvis_list": 0.0,
+    "pelvis_rotation": 0.0
+  },
+  "tolerance_degrees": 5.0
+}

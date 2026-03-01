@@ -36,6 +36,11 @@ torchaudio>=2.0.0
 # MMPose (install via: mim install mmengine "mmcv>=2.0.0" "mmdet>=3.0.0" "mmpose>=1.0.0")
 openmim>=0.3.0
 
+# Biomechanics Pipeline
+onnxruntime>=1.17.0                    # RTMPose ONNX inference
+mediapipe>=0.10.9                      # MediaPipe pose fallback
+pyyaml>=6.0.0                          # Config file parsing
+
 # Numerical Computing
 numpy>=1.24.0
 scipy>=1.10.0

@@ -1,0 +1,51 @@
+pipeline:
+  target_fps: 30
+  log_level: INFO
+  single_camera_mode: true     # Set false when stereo cameras available
+
+capture:
+  source: webcam
+  device_id: 0
+  resolution: [1280, 720]
+
+pose:
+  backend: mediapipe            # mediapipe | rtmpose
+  confidence_threshold: 0.3
+
+triangulation:
+  enabled: false                # Set true when stereo cameras available
+
+kinematics:
+  backend: analytical           # analytical | opensim
+
+faults:
+  depth:
+    parallel: 90.0
+    below_parallel: 100.0
+  bilateral_asymmetry:
+    mild: 5.0
+    moderate: 10.0
+    severe: 15.0
+  heel_rise:
+    threshold_cm: 2.0
+  forward_lean:
+    mild: 35.0
+    moderate: 45.0
+    severe: 55.0
+  knee_valgus:
+    mild: 5.0
+    moderate: 10.0
+    severe: 15.0
+
+rep_detection:
+  entry_threshold: 30.0
+  min_rep_duration_frames: 20
+
+coaching:
+  min_cue_gap_seconds: 2.0
+  set_timeout_seconds: 30.0     # Pause > this = new set
+  cache_cues_before_set: true
+
+ipc:
+  frame_send_interval: 10       # Send frame data every N frames
+  fault_cooldown_seconds: 3.0
