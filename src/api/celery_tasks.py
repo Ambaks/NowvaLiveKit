@@ -7,63 +7,6 @@ from .celery_app import celery_app
 import traceback
 
 
-@celery_app.task(bind=True, name='generate_program', max_retries=3)
-def generate_program_task(self, job_id: str, user_id: str, params: dict):
-    """
-    Generate a workout program (Celery task wrapper)
-    Handles async-to-sync conversion for gevent workers
-    """
-    from .services.program_generator_v2 import generate_program_background
-
-    print(f"[CELERY TASK {self.request.id}] Starting job {job_id}")
-
-    # Create event loop for this greenlet
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        loop.run_until_complete(
-            generate_program_background(job_id, user_id, params)
-        )
-        print(f"[CELERY TASK {self.request.id}] Completed job {job_id}")
-        return {"status": "completed", "job_id": job_id}
-
-    except Exception as e:
-        error_msg = str(e)
-        print(f"[CELERY TASK {self.request.id}] ERROR: {error_msg}")
-        print(traceback.format_exc())
-
-        # Retry logic for OpenAI rate limits
-        if "rate_limit" in error_msg.lower() or "429" in error_msg:
-            print("[CELERY TASK] Rate limit hit, retrying in 60s...")
-            raise self.retry(exc=e, countdown=60)
-
-        # Retry for transient API errors
-        elif any(code in error_msg for code in ["500", "502", "503"]):
-            print("[CELERY TASK] API error, retrying in 60s...")
-            raise self.retry(exc=e, countdown=60)
-
-        # Retry for database errors
-        elif "database" in error_msg.lower() or "connection" in error_msg.lower():
-            print("[CELERY TASK] Database error, retrying in 30s...")
-            raise self.retry(exc=e, countdown=30)
-
-        else:
-            # Mark job as failed
-            from db.database import SessionLocal
-            from .services.job_manager import update_job_status
-
-            db = SessionLocal()
-            try:
-                update_job_status(db, job_id, "failed", error_message=error_msg[:1000])
-            finally:
-                db.close()
-            raise
-
-    finally:
-        loop.close()
-
-
 @celery_app.task(bind=True, name='update_program', max_retries=3)
 def update_program_task(self, job_id: str, user_id: str, program_id: int,
                        change_request: str, user_profile: dict):
@@ -95,5 +38,163 @@ def update_program_task(self, job_id: str, user_id: str, program_id: int,
             finally:
                 db.close()
             raise
+    finally:
+        loop.close()
+
+
+@celery_app.task(bind=True, name='generate_program_v5', max_retries=3)
+def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
+    """
+    Generate a workout program using V5 6-layer architecture (Celery task wrapper)
+
+    V5 features:
+    - 6-layer pipeline: Profile → Strategy → Volume → Builder → Validator → Serializer
+    - 100% deterministic with optional LLM review
+    - Fast: <1s without LLM, 10-20s with LLM
+    """
+    from .services.v5_adapter import convert_request_to_v5_input, get_user_data_from_request
+    from .services.program_saver_v5 import save_and_publish_v5_program
+    from .models.requests import ProgramGenerationRequest
+    from src.program_generator_v5 import generate_program_v5
+    from services.email_service import send_program_email_async
+
+    print(f"[CELERY TASK V5 {self.request.id}] Starting job {job_id}")
+
+    # Create event loop for this greenlet
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        # Build request object for user data extraction
+        request = ProgramGenerationRequest(
+            user_id=params["user_id"],
+            name=params["name"],
+            email=params.get("email", ""),
+            height_cm=params["height_cm"],
+            weight_kg=params["weight_kg"],
+            age=params["age"],
+            sex=params["sex"],
+            goal_category=params["goal_category"],
+            goal_raw=params["goal_raw"],
+            duration_weeks=params["duration_weeks"],
+            days_per_week=params["days_per_week"],
+            fitness_level=params["fitness_level"],
+            session_duration=params.get("session_duration", 60),
+            injury_history=params.get("injury_history", "none"),
+            specific_sport=params.get("specific_sport", "none"),
+            has_vbt_capability=params.get("has_vbt_capability", False),
+            user_notes=params.get("user_notes"),
+            send_email=params.get("send_email", False)
+        )
+
+        # Convert to V5 input format
+        v5_input = convert_request_to_v5_input(request)
+        user_data = get_user_data_from_request(request)
+
+        # Update job status
+        from db.database import SessionLocal
+        from .services.job_manager import update_job_status
+
+        db = SessionLocal()
+        try:
+            update_job_status(db, job_id, "in_progress", progress=10)
+        finally:
+            db.close()
+
+        # Generate program with V5 (6-layer architecture)
+        # use_llm=False for fast deterministic generation
+        v5_output = loop.run_until_complete(
+            generate_program_v5(
+                input_data=v5_input,
+                openai_client=None,
+                use_llm=False,
+                input_type="structured"
+            )
+        )
+
+        print(f"[CELERY TASK V5 {self.request.id}] V5 generation complete")
+        print(f"  - Unique exercises: {v5_output.get('stats', {}).get('unique_exercises', 0)}")
+        print(f"  - Generation time: {v5_output.get('stats', {}).get('generation_time_seconds', 0):.2f}s")
+
+        # Save to database, create schedule, generate PDF
+        db = SessionLocal()
+        try:
+            result = save_and_publish_v5_program(
+                db=db,
+                v5_output=v5_output,
+                params=params,
+                job_id=job_id,
+                user_data=user_data
+            )
+
+            # Send email if requested
+            if params.get("send_email") and result.get("pdf_path"):
+                try:
+                    print(f"[CELERY TASK V5 {self.request.id}] 📧 Sending email...")
+                    email_result = loop.run_until_complete(
+                        send_program_email_async(
+                            to_email=params.get("email"),
+                            user_name=params.get("name"),
+                            program_id=result["program_id"],
+                            pdf_path=result["pdf_path"]
+                        )
+                    )
+                    if email_result:
+                        print(f"[CELERY TASK V5 {self.request.id}] ✅ Email sent!")
+                    else:
+                        print(f"[CELERY TASK V5 {self.request.id}] ⚠️  Email failed")
+                except Exception as email_error:
+                    print(f"[CELERY TASK V5 {self.request.id}] ⚠️  Email error: {email_error}")
+
+            # Mark as completed (100%)
+            update_job_status(db, job_id, "completed", progress=100, error_message=None)
+
+            print(f"[CELERY TASK V5 {self.request.id}] ✅ Completed job {job_id}")
+            print(f"  - Program ID: {result['program_id']}")
+            print(f"  - Schedule entries: {result['schedule_count']}")
+            print(f"  - PDF: {result['pdf_path']}")
+
+        except Exception as save_error:
+            print(f"[CELERY TASK V5 {self.request.id}] ⚠️  Save/publish failed: {save_error}")
+            traceback.print_exc()
+            update_job_status(db, job_id, "failed", error_message=str(save_error)[:1000])
+            raise
+        finally:
+            db.close()
+
+        return {"status": "completed", "job_id": job_id}
+
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[CELERY TASK V5 {self.request.id}] ERROR: {error_msg}")
+        print(traceback.format_exc())
+
+        # Retry logic for rate limits
+        if "rate_limit" in error_msg.lower() or "429" in error_msg:
+            print("[CELERY TASK V5] Rate limit hit, retrying in 60s...")
+            raise self.retry(exc=e, countdown=60)
+
+        # Retry for transient API errors
+        elif any(code in error_msg for code in ["500", "502", "503"]):
+            print("[CELERY TASK V5] API error, retrying in 60s...")
+            raise self.retry(exc=e, countdown=60)
+
+        # Retry for database errors
+        elif "database" in error_msg.lower() or "connection" in error_msg.lower():
+            print("[CELERY TASK V5] Database error, retrying in 30s...")
+            raise self.retry(exc=e, countdown=30)
+
+        else:
+            # Mark job as failed
+            from db.database import SessionLocal
+            from .services.job_manager import update_job_status
+
+            db = SessionLocal()
+            try:
+                update_job_status(db, job_id, "failed", error_message=error_msg[:1000])
+            finally:
+                db.close()
+            raise
+
     finally:
         loop.close()

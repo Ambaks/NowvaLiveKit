@@ -18,7 +18,6 @@ from ..models.responses import (
     ProgramSummary,
     UpdateStatusResponse
 )
-from ..services.program_generator_v2 import generate_program_background  # V2: Structured outputs
 from ..services.program_updater import (
     update_program_background,
     validate_program_change_with_llm,
@@ -123,7 +122,7 @@ async def start_program_generation(
         202 Accepted with job information
     """
     from datetime import datetime, timedelta
-    from ..celery_tasks import generate_program_task
+    from ..celery_tasks import generate_program_v5_task
 
     # Get or create user
     user = db.query(User).filter(User.id == request.user_id).first()
@@ -138,24 +137,6 @@ async def start_program_generation(
         db.commit()
         db.refresh(user)
         print(f"[API] Created new user {user.id} ({user.email}) for program generation")
-
-    # Rate limiting: Check if user has generated a program in the last 7 days
-    one_week_ago = datetime.utcnow() - timedelta(days=7)
-    recent_program = db.query(UserGeneratedProgram).filter(
-        UserGeneratedProgram.user_id == request.user_id,
-        UserGeneratedProgram.created_at >= one_week_ago
-    ).order_by(UserGeneratedProgram.created_at.desc()).first()
-
-    if recent_program:
-        # Calculate when they can generate next
-        next_allowed = recent_program.created_at + timedelta(days=7)
-        days_remaining = (next_allowed - datetime.utcnow()).days
-        hours_remaining = ((next_allowed - datetime.utcnow()).seconds // 3600)
-
-        raise HTTPException(
-            status_code=429,
-            detail=f"You can only generate one program per week. Please try again in {days_remaining} days and {hours_remaining} hours."
-        )
 
     # Create job record
     job = create_job(
@@ -177,11 +158,13 @@ async def start_program_generation(
         user_notes=request.user_notes
     )
 
-    # Dispatch to Celery
-    task = generate_program_task.delay(
+    # Dispatch to Celery (V5 - 6-layer deterministic architecture)
+    task = generate_program_v5_task.delay(
         job_id=str(job.id),
         user_id=str(request.user_id),
         params={
+            "user_id": str(request.user_id),
+            "email": request.email,
             "name": user.name,
             "height_cm": request.height_cm,
             "weight_kg": request.weight_kg,
@@ -201,7 +184,7 @@ async def start_program_generation(
         }
     )
 
-    print(f"[API] Dispatched Celery task {task.id} for job {job.id} (user: {user.name})")
+    print(f"[API V5] Dispatched Celery task {task.id} for job {job.id} (user: {user.name})")
 
     return JobResponse(
         job_id=str(job.id),

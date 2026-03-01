@@ -102,3 +102,34 @@ echo ""
 
 # Cleanup
 rm nowva-deploy.tar.gz
+
+
+
+curl -X POST http://localhost:8000/api/programs/generate/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "702a82ef-5915-4433-9f01-9a473e39aaf4",
+    "name": "Baka",
+    "email": "baka@temp.local",
+    "height_cm": 180,
+    "weight_kg": 80,
+    "goal_category": "hypertrophy",
+    "goal_raw": "Build muscle mass and size",
+    "duration_weeks": 4,
+    "days_per_week": 4,
+    "fitness_level": "intermediate",
+    "age": 28,
+    "sex": "M",
+    "session_duration": 90,
+    "injury_history": "none",
+    "specific_sport": "none",
+    "has_vbt_capability": false,
+    "user_notes": "Only barbell and dumbbells available, no machines",
+    "send_email": false
+  }'
+
+
+pkill -f celery
+redis-cli FLUSHALL
+PYTHONPATH='src' celery -A src.api.celery_app worker --loglevel=info --pool=solo > celery_worker.log 2>&1 &
+tail -f celery_worker.log
