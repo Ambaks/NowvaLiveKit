@@ -60,18 +60,21 @@ class WorkoutSession:
     Tracks current exercise, set, completion status, and progress logging.
     """
 
-    def __init__(self, user_id: str, schedule_id: int, workout_data: Dict):
+    def __init__(self, user_id: str, schedule_id: Optional[int], workout_data: Dict,
+                 is_quick_exercise: bool = False):
         """
         Initialize a new workout session.
 
         Args:
             user_id: User's UUID as string
-            schedule_id: Schedule entry ID for this workout
+            schedule_id: Schedule entry ID for this workout (None for quick exercises)
             workout_data: Full workout structure from get_todays_workout()
+            is_quick_exercise: True if this is an ad-hoc single exercise session
         """
         self.user_id = user_id
         self.schedule_id = schedule_id
-        self.workout_id = workout_data["workout_id"]
+        self.is_quick_exercise = is_quick_exercise
+        self.workout_id = workout_data.get("workout_id")
         self.workout_name = workout_data["workout_name"]
         self.description = workout_data.get("description", "")
         self.week_number = workout_data.get("week_number")
@@ -315,6 +318,7 @@ class WorkoutSession:
         return {
             "user_id": self.user_id,
             "schedule_id": self.schedule_id,
+            "is_quick_exercise": self.is_quick_exercise,
             "workout_id": self.workout_id,
             "workout_name": self.workout_name,
             "description": self.description,
@@ -355,7 +359,7 @@ class WorkoutSession:
         """
         # Create a minimal workout_data dict for __init__
         workout_data = {
-            "workout_id": data["workout_id"],
+            "workout_id": data.get("workout_id"),
             "workout_name": data["workout_name"],
             "description": data.get("description", ""),
             "week_number": data.get("week_number"),
@@ -367,8 +371,9 @@ class WorkoutSession:
         # Create instance
         session = cls(
             user_id=data["user_id"],
-            schedule_id=data["schedule_id"],
-            workout_data=workout_data
+            schedule_id=data.get("schedule_id"),
+            workout_data=workout_data,
+            is_quick_exercise=data.get("is_quick_exercise", False)
         )
 
         # Restore exercises and sets from saved state

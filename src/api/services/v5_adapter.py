@@ -67,6 +67,7 @@ def convert_request_to_v5_input(request: ProgramGenerationRequest) -> Dict[str, 
         "recovery_capacity": "normal",
         "weak_points": [],
         "sport": sport,
+        "vbt_capability": getattr(request, 'has_vbt_capability', False),
     }
 
 
@@ -97,8 +98,8 @@ def convert_v5_output_to_html_format(
         "progression_strategy": overview.get("periodization_model", "progressive_overload"),
         "overall_notes": f"Split: {overview.get('split_name', 'Upper/Lower')}. " +
                         f"Periodization: {overview.get('periodization_model', 'volume_ramp').replace('_', ' ').title()}.",
-        "vbt_enabled": False,
-        "vbt_setup_notes": None,
+        "vbt_enabled": overview.get("vbt_enabled", False),
+        "vbt_setup_notes": overview.get("vbt_setup_notes"),
         "deload_schedule": None,
         "injury_accommodations": None,
         "weeks": [],
@@ -161,6 +162,9 @@ def convert_v5_output_to_html_format(
                         "rest_seconds": set_data.get("rest_seconds", 90),
                         "tempo": set_data.get("tempo", ""),
                         "notes": set_data.get("notes", ""),
+                        "velocity_target": set_data.get("velocity_target"),
+                        "velocity_min": set_data.get("velocity_min"),
+                        "velocity_max": set_data.get("velocity_max"),
                     }
                     exercise_dict["sets"].append(set_dict)
 

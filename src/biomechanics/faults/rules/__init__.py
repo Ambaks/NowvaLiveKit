@@ -9,6 +9,7 @@ from biomechanics.faults.rules.symmetry import SymmetryRule
 from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
+from biomechanics.faults.rules.tempo import EccentricTempoRule, StallingRule
 
 __all__ = [
     "DepthRule",
@@ -17,4 +18,6 @@ __all__ = [
     "HeelRiseRule",
     "ForwardLeanRule",
     "KneeValgusRule",
+    "EccentricTempoRule",
+    "StallingRule",
 ]

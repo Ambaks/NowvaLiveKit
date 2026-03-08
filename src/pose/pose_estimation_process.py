@@ -1,162 +1,205 @@
 """
-Pose Estimation Process
-Wrapper for running stereo pose estimation with IPC communication
+Biomechanics Pipeline Process
+
+Replaces the old pose_estimation_process.py with the full layered pipeline.
+Launched as a subprocess by main.py when workout mode starts.
+Communicates with the voice agent via the existing IPC system.
 """
 
+import select
 import sys
 import os
 import time
 from pathlib import Path
 
-# Add biomechanics to path (go up one level to src, then into biomechanics)
-sys.path.insert(0, str(Path(__file__).parent.parent / 'biomechanics' / 'week2_stereo'))
-sys.path.insert(0, str(Path(__file__).parent.parent / 'biomechanics' / 'week1_pose'))
+# Add src/ to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.ipc_communication import IPCClient
+import cv2
+
+from core.ipc_communication import IPCClient, _recv_framed
+from biomechanics.pipeline import BiomechanicsPipeline
+from biomechanics.coaching.ipc_bridge import IPCBridge
+from biomechanics.coaching.session_tracker import SessionTracker
+from biomechanics.config import load_pipeline_config
+from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
 
 
-def run_pose_estimation_with_ipc(cam0_id: int = 0, cam1_id: int = 1):
+def run_biomechanics_pipeline(
+    cam0_id: int = 0,
+    cam1_id: int = 1,
+    config_path: str = None,
+    exercise_name: str = "Barbell Back Squat",
+):
     """
-    Run pose estimation and send data via IPC
+    Run the full biomechanics pipeline as a subprocess.
 
-    Args:
-        cam0_id: First camera ID
-        cam1_id: Second camera ID
+    This is called by main.py when workout mode starts.
+    Connects to the existing IPC server and sends real-time
+    coaching data to the voice agent.
     """
-    print("\n=== Pose Estimation Process Started ===")
-    print(f"Using cameras: {cam0_id}, {cam1_id}")
+    print("\n=== Biomechanics Pipeline Starting ===")
 
-    # Connect to IPC server
+    # Connect to IPC server (started by main.py)
     ipc_client = IPCClient()
     if not ipc_client.connect(timeout=10):
         print("Failed to connect to IPC server. Exiting.")
         return
 
-    # Import here to avoid issues if biomechanics imports fail
+    # Load config
+    config = load_pipeline_config(config_path)
+    # Override camera device from CLI arg
+    config.capture.device_id = cam0_id
+
+    # Initialize pipeline
     try:
-        from stereo_triangulation import StereoReconstructor, DualCameraCapture
-        from minimal_pose_demo import RTMPoseEstimator
-        import cv2
-        import numpy as np
-    except ImportError as e:
-        print(f"Error importing pose estimation modules: {e}")
-        ipc_client.disconnect()
-        return
+        pipeline = BiomechanicsPipeline(config)
+        bridge = IPCBridge(ipc_client)
+        session_tracker = SessionTracker(bridge, config=config.coaching)
 
-    # Initialize components
-    try:
-        print("Initializing pose estimation...")
+        # Pre-cache coaching cues for the exercise
+        bridge.prepare_exercise(exercise_name)
 
-        # Load calibration from week2_stereo directory
-        calibration_path = Path(__file__).parent / 'biomechanics' / 'week2_stereo' / 'stereo_calibration.npz'
+        ipc_client.send_message({"type": "status", "value": "initialized"})
+        bridge.send_pipeline_status("running", {})
 
-        pose_model = RTMPoseEstimator(device='mps')
-        stereo = StereoReconstructor(calibration_file=str(calibration_path))
-        cameras = DualCameraCapture(cam0_id=cam0_id, cam1_id=cam1_id)
-
-        print("Pose estimation initialized successfully")
-
-        # Send initialization message
-        ipc_client.send_message({
-            "type": "status",
-            "value": "initialized"
-        })
+        print(f"Pipeline initialized for: {exercise_name}")
+        print(f"Running at target {config.target_fps} FPS")
+        print("Press Ctrl+C to stop\n")
 
     except Exception as e:
-        print(f"Error initializing pose estimation: {e}")
-        ipc_client.send_message({
-            "type": "error",
-            "value": str(e)
-        })
+        print(f"Pipeline initialization failed: {e}")
+        ipc_client.send_message({"type": "error", "value": str(e)})
         ipc_client.disconnect()
         return
 
     # Main processing loop
-    frame_count = 0
-    rep_count = 0  # Placeholder
+    fps_counter = FPSCounter()
+    window_name = f"Nowva — {exercise_name}"
 
-    print("\nStarting pose estimation loop...")
-    print("Press 'q' in the OpenCV window to quit")
+    # Rest timer state
+    resting = False
+    rest_end_time = 0.0
+
+    def _check_incoming_message():
+        """Non-blocking check for messages from main.py."""
+        try:
+            sock = ipc_client.client_socket
+            if sock is None:
+                return None
+            ready, _, _ = select.select([sock], [], [], 0)
+            if ready:
+                return _recv_framed(sock)
+        except Exception:
+            pass
+        return None
+
+    def _draw_rest_timer(frame, remaining_seconds):
+        """Draw a centered rest countdown timer on the video frame."""
+        h, w = frame.shape[:2]
+        mins = int(remaining_seconds) // 60
+        secs = int(remaining_seconds) % 60
+        timer_text = f"{mins}:{secs:02d}" if mins > 0 else f"{secs}"
+
+        # Semi-transparent dark overlay
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+        # "REST" label
+        label = "REST"
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 4)[0]
+        label_x = (w - label_size[0]) // 2
+        cv2.putText(
+            frame, label, (label_x, h // 2 - 50),
+            cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 255, 255), 4,
+        )
+
+        # Countdown number
+        timer_size = cv2.getTextSize(timer_text, cv2.FONT_HERSHEY_SIMPLEX, 4.0, 6)[0]
+        timer_x = (w - timer_size[0]) // 2
+        cv2.putText(
+            frame, timer_text, (timer_x, h // 2 + 80),
+            cv2.FONT_HERSHEY_SIMPLEX, 4.0, (0, 255, 0), 6,
+        )
 
     try:
         while True:
-            frame0, frame1 = cameras.capture_synchronized()
-            if frame0 is None:
-                print("Failed to capture frames")
-                break
+            # Check for incoming messages (rest_start, etc.)
+            incoming = _check_incoming_message()
+            if incoming:
+                if incoming.get("type") == "rest_start":
+                    rest_seconds = incoming.get("rest_seconds", 30)
+                    rest_end_time = time.time() + rest_seconds
+                    resting = True
+                    print(f"[REST] Starting {rest_seconds}s rest timer")
 
-            # Get 2D poses from both views
-            kpts0 = pose_model.predict(frame0)
-            kpts1 = pose_model.predict(frame1)
+            result = pipeline.process_frame()
 
-            # Draw 2D skeletons
-            frame0_vis = pose_model.draw_skeleton(frame0.copy(), kpts0)
-            frame1_vis = pose_model.draw_skeleton(frame1.copy(), kpts1)
+            if not resting:
+                # Normal mode: send biomechanics data
+                bridge.send_frame_data(result)
 
-            # Triangulate 3D points
-            points_3d = np.zeros((0, 3))
-            if kpts0.shape[0] == kpts1.shape[0]:
-                confidences = np.stack([kpts0[:, 2], kpts1[:, 2]], axis=1)
-                points_3d = stereo.triangulate_points(
-                    kpts0[:, :2],
-                    kpts1[:, :2],
-                    confidences
-                )
+                for fault in result.faults:
+                    bridge.send_fault(fault)
 
-            # Send placeholder data via IPC every 30 frames (~1 second at 30fps)
-            if frame_count % 30 == 0:
-                # Placeholder: increment rep count
-                rep_count += 1
+                if result.rep_data:
+                    session_tracker.on_rep_complete(result.rep_data)
 
-                ipc_client.send_message({
-                    "type": "rep_count",
-                    "value": rep_count
-                })
+                session_tracker.check_set_timeout(time.time())
 
-                # Placeholder: send random form feedback
-                if rep_count % 3 == 0:
-                    ipc_client.send_message({
-                        "type": "feedback",
-                        "value": "knees caving"
-                    })
+            # Display video feed
+            frame = pipeline.last_frame
+            if frame is not None:
+                display = frame.copy()
+                if result.skeleton_2d is not None:
+                    draw_skeleton(display, result.skeleton_2d)
+                fps_counter.update()
+                draw_fps(display, fps_counter.fps)
 
-            # Display combined view
-            combined = np.hstack([frame0_vis, frame1_vis])
-            h, w = combined.shape[:2]
-            cv2.line(combined, (w//2, 0), (w//2, h), (255, 255, 255), 2)
+                if resting:
+                    remaining = max(0.0, rest_end_time - time.time())
+                    if remaining <= 0:
+                        resting = False
+                        ipc_client.send_message({"type": "rest_complete"})
+                        print("[REST] Timer expired — sent rest_complete")
+                    else:
+                        _draw_rest_timer(display, remaining)
+                else:
+                    # Show rep count overlay
+                    rep_count = pipeline.rep_counter.rep_count
+                    cv2.putText(
+                        display, f"Reps: {rep_count}", (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3,
+                    )
 
-            # Add rep count overlay
-            cv2.putText(combined, f'Reps: {rep_count}', (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.imshow(window_name, display)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("\nStopped by user (pressed 'q')")
+                    break
 
-            cv2.imshow('Pose Estimation', combined)
-
-            # Handle keys
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
-
-            frame_count += 1
+            # Throttle to target FPS
+            total_ms = sum(result.latency_ms.values())
+            target_ms = 1000.0 / config.target_fps
+            if total_ms < target_ms:
+                time.sleep((target_ms - total_ms) / 1000.0)
 
     except KeyboardInterrupt:
-        print("\nInterrupted by user")
+        print("\nPipeline stopped by user")
     except Exception as e:
-        print(f"\nError during pose estimation: {e}")
-        ipc_client.send_message({
-            "type": "error",
-            "value": str(e)
-        })
+        print(f"\nPipeline error: {e}")
+        ipc_client.send_message({"type": "error", "value": str(e)})
     finally:
-        # Cleanup
-        cameras.release()
         cv2.destroyAllWindows()
+        pipeline.release()
+        bridge.send_pipeline_status("stopped", {})
         ipc_client.disconnect()
-        print("\nPose estimation process stopped")
+        print("Biomechanics pipeline stopped")
 
 
 if __name__ == "__main__":
-    # Parse command line arguments for camera IDs
     cam0 = int(sys.argv[1]) if len(sys.argv) > 1 else 0
     cam1 = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    exercise = sys.argv[3] if len(sys.argv) > 3 else "Barbell Back Squat"
 
-    run_pose_estimation_with_ipc(cam0_id=cam0, cam1_id=cam1)
+    run_biomechanics_pipeline(cam0_id=cam0, cam1_id=cam1, exercise_name=exercise)

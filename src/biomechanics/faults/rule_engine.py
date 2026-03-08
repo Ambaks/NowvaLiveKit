@@ -5,6 +5,7 @@ Orchestrates all fault detection rules, maintains angle history,
 and deduplicates consecutive same-fault frames.
 """
 
+import logging
 from collections import deque
 from typing import List, Optional, Dict, Type
 
@@ -16,6 +17,8 @@ from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.config import BiomechanicsConfig, get_config
+
+logger = logging.getLogger(__name__)
 
 
 class RuleEngine:
@@ -54,6 +57,19 @@ class RuleEngine:
         # Deduplication tracking
         self._last_faults: Dict[str, int] = {}  # fault_type -> last frame
         self._dedup_frames: int = 15  # Minimum frames between same fault
+
+        # Baseline calibration — after first clean rep, adjust thresholds
+        # to the user's natural movement pattern
+        self._calibrated: bool = False
+        self._calibration_reps: int = 0
+        self._calibration_target: int = 1  # Calibrate after 1 clean rep
+        self._peak_trunk_flexion: float = 0.0
+        self._peak_hip_adduction: float = 0.0
+        self._peak_asymmetry: float = 0.0
+        self._peak_dorsiflexion_drop: float = 0.0
+        self._baseline_dorsiflexion_l: float = 0.0
+        self._baseline_dorsiflexion_r: float = 0.0
+        self._baseline_set: bool = False
 
     def _create_rules(self) -> List[FaultRule]:
         """Create all fault rules with config thresholds."""
@@ -149,6 +165,101 @@ class RuleEngine:
         """Check if fault should be reported (deduplication)."""
         last_frame = self._last_faults.get(fault.fault_type, -self._dedup_frames - 1)
         return frame_index - last_frame >= self._dedup_frames
+
+    # ------------------------------------------------------------------
+    # Baseline calibration
+    # ------------------------------------------------------------------
+
+    def record_frame_for_calibration(self, angles: JointAngles) -> None:
+        """Track peak angle values during reps for baseline calibration."""
+        if self._calibrated:
+            return
+
+        # Set dorsiflexion baseline at start of tracking
+        if not self._baseline_set:
+            self._baseline_dorsiflexion_l = angles.ankle_dorsiflexion_l
+            self._baseline_dorsiflexion_r = angles.ankle_dorsiflexion_r
+            self._baseline_set = True
+
+        # Track peaks
+        self._peak_trunk_flexion = max(self._peak_trunk_flexion, abs(angles.trunk_flexion))
+        self._peak_hip_adduction = max(
+            self._peak_hip_adduction,
+            max(angles.hip_adduction_l, angles.hip_adduction_r),
+        )
+        self._peak_asymmetry = max(
+            self._peak_asymmetry,
+            abs(angles.hip_flexion_l - angles.hip_flexion_r),
+            abs(angles.knee_flexion_l - angles.knee_flexion_r),
+        )
+
+        # Dorsiflexion drop (heel rise proxy)
+        drop_l = self._baseline_dorsiflexion_l - angles.ankle_dorsiflexion_l
+        drop_r = self._baseline_dorsiflexion_r - angles.ankle_dorsiflexion_r
+        self._peak_dorsiflexion_drop = max(
+            self._peak_dorsiflexion_drop, max(drop_l, drop_r)
+        )
+
+    def on_rep_complete_calibration(self, is_clean: bool) -> None:
+        """Called after a rep completes to advance calibration."""
+        if self._calibrated:
+            return
+
+        if is_clean:
+            self._calibration_reps += 1
+
+        if self._calibration_reps >= self._calibration_target:
+            self._apply_baseline()
+
+    def _apply_baseline(self) -> None:
+        """Adjust rule thresholds based on observed baseline peaks."""
+        self._calibrated = True
+        faults_config = self.config.faults
+
+        for rule in self.rules:
+            if isinstance(rule, ForwardLeanRule):
+                rule.mild_threshold = max(faults_config.forward_lean.mild, self._peak_trunk_flexion + 10.0)
+                rule.moderate_threshold = max(faults_config.forward_lean.moderate, self._peak_trunk_flexion + 20.0)
+                rule.severe_threshold = max(faults_config.forward_lean.severe, self._peak_trunk_flexion + 30.0)
+                logger.info(
+                    "[RULE ENGINE] Forward lean baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
+                    self._peak_trunk_flexion, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
+                )
+
+            elif isinstance(rule, KneeValgusRule):
+                rule.mild_threshold = max(faults_config.knee_valgus.mild, self._peak_hip_adduction + 5.0)
+                rule.moderate_threshold = max(faults_config.knee_valgus.moderate, self._peak_hip_adduction + 10.0)
+                rule.severe_threshold = max(faults_config.knee_valgus.severe, self._peak_hip_adduction + 15.0)
+                logger.info(
+                    "[RULE ENGINE] Knee valgus baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
+                    self._peak_hip_adduction, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
+                )
+
+            elif isinstance(rule, SymmetryRule):
+                rule.mild_threshold = max(faults_config.bilateral_asymmetry.mild, self._peak_asymmetry + 5.0)
+                rule.moderate_threshold = max(faults_config.bilateral_asymmetry.moderate, self._peak_asymmetry + 10.0)
+                rule.severe_threshold = max(faults_config.bilateral_asymmetry.severe, self._peak_asymmetry + 15.0)
+                logger.info(
+                    "[RULE ENGINE] Symmetry baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
+                    self._peak_asymmetry, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
+                )
+
+            elif isinstance(rule, HeelRiseRule):
+                rule.threshold_degrees = max(
+                    faults_config.heel_rise.threshold_cm * 5,
+                    self._peak_dorsiflexion_drop + 10.0,
+                )
+                logger.info(
+                    "[RULE ENGINE] Heel rise baseline: peak_drop=%.1f° → threshold %.1f°",
+                    self._peak_dorsiflexion_drop, rule.threshold_degrees,
+                )
+
+        logger.info("[RULE ENGINE] Baseline calibration complete")
+
+    @property
+    def calibrated(self) -> bool:
+        """Whether baseline calibration is complete."""
+        return self._calibrated
 
     def evaluate_rep_complete(
         self,

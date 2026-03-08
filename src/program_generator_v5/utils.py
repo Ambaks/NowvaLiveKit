@@ -286,13 +286,18 @@ def prescribe_exercise(
     week_profile: WeekProfile,
     program_goal: str,
     is_last_set_to_failure: bool = False,
+    vbt_enabled: bool = False,
+    vbt_protocol: str = "",
 ) -> list[PrescribedSet]:
     """
     Prescribe sets, reps, RPE, RIR, rest, tempo, and notes for an exercise
     based on its type, the week profile, and the program goal.
 
     This is the DETERMINISTIC prescription engine — no LLM, pure rules.
+    When VBT is enabled and the exercise is eligible, velocity targets are added.
     """
+    from .vbt_profiles import get_velocity_targets
+
     ex_type = exercise.exercise_type.value
 
     # ── 1. Determine rep range ──────────────────────────────────────────────
@@ -311,6 +316,10 @@ def prescribe_exercise(
     rest = REST_SECONDS[program_goal][ex_type]
     if week_profile.is_deload:
         rest = int(rest * 0.75)  # Lighter loads = less rest needed
+
+    # VBT: ensure full recovery for velocity-tracked exercises
+    if vbt_enabled and exercise.vbt_eligible and rest < 180:
+        rest = 180
 
     # ── 4. RPE/RIR from week profile, adjusted by exercise type ─────────────
     base_rpe_low, base_rpe_high = week_profile.rpe_range
@@ -369,6 +378,24 @@ def prescribe_exercise(
             program_goal=program_goal,
         )
 
+        # ── 7. VBT velocity targets ─────────────────────────────────────────
+        velocity_target = None
+        velocity_min = None
+        velocity_max = None
+
+        if vbt_enabled and exercise.vbt_eligible and intensity_pct:
+            vbt_data = get_velocity_targets(exercise.id, intensity_pct, vbt_protocol)
+            velocity_target = vbt_data["velocity_target"]
+            velocity_min = vbt_data["velocity_min"]
+            velocity_max = vbt_data["velocity_max"]
+
+            if velocity_target:
+                if vbt_protocol == "velocity_based":
+                    vbt_note = f"Target: {velocity_target} m/s — stop set if below {velocity_min} m/s"
+                else:
+                    vbt_note = f"Velocity check: expect ~{velocity_target} m/s"
+                set_notes = f"{set_notes}. {vbt_note}" if set_notes else vbt_note
+
         sets.append(
             PrescribedSet(
                 set_number=i + 1,
@@ -379,6 +406,9 @@ def prescribe_exercise(
                 rest_seconds=rest,
                 tempo=tempo,
                 notes=set_notes,
+                velocity_target=velocity_target,
+                velocity_min=velocity_min,
+                velocity_max=velocity_max,
             )
         )
 

@@ -4,6 +4,7 @@ Handles program creation for website users without authentication
 """
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -23,9 +24,11 @@ from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai
+from openai.types.beta.realtime.session import TurnDetection
 
 # Imports
 from agents.prompts.website_agent_prompt import get_website_agent_prompt
+from agents.shared.unit_conversion import normalize_height_to_cm, normalize_weight_to_kg, categorize_goal
 from db.database import SessionLocal
 from db.models import User
 import httpx
@@ -60,6 +63,12 @@ class WebsiteVoiceAgent(Agent):
         super().__init__(instructions=instructions)
 
         logger.info(f"[WEBSITE AGENT] Initialized with email: {state.get('email')}")
+
+    async def on_enter(self):
+        """Entry point - generate initial greeting when agent enters conversation"""
+        await self.session.generate_reply(
+            instructions="Greet the user warmly and ask for their first name. Follow the STEP 1 instructions exactly."
+        )
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
         """Helper method to log function tool calls"""
@@ -129,14 +138,14 @@ class WebsiteVoiceAgent(Agent):
 
         try:
             # Parse and validate height
-            height_cm = self._normalize_height_to_cm(height_value)
+            height_cm = normalize_height_to_cm(height_value)
             if height_cm is None or height_cm < 50 or height_cm > 300:
                 result = None, "Height invalid. Ask for height again with examples (e.g., 5'9\" or 175cm)."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
             # Parse and validate weight
-            weight_kg = self._normalize_weight_to_kg(weight_value)
+            weight_kg = normalize_weight_to_kg(weight_value)
             if weight_kg is None or weight_kg < 30 or weight_kg > 300:
                 result = None, "Weight invalid. Ask for weight again with examples (e.g., 185lbs or 80kg)."
                 self._log_function_call(function_name, parameters, result)
@@ -221,7 +230,7 @@ class WebsiteVoiceAgent(Agent):
 
         try:
             # Categorize goal
-            goal_category = self._categorize_goal(goal_description)
+            goal_category = categorize_goal(goal_description)
 
             # Recommended duration based on goal
             duration_recommendations = {
@@ -249,42 +258,6 @@ class WebsiteVoiceAgent(Agent):
             result = None, "Error capturing goal. Please describe your goal again."
             self._log_function_call(function_name, parameters, result)
             return result
-
-    def _categorize_goal(self, goal_text: str) -> str:
-        """Categorize user's goal into power, strength, or hypertrophy"""
-        goal_lower = goal_text.lower()
-
-        # Power/explosive keywords
-        power_keywords = [
-            "explosive", "power", "athletic", "speed", "jump", "sprint",
-            "vertical", "fast", "quick", "agility", "reactive", "plyometric",
-            "burst", "acceleration"
-        ]
-
-        # Strength keywords
-        strength_keywords = [
-            "strong", "strength", "lift heavy", "max", "1rm", "powerlifting",
-            "squat", "deadlift", "bench", "press", "force"
-        ]
-
-        # Hypertrophy keywords
-        hypertrophy_keywords = [
-            "muscle", "size", "big", "mass", "bulk", "bodybuilding",
-            "aesthetic", "look good", "physique", "gain weight", "grow"
-        ]
-
-        # Count matches
-        power_score = sum(1 for kw in power_keywords if kw in goal_lower)
-        strength_score = sum(1 for kw in strength_keywords if kw in goal_lower)
-        hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in goal_lower)
-
-        # Determine category
-        if power_score > strength_score and power_score > hypertrophy_score:
-            return "power"
-        elif strength_score > hypertrophy_score:
-            return "strength"
-        else:
-            return "hypertrophy"
 
     @function_tool
     async def capture_program_duration(self, context: RunContext, duration_weeks: int):
@@ -588,36 +561,6 @@ class WebsiteVoiceAgent(Agent):
             return result
 
     @function_tool
-    async def set_vbt_capability(self, context: RunContext, enabled: bool):
-        """
-        Set velocity-based training (VBT) capability.
-        Called automatically after fitness level is captured.
-
-        Args:
-            enabled: True to enable VBT, False to disable
-        """
-        function_name = "set_vbt_capability"
-        parameters = {"enabled": enabled}
-
-        try:
-            # Save to state
-            if "program_creation" not in self.state:
-                self.state["program_creation"] = {}
-            self.state["program_creation"]["has_vbt_capability"] = enabled
-
-            logger.info(f"[PROGRAM] VBT capability: {enabled}")
-
-            result = None, "VBT decision made. All parameters ready. Now immediately call generate_workout_program()."
-            self._log_function_call(function_name, parameters, result)
-            return result
-
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to set VBT capability: {e}")
-            result = None, "Error setting VBT. Continuing anyway, call generate_workout_program()."
-            self._log_function_call(function_name, parameters, result)
-            return result
-
-    @function_tool
     async def generate_workout_program(self, context: RunContext):
         """
         Generate the workout program by calling FastAPI backend.
@@ -694,7 +637,6 @@ class WebsiteVoiceAgent(Agent):
 
                     # Send data message to frontend to trigger completion UI
                     try:
-                        import json
                         await context.room.local_participant.publish_data(
                             json.dumps({
                                 "type": "program_generating",
@@ -753,88 +695,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    # =========================================================================
-    # HELPER METHODS
-    # =========================================================================
-
-    def _normalize_height_to_cm(self, height_str: str) -> Optional[float]:
-        """Convert various height formats to centimeters"""
-        if not height_str:
-            return None
-
-        height_str = height_str.lower().strip()
-
-        # Pattern: X cm or X centimeters
-        cm_match = re.search(r'(\d+\.?\d*)\s*(cm|centimeter)', height_str)
-        if cm_match:
-            return float(cm_match.group(1))
-
-        # Pattern: X.XX m or X.XX meters
-        m_match = re.search(r'(\d+\.?\d*)\s*(m|meter)', height_str)
-        if m_match:
-            return float(m_match.group(1)) * 100
-
-        # Pattern: X feet Y inches OR X foot Y inches OR X'Y"
-        feet_inches_match = re.search(r"(\d+)\s*(?:feet|foot|ft|')\s*(\d+)\s*(?:inches?|in|\")?", height_str)
-        if feet_inches_match:
-            feet = int(feet_inches_match.group(1))
-            inches = int(feet_inches_match.group(2))
-            total_inches = (feet * 12) + inches
-            return total_inches * 2.54
-
-        # Pattern: Just feet
-        feet_only_match = re.search(r'(\d+)\s*(?:feet|foot|ft)', height_str)
-        if feet_only_match:
-            feet = int(feet_only_match.group(1))
-            return feet * 12 * 2.54
-
-        # Pattern: Just inches
-        inches_match = re.search(r'(\d+)\s*(?:inches?|in)', height_str)
-        if inches_match:
-            inches = int(inches_match.group(1))
-            return inches * 2.54
-
-        # Pattern: Just a number - try to infer
-        number_match = re.search(r'(\d+\.?\d*)', height_str)
-        if number_match:
-            num = float(number_match.group(1))
-            if num < 10:  # Likely meters
-                return num * 100
-            elif 50 <= num <= 300:  # Likely cm
-                return num
-            elif num > 300:  # Likely inches
-                return num * 2.54
-
-        return None
-
-    def _normalize_weight_to_kg(self, weight_str: str) -> Optional[float]:
-        """Convert various weight formats to kilograms"""
-        if not weight_str:
-            return None
-
-        weight_str = weight_str.lower().strip()
-
-        # Pattern: X kg or X kilograms
-        kg_match = re.search(r'(\d+\.?\d*)\s*(kg|kilogram)', weight_str)
-        if kg_match:
-            return float(kg_match.group(1))
-
-        # Pattern: X lbs or X pounds
-        lbs_match = re.search(r'(\d+\.?\d*)\s*(lbs?|pounds?)', weight_str)
-        if lbs_match:
-            return float(lbs_match.group(1)) * 0.453592
-
-        # Pattern: Just a number - assume pounds if < 500, kg if >= 500
-        number_match = re.search(r'(\d+\.?\d*)', weight_str)
-        if number_match:
-            num = float(number_match.group(1))
-            if num < 500:  # Likely pounds
-                return num * 0.453592
-            else:  # Likely kg
-                return num
-
-        return None
-
 
 # =========================================================================
 # ENTRY POINT
@@ -849,32 +709,45 @@ async def entrypoint(ctx: agents.JobContext):
     await ctx.connect()
     logger.info(f"[WEBSITE AGENT] Connected to room: {ctx.room.name}")
 
-    # Get email from participant metadata (set in the token)
+    # Get email from participant metadata using event-based waiting
     email = None
-    import json
+    participant_event = asyncio.Event()
+    found_participant = {}
 
-    # Wait for a participant to join (max 10 seconds)
-    for i in range(20):
-        await asyncio.sleep(0.5)
+    def on_participant_connected(participant):
+        if participant.metadata:
+            try:
+                metadata_dict = json.loads(participant.metadata)
+                found_participant['email'] = metadata_dict.get('email')
+                found_participant['ref'] = participant
+                participant_event.set()
+            except json.JSONDecodeError as e:
+                logger.error(f"[ERROR] Failed to parse participant metadata: {participant.metadata}, error: {e}")
 
-        participants = list(ctx.room.remote_participants.values())
-        logger.info(f"[WEBSITE AGENT] Checking for participants... Found: {len(participants)}")
-
-        if participants:
-            participant = participants[0]
-            logger.info(f"[WEBSITE AGENT] Participant identity: {participant.identity}, metadata: {participant.metadata}")
-
-            if participant.metadata:
-                try:
-                    metadata_dict = json.loads(participant.metadata)
-                    email = metadata_dict.get('email')
-                    logger.info(f"[WEBSITE AGENT] Email from participant metadata: {email}")
+    # Check already-connected participants first
+    for participant in ctx.room.remote_participants.values():
+        if participant.metadata:
+            try:
+                metadata_dict = json.loads(participant.metadata)
+                email = metadata_dict.get('email')
+                if email:
+                    logger.info(f"[WEBSITE AGENT] Email from existing participant: {email}")
                     break
-                except json.JSONDecodeError as e:
-                    logger.error(f"[ERROR] Failed to parse participant metadata: {participant.metadata}, error: {e}")
+            except json.JSONDecodeError:
+                pass
+
+    # If no email found yet, wait for participant connection event
+    if not email:
+        ctx.room.on("participant_connected", on_participant_connected)
+        try:
+            await asyncio.wait_for(participant_event.wait(), timeout=10.0)
+            email = found_participant.get('email')
+        except asyncio.TimeoutError:
+            logger.error("[ERROR] No participant connected within 10 seconds")
+            return
 
     if not email:
-        logger.error("[ERROR] No email provided in participant metadata after waiting")
+        logger.error("[ERROR] No email provided in participant metadata")
         return
 
     logger.info(f"[WEBSITE AGENT] Using email: {email}")
@@ -931,13 +804,13 @@ async def entrypoint(ctx: agents.JobContext):
     # Initialize OpenAI Realtime Model
     realtime_model = openai.realtime.RealtimeModel(
         voice=os.getenv("REALTIME_VOICE", "marin"),
-        temperature=0.8,
-        turn_detection={
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 300,
-        },
+        turn_detection=TurnDetection(
+            type="semantic_vad",
+            eagerness="low",           # Patient — let users finish thinking before responding
+            create_response=True,
+            interrupt_response=True,
+        ),
+        input_audio_noise_reduction="near_field",
         modalities=["audio", "text"],
     )
 
@@ -953,18 +826,9 @@ async def entrypoint(ctx: agents.JobContext):
     # Store session reference in agent so it can disconnect later
     agent._session_ref = session
 
-    # Start session and make agent speak first
-    # The session will run until end_conversation() is called (which disconnects from room)
-    # or until the user disconnects
+    # Start session — on_enter() will handle the initial greeting automatically
     logger.info("[WEBSITE AGENT] Starting session...")
     await session.start(room=ctx.room, agent=agent)
-
-    # Send initial greeting so agent speaks first (don't wait for user)
-    await asyncio.sleep(1.5)  # Brief delay to ensure connection is fully established
-
-    logger.info("[WEBSITE AGENT] Generating initial greeting...")
-    # Use generate_reply instead of say for realtime models
-    await session.generate_reply(instructions="Greet the user warmly and ask for their first name. Follow the STEP 1 instructions exactly.")
 
     logger.info("[WEBSITE AGENT] Session ended.")
 

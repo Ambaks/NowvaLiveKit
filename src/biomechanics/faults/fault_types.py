@@ -21,6 +21,7 @@ class FaultType(str, Enum):
     FORWARD_LEAN = "forward_lean"
     KNEE_VALGUS = "knee_valgus"
     BACK_ROUNDING = "back_rounding"
+    TEMPO = "tempo"  # Tempo-related faults (too fast, stalling)
 
 
 # Default thresholds from config (degrees unless specified)
@@ -53,6 +54,11 @@ DEFAULT_THRESHOLDS: Dict[FaultType, Dict[str, float]] = {
         "mild": 35.0,
         "moderate": 45.0,
         "severe": 55.0,
+    },
+    FaultType.TEMPO: {
+        "eccentric_too_fast": 100.0,  # deg/sec - uncontrolled descent
+        "stalling_velocity": 15.0,    # deg/sec - considered stalling
+        "stall_frames": 10,           # frames before triggering stall warning
     },
 }
 
@@ -87,6 +93,11 @@ FAULT_MESSAGES: Dict[FaultType, Dict[str, str]] = {
         "mild": "Slight back rounding",
         "moderate": "Back rounding — keep spine neutral",
         "severe": "Excessive back rounding — brace core",
+    },
+    FaultType.TEMPO: {
+        "eccentric_fast": "Slow down! Control your descent",
+        "stalling": "Grinding — push through!",
+        "good": "Good tempo",
     },
 }
 

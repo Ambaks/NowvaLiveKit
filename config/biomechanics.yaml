@@ -11,6 +11,8 @@ capture:
 pose:
   backend: mediapipe            # mediapipe | rtmpose
   confidence_threshold: 0.3
+  model_complexity: 2           # 0=lite, 1=full, 2=heavy (mediapipe only)
+  # model_path: src/biomechanics/pose/models/rtmpose-m-256x192.onnx  # uncomment for rtmpose
 
 triangulation:
   enabled: false                # Set true when stereo cameras available
@@ -23,19 +25,19 @@ faults:
     parallel: 90.0
     below_parallel: 100.0
   bilateral_asymmetry:
-    mild: 5.0
-    moderate: 10.0
-    severe: 15.0
+    mild: 8.0
+    moderate: 13.0
+    severe: 18.0
   heel_rise:
-    threshold_cm: 2.0
+    threshold_cm: 3.0
   forward_lean:
-    mild: 35.0
-    moderate: 45.0
-    severe: 55.0
+    mild: 45.0
+    moderate: 55.0
+    severe: 65.0
   knee_valgus:
-    mild: 5.0
-    moderate: 10.0
-    severe: 15.0
+    mild: 8.0
+    moderate: 13.0
+    severe: 18.0
 
 rep_detection:
   entry_threshold: 30.0

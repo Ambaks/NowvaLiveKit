@@ -1,0 +1,142 @@
+"""
+BiLSTM-based Rep Counter (5-class depth classification)
+
+Converts per-frame depth class probabilities into rep counts using:
+  1. Exponential moving average for smoothing (vector EMA over all classes)
+  2. Two-state finite state machine (UP / DOWN) with configurable min_depth_class
+"""
+
+from enum import Enum
+from typing import Optional
+import time as _time
+
+import numpy as np
+from pydantic import BaseModel
+
+from biomechanics.utils.types import RepData, DEPTH_CLASS_NAMES
+
+
+class BiLSTMCounterConfig(BaseModel):
+    """Configuration for the 5-class BiLSTM-based rep counter."""
+    min_depth_class: int = 3       # minimum depth class to enter DOWN (3=parallel)
+    min_rep_frames: int = 12       # minimum frames in DOWN before counting
+    ema_alpha: float = 0.2         # EMA smoothing factor
+    num_classes: int = 5
+
+
+class BiLSTMCounterState(str, Enum):
+    UP = "up"
+    DOWN = "down"
+
+
+class BiLSTMRepCounter:
+    """
+    Two-state FSM that counts reps from 5-class depth probabilities.
+
+    Transitions:
+        UP → DOWN   when argmax(smoothed_probs) >= min_depth_class
+        DOWN → UP   when argmax(smoothed_probs) == 0 (standing) AND
+                    frames_in_down >= min_rep_frames
+                    → rep counted, RepData returned with depth info
+    """
+
+    def __init__(self, config: Optional[BiLSTMCounterConfig] = None):
+        self.config = config or BiLSTMCounterConfig()
+        self.state = BiLSTMCounterState.UP
+        self.rep_count = 0
+
+        self._smoothed_probs = np.zeros(self.config.num_classes)
+        self._first_update = True
+
+        # Per-rep tracking
+        self._frames_in_down: int = 0
+        self._max_depth_seen: int = 0
+        self._rep_start_time: float = 0.0
+        self._rep_start_frame: int = 0
+
+    @property
+    def in_rep(self) -> bool:
+        return self.state == BiLSTMCounterState.DOWN
+
+    @property
+    def predicted_depth_class(self) -> int:
+        return int(np.argmax(self._smoothed_probs))
+
+    @property
+    def smoothed_probabilities(self) -> np.ndarray:
+        return self._smoothed_probs.copy()
+
+    @property
+    def in_rep_probability(self) -> float:
+        """Sum of smoothed probabilities for classes >= min_depth_class."""
+        return float(self._smoothed_probs[self.config.min_depth_class:].sum())
+
+    @property
+    def smoothed_probability(self) -> float:
+        """Backward compat — returns in_rep_probability."""
+        return self.in_rep_probability
+
+    def update(
+        self,
+        raw_probs: np.ndarray,
+        timestamp: float = 0.0,
+        frame_index: int = 0,
+    ) -> Optional[RepData]:
+        """
+        Feed one frame's depth class probabilities (shape (num_classes,)).
+
+        Returns RepData when a rep completes (DOWN → UP transition
+        after sufficient frames), otherwise None.
+        """
+        # Vector EMA smoothing
+        if self._first_update:
+            self._smoothed_probs = raw_probs.copy()
+            self._first_update = False
+        else:
+            alpha = self.config.ema_alpha
+            self._smoothed_probs = alpha * raw_probs + (1 - alpha) * self._smoothed_probs
+
+        predicted_class = int(np.argmax(self._smoothed_probs))
+
+        if self.state == BiLSTMCounterState.UP:
+            if predicted_class >= self.config.min_depth_class:
+                self.state = BiLSTMCounterState.DOWN
+                self._frames_in_down = 0
+                self._max_depth_seen = predicted_class
+                self._rep_start_time = timestamp or _time.time()
+                self._rep_start_frame = frame_index
+
+        elif self.state == BiLSTMCounterState.DOWN:
+            self._frames_in_down += 1
+            self._max_depth_seen = max(self._max_depth_seen, predicted_class)
+
+            if (
+                predicted_class == 0
+                and self._frames_in_down >= self.config.min_rep_frames
+            ):
+                self.rep_count += 1
+                self.state = BiLSTMCounterState.UP
+
+                end_time = timestamp or _time.time()
+                depth_name = DEPTH_CLASS_NAMES.get(self._max_depth_seen, "Unknown")
+                return RepData(
+                    rep_number=self.rep_count,
+                    start_time=self._rep_start_time,
+                    end_time=end_time,
+                    start_frame=self._rep_start_frame,
+                    end_frame=frame_index,
+                    depth_class=self._max_depth_seen,
+                    depth_class_name=depth_name,
+                    max_depth_class=self._max_depth_seen,
+                )
+
+        return None
+
+    def reset(self) -> None:
+        """Reset state for a new set/session."""
+        self.state = BiLSTMCounterState.UP
+        self.rep_count = 0
+        self._smoothed_probs = np.zeros(self.config.num_classes)
+        self._first_update = True
+        self._frames_in_down = 0
+        self._max_depth_seen = 0

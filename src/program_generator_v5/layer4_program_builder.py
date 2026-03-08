@@ -455,6 +455,7 @@ def _build_session(
                     session_grip_count=grip_count,
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
+                    vbt_enabled=strategy.vbt_enabled,
                 )
 
                 # BUG 1 FIX: Add compound priority bonuses for Phase 1
@@ -662,6 +663,7 @@ def _build_session(
                     session_grip_count=grip_count,
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
+                    vbt_enabled=strategy.vbt_enabled,
                 )
 
                 # FIX 2: Apply same-week variety penalty
@@ -769,6 +771,7 @@ def _build_session(
                     session_grip_count=grip_count,
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
+                    vbt_enabled=strategy.vbt_enabled,
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -849,6 +852,7 @@ def _build_session(
                     session_grip_count=grip_count,
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
+                    vbt_enabled=strategy.vbt_enabled,
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -892,6 +896,8 @@ def _build_session(
                 total_sets=sets,
                 week_profile=week_profile,
                 program_goal=profile.training_goal,
+                vbt_enabled=strategy.vbt_enabled,
+                vbt_protocol=strategy.vbt_protocol,
             )
             muscle_contributions = {}
             for ma in exercise.muscle_activations:
@@ -907,6 +913,7 @@ def _build_session(
                 superset_group=None,
                 order_in_session=idx + 1,
                 rationale="",
+                vbt_eligible=exercise.vbt_eligible,
             )
             temp_exercises.append(temp_ex)
         return estimate_session_duration(temp_exercises)
@@ -968,6 +975,7 @@ def _build_session(
                 session_grip_count=grip_count,
                 program_goal=profile.training_goal,
                 user_preferences=profile.exercises_to_include,
+                vbt_enabled=strategy.vbt_enabled,
             )
             score += get_week_variety_penalty(ex)
 
@@ -1082,6 +1090,7 @@ def _build_session(
                     session_grip_count=grip_count,
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
+                    vbt_enabled=strategy.vbt_enabled,
                 )
                 # FIX 2: Apply same-week variety penalty
                 score += get_week_variety_penalty(ex)
@@ -1157,6 +1166,8 @@ def _build_session(
             total_sets=sets,
             week_profile=week_profile,
             program_goal=profile.training_goal,
+            vbt_enabled=strategy.vbt_enabled,
+            vbt_protocol=strategy.vbt_protocol,
         )
 
         # Calculate muscle contributions
@@ -1175,6 +1186,7 @@ def _build_session(
             superset_group=None,
             order_in_session=idx + 1,
             rationale="",
+            vbt_eligible=exercise.vbt_eligible,
         )
 
         prescribed_exercises.append(prescribed_ex)

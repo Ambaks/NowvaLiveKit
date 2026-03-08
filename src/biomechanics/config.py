@@ -5,7 +5,7 @@ Loads configuration from YAML files and provides typed access to settings.
 """
 
 import os
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
 from pathlib import Path
 
 import yaml
@@ -34,6 +34,8 @@ class PoseConfig(BaseModel):
     """Pose estimation configuration."""
     backend: str = "mediapipe"  # mediapipe | rtmpose
     confidence_threshold: float = 0.3
+    model_complexity: int = 2  # 0=lite, 1=full, 2=heavy (mediapipe only)
+    model_path: Optional[str] = None  # Path to ONNX model (rtmpose only)
 
 
 class TriangulationConfig(BaseModel):
@@ -54,28 +56,28 @@ class DepthFaultConfig(BaseModel):
 
 class BilateralAsymmetryConfig(BaseModel):
     """Bilateral asymmetry fault thresholds."""
-    mild: float = 5.0
-    moderate: float = 10.0
-    severe: float = 15.0
+    mild: float = 8.0
+    moderate: float = 13.0
+    severe: float = 18.0
 
 
 class HeelRiseConfig(BaseModel):
     """Heel rise fault thresholds."""
-    threshold_cm: float = 2.0
+    threshold_cm: float = 3.0
 
 
 class ForwardLeanConfig(BaseModel):
     """Forward lean fault thresholds."""
-    mild: float = 35.0
-    moderate: float = 45.0
-    severe: float = 55.0
+    mild: float = 45.0
+    moderate: float = 55.0
+    severe: float = 65.0
 
 
 class KneeValgusConfig(BaseModel):
     """Knee valgus fault thresholds."""
-    mild: float = 5.0
-    moderate: float = 10.0
-    severe: float = 15.0
+    mild: float = 8.0
+    moderate: float = 13.0
+    severe: float = 18.0
 
 
 class FaultsConfig(BaseModel):
@@ -85,6 +87,17 @@ class FaultsConfig(BaseModel):
     heel_rise: HeelRiseConfig = Field(default_factory=HeelRiseConfig)
     forward_lean: ForwardLeanConfig = Field(default_factory=ForwardLeanConfig)
     knee_valgus: KneeValgusConfig = Field(default_factory=KneeValgusConfig)
+
+
+class BiLSTMConfig(BaseModel):
+    """BiLSTM rep counting configuration (5-class depth classification)."""
+    enabled: bool = False
+    model_path: str = "models/bilstm_rep_counter.pt"
+    device: str = "cpu"  # cpu | cuda | mps
+    num_classes: int = 5
+    min_depth_class: int = 3  # 0=standing, 1=quarter, 2=half, 3=parallel, 4=deep
+    min_rep_frames: int = 12
+    ema_alpha: float = 0.2
 
 
 class RepDetectionConfig(BaseModel):
@@ -121,6 +134,7 @@ class BiomechanicsConfig(BaseModel):
     rep_detection: RepDetectionConfig = Field(default_factory=RepDetectionConfig)
     coaching: CoachingConfig = Field(default_factory=CoachingConfig)
     ipc: IPCConfig = Field(default_factory=IPCConfig)
+    bilstm: BiLSTMConfig = Field(default_factory=BiLSTMConfig)
 
     # Convenience properties
     @property
@@ -223,6 +237,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "ipc" in raw_config:
         config_dict["ipc"] = IPCConfig(**raw_config["ipc"])
+
+    if "bilstm" in raw_config:
+        config_dict["bilstm"] = BiLSTMConfig(**raw_config["bilstm"])
 
     return BiomechanicsConfig(**config_dict)
 

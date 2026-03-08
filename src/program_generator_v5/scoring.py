@@ -101,6 +101,7 @@ def compute_exercise_score(
     session_grip_count: int,                   # grip-intensive exercises already in session
     program_goal: str,                         # "hypertrophy", "strength", "power"
     user_preferences: dict = None,             # exercise_id → preference score (or list of ids)
+    vbt_enabled: bool = False,
 ) -> float:
     """
     Compute a composite score for an exercise candidate.  Higher = better.
@@ -223,5 +224,10 @@ def compute_exercise_score(
     # are essential for developing athletic power (NSCA guidelines).
     if program_goal == "power" and exercise.exercise_type in (ExerciseType.POWER, ExerciseType.PLYOMETRIC):
         score += 15
+
+    # ── 10. VBT Bonus ──────────────────────────────────────────────────────
+    # When VBT is enabled, prefer exercises that can leverage velocity tracking
+    if vbt_enabled and exercise.vbt_eligible:
+        score += 5
 
     return score

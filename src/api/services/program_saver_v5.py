@@ -145,9 +145,9 @@ def save_program_to_db_v5(
                         reps=set_data.get("reps", 10),
                         intensity_percent=set_data.get("intensity_percent"),
                         rest_seconds=set_data.get("rest_seconds", 90),
-                        velocity_threshold=None,
-                        velocity_min=None,
-                        velocity_max=None
+                        velocity_threshold=set_data.get("velocity_target"),
+                        velocity_min=set_data.get("velocity_min"),
+                        velocity_max=set_data.get("velocity_max"),
                     )
                     db.add(set_model)
 

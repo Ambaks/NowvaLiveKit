@@ -295,6 +295,38 @@ class FaultType:
 # REP AND SESSION TRACKING
 # =============================================================================
 
+# =============================================================================
+# DEPTH CLASS CONSTANTS (5-class squat depth classification)
+# =============================================================================
+
+DEPTH_CLASS_NAMES = {
+    0: "Standing",
+    1: "Quarter",
+    2: "Half",
+    3: "Parallel",
+    4: "Deep",
+}
+
+DEPTH_CLASS_BINS_DEG = [
+    (0.0, 40.0),     # 0 = Standing
+    (40.0, 60.0),    # 1 = Quarter
+    (60.0, 80.0),    # 2 = Half
+    (80.0, 100.0),   # 3 = Parallel
+    (100.0, 180.0),  # 4 = Deep
+]
+
+NUM_DEPTH_CLASSES = len(DEPTH_CLASS_BINS_DEG)
+
+
+def depth_class_from_angle(knee_angle_deg: float) -> int:
+    """Return the depth class (0-4) for a given knee flexion angle in degrees."""
+    for cls_idx in range(len(DEPTH_CLASS_BINS_DEG) - 1, -1, -1):
+        lo, _ = DEPTH_CLASS_BINS_DEG[cls_idx]
+        if knee_angle_deg >= lo:
+            return cls_idx
+    return 0
+
+
 class RepPhase(str, Enum):
     """Phase of a rep in the movement cycle."""
     STANDING = "standing"  # Starting position
@@ -325,6 +357,11 @@ class RepData(BaseModel):
     # Symmetry
     avg_knee_asymmetry: float = 0.0
     avg_hip_asymmetry: float = 0.0
+
+    # 5-class depth classification (from BiLSTM)
+    depth_class: Optional[int] = None
+    depth_class_name: Optional[str] = None
+    max_depth_class: Optional[int] = None
 
     @property
     def duration(self) -> float:
@@ -401,6 +438,13 @@ class PipelineFrame(BaseModel):
     # Layer 4: Fault Detection
     faults: List[FaultEvent] = Field(default_factory=list)
     rep_data: Optional[RepData] = None  # Set when rep completes
+
+    # BiLSTM rep counting (optional, populated when bilstm.enabled=True)
+    bilstm_probability: Optional[float] = None
+    bilstm_rep_data: Optional[RepData] = None
+    bilstm_depth_class: Optional[int] = None
+    bilstm_depth_class_name: Optional[str] = None
+    bilstm_class_probabilities: Optional[List[float]] = None
 
     # Metadata
     latency_ms: Dict[str, float] = Field(default_factory=dict)  # Per-layer timing

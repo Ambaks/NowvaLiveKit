@@ -96,6 +96,7 @@ def build_profile_from_structured(data: dict) -> AthleteProfile:
 
     weak_points = data.get("weak_points", [])
     sport = data.get("sport")
+    vbt_capability = bool(data.get("vbt_capability", False))
 
     # ── Compute Derived Fields ──────────────────────────────────────────────
 
@@ -139,6 +140,7 @@ def build_profile_from_structured(data: dict) -> AthleteProfile:
         exercises_to_include=exercises_to_include,
         recovery_capacity=recovery_capacity,
         weak_points=weak_points,
+        vbt_capability=vbt_capability,
         # Derived
         effective_goal=effective_goal,
         sport_adjustments=sport_adjustments,

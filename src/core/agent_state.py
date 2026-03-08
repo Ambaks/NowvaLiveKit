@@ -50,6 +50,10 @@ class AgentState:
                 "reps": 0,  # Legacy field
                 "sets": 0,  # Legacy field
             },
+            "quick_exercise": {
+                "exercise_name": None,
+                "gathering_params": False,
+            },
             "program_creation": {
                 "has_vbt_capability": False,  # Automatically set based on fitness level + goal + sport
                 # State tracking fields for state-driven flow:
@@ -173,7 +177,8 @@ class AgentState:
 
     def save_state(self, filepath: Optional[str] = None):
         """
-        Save state to file
+        Save state to file using atomic write (write to temp, then rename).
+        This prevents partial reads when main.py polls the state file.
 
         Args:
             filepath: Optional custom filepath, defaults to .agent_state.json
@@ -183,8 +188,11 @@ class AgentState:
             filepath = f".agent_state_{user_id}.json"
 
         try:
-            with open(filepath, 'w') as f:
+            # Atomic write: write to temp file, then rename
+            tmp_filepath = filepath + ".tmp"
+            with open(tmp_filepath, 'w') as f:
                 json.dump(self.state, f, indent=2)
+            os.replace(tmp_filepath, filepath)
             print(f"[STATE] Saved to {filepath}")
         except Exception as e:
             print(f"[STATE] Failed to save state: {e}")

@@ -4,9 +4,12 @@ Handles onboarding, main menu, and workout modes with function calling
 """
 
 import asyncio
+import logging
 import os
 import re
 import sys
+import threading
+import traceback
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -16,10 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 load_dotenv()
 
-from livekit import agents
+from livekit import agents, rtc
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai
+from openai.types.beta.realtime.session import TurnDetection
 # Note: Realtime API handles STT+LLM+TTS - no separate plugins needed
 
 # User management imports
@@ -35,8 +39,10 @@ from core.ipc_communication import IPCClient
 from agents.prompts import ONBOARDING_PROMPT, get_main_menu_prompt, get_workout_prompt, get_program_creation_prompt
 
 # Database imports
-from db.database import SessionLocal
+from db.database import SessionLocal, get_db_session
 from db.program_utils import has_any_programs
+
+logger = logging.getLogger(__name__)
 
 # Context summarization constants
 MAX_CONTEXT_TOKENS = 28672  # OpenAI Realtime API limit
@@ -67,11 +73,32 @@ class NovaVoiceAgent(Agent):
         self._current_token_count: int = 0
         self._is_summarizing: bool = False  # Guard against concurrent summarization
         self._summary_count: int = 0
+        self._openai_client = None  # Lazy-initialized singleton for summarization
+
+        # Coaching audio cue system
+        self.audio_cue_service = None  # Lazy-initialized AudioCueService
+        self._coaching_ipc = None  # IPCClient for receiving coaching messages from main.py
+        self._coaching_listener_running = False
+        self._room = None  # Set from entrypoint for audio publishing
+        self._audio_source = None  # Reusable LiveKit AudioSource for cached cue playback
+        self._audio_track_published = False
+        self._event_loop = None  # Reference to the event loop for thread-to-async bridging
+        self._coaching_orchestrator = None  # CoachingOrchestrator for priority-based dispatch
 
         # Get initial instructions based on mode
         instructions = self._get_instructions_for_mode()
 
         super().__init__(instructions=instructions)
+
+    @property
+    def user_id(self) -> str:
+        """Get current user ID from state"""
+        return self.state.get_user().get("id")
+
+    @property
+    def user_name(self) -> str:
+        """Get current user name from state, defaults to 'there'"""
+        return self.state.get_user().get("name", "there")
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
         """Helper method to log function tool calls"""
@@ -111,28 +138,25 @@ class NovaVoiceAgent(Agent):
 
     def _get_main_menu_instructions(self) -> str:
         """Instructions for main menu mode"""
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
         return get_main_menu_prompt(name)
 
     def _get_workout_instructions(self) -> str:
         """Instructions for workout mode"""
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
         return get_workout_prompt(name)
 
     def _get_program_creation_instructions(self) -> str:
         """Instructions for program creation mode"""
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         # Try to get cached existing data from state first (set when entering program_creation mode)
         existing_data = self.state.get("program_creation.existing_data")
 
         # If no cached data, query database as fallback (shouldn't happen normally)
         if existing_data is None:
-            print("[PROGRAM] No cached user data found, querying database (this shouldn't happen often)")
+            logger.info("[PROGRAM] No cached user data found, querying database (this shouldn't happen often)")
             existing_data = {}
             db = SessionLocal()
             try:
@@ -146,7 +170,7 @@ class NovaVoiceAgent(Agent):
                         "sex": db_user.sex
                     }
             except Exception as e:
-                print(f"[PROGRAM] Error checking existing user data: {e}")
+                logger.info(f"[PROGRAM] Error checking existing user data: {e}")
             finally:
                 db.close()
 
@@ -180,15 +204,13 @@ class NovaVoiceAgent(Agent):
             )
         elif mode == "main_menu":
             # Main menu mode - greet returning users
-            user = self.state.get_user()
-            name = user.get("name", "there")
+            name = self.user_name
 
             await self.session.generate_reply(
                 instructions=f"Welcome {name} back to the main menu. Say something like: 'Hey {name}, welcome back! You can start a workout, create or update a program, check your progress, or update your profile. What would you like to do?' Keep it friendly and conversational."
             )
         elif mode == "workout":
-            user = self.state.get_user()
-            name = user.get("name", "there")
+            name = self.user_name
             await self.session.generate_reply(
                 instructions=f"Start the workout mode. Say something like: 'Alright {name}, let's do this! I'm tracking your form and counting reps. When you're ready, step up to the rack.'"
             )
@@ -235,14 +257,14 @@ class NovaVoiceAgent(Agent):
 
             messages_removed = messages_before - len(truncated_items)
             if messages_removed > 0:
-                print(f"[CONTEXT] Truncated: removed {messages_removed} messages, kept last {len(truncated_items)}")
+                logger.info(f"[CONTEXT] Truncated: removed {messages_removed} messages, kept last {len(truncated_items)}")
             else:
-                print(f"[CONTEXT] No truncation needed: {messages_before} messages <= {max_items} limit")
+                logger.info(f"[CONTEXT] No truncation needed: {messages_before} messages <= {max_items} limit")
 
         except Exception as e:
             # Don't fail the conversation if truncation fails
-            print(f"[CONTEXT] Warning: Failed to truncate conversation: {e}")
-            print(f"[CONTEXT] Continuing without truncation...")
+            logger.info(f"[CONTEXT] Warning: Failed to truncate conversation: {e}")
+            logger.info(f"[CONTEXT] Continuing without truncation...")
 
     # ===== CONTEXT SUMMARIZATION METHODS =====
 
@@ -333,7 +355,7 @@ class NovaVoiceAgent(Agent):
                 return "Conversation in progress. Some user information has been collected."
 
         except Exception as e:
-            print(f"[SUMMARY] Fallback summary generation failed: {e}")
+            logger.info(f"[SUMMARY] Fallback summary generation failed: {e}")
             return "Fitness consultation in progress."
 
     async def _generate_conversation_summary(self, items: list) -> str | None:
@@ -351,14 +373,16 @@ class NovaVoiceAgent(Agent):
             conversation_text = self._items_to_text(items)
 
             if not conversation_text.strip():
-                print("[SUMMARY] No conversation text to summarize")
+                logger.info("[SUMMARY] No conversation text to summarize")
                 return None
 
-            print(f"[SUMMARY] Generating summary for {len(conversation_text)} characters of conversation...")
+            logger.info(f"[SUMMARY] Generating summary for {len(conversation_text)} characters of conversation...")
 
-            # Import OpenAI client
-            from openai import OpenAI
-            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            # Reuse OpenAI client singleton (avoids creating new HTTP connections each time)
+            if self._openai_client is None:
+                from openai import OpenAI
+                self._openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            client = self._openai_client
 
             # Call OpenAI API (non-blocking with asyncio.to_thread)
             response = await asyncio.to_thread(
@@ -387,7 +411,7 @@ class NovaVoiceAgent(Agent):
             )
 
             summary = response.choices[0].message.content.strip()
-            print(f"[SUMMARY] Generated summary ({len(summary)} chars): {summary[:100]}...")
+            logger.info(f"[SUMMARY] Generated summary ({len(summary)} chars): {summary[:100]}...")
 
             # Log to session
             from core.session_logger import SessionLogger
@@ -401,7 +425,7 @@ class NovaVoiceAgent(Agent):
                 output_tokens=usage.completion_tokens,
                 details={
                     "summary_length": len(summary),
-                    "items_summarized": len(old_items),
+                    "items_summarized": len(items),
                     "summary_number": self._summary_count
                 }
             )
@@ -409,7 +433,7 @@ class NovaVoiceAgent(Agent):
             return summary
 
         except Exception as e:
-            print(f"[SUMMARY] LLM summary generation failed: {e}")
+            logger.info(f"[SUMMARY] LLM summary generation failed: {e}")
             return None
 
     async def _update_context_with_summary(
@@ -444,7 +468,7 @@ class NovaVoiceAgent(Agent):
         # 2. Add summary as SYSTEM message (CRITICAL: use system role, not assistant)
         summary_message = llm.ChatMessage(
             role="system",
-            content=f"[CONVERSATION SUMMARY] {summary_text}"
+            content=[f"[CONVERSATION SUMMARY] {summary_text}"]
         )
         new_ctx.items.append(summary_message)
 
@@ -455,8 +479,8 @@ class NovaVoiceAgent(Agent):
         # Update agent context
         await agent.update_chat_ctx(new_ctx)
 
-        print(f"[SUMMARY] Context updated: {len(system_items)} system + 1 summary + {len(recent_items)} recent items")
-        print(f"[SUMMARY] Removed {len(old_items)} old items")
+        logger.info(f"[SUMMARY] Context updated: {len(system_items)} system + 1 summary + {len(recent_items)} recent items")
+        logger.info(f"[SUMMARY] Removed {len(old_items)} old items")
 
     async def _summarize_and_prune_context(self) -> None:
         """
@@ -466,11 +490,11 @@ class NovaVoiceAgent(Agent):
         Uses SYSTEM message type to avoid audio/text modality confusion.
         """
         if self._is_summarizing:
-            print("[SUMMARY] Summarization already in progress, skipping")
+            logger.info("[SUMMARY] Summarization already in progress, skipping")
             return
 
         self._is_summarizing = True
-        print(f"[SUMMARY] ⚠️  Token count {self._current_token_count} >= {SUMMARY_TRIGGER_TOKENS}. Starting async summarization...")
+        logger.info(f"[SUMMARY] ⚠️  Token count {self._current_token_count} >= {SUMMARY_TRIGGER_TOKENS}. Starting async summarization...")
 
         try:
             # Get current agent - we need to access it from the agent itself
@@ -478,7 +502,7 @@ class NovaVoiceAgent(Agent):
             agent = self
 
             if not agent or not hasattr(agent, 'chat_ctx'):
-                print("[SUMMARY] No agent or chat context available for summarization")
+                logger.info("[SUMMARY] No agent or chat context available for summarization")
                 return
 
             chat_ctx = agent.chat_ctx
@@ -486,7 +510,7 @@ class NovaVoiceAgent(Agent):
 
             # Need enough items to summarize
             if len(items) <= KEEP_LAST_TURNS + 1:  # +1 for system prompt
-                print(f"[SUMMARY] Not enough items to summarize ({len(items)} items)")
+                logger.info(f"[SUMMARY] Not enough items to summarize ({len(items)} items)")
                 return
 
             # Split: keep system prompt + last N turns, summarize the rest
@@ -495,19 +519,19 @@ class NovaVoiceAgent(Agent):
             non_system_items = [item for item in items if not hasattr(item, 'role') or item.role != "system"]
 
             if len(non_system_items) <= KEEP_LAST_TURNS:
-                print(f"[SUMMARY] Not enough non-system items to summarize ({len(non_system_items)} items)")
+                logger.info(f"[SUMMARY] Not enough non-system items to summarize ({len(non_system_items)} items)")
                 return
 
             old_items = non_system_items[:-KEEP_LAST_TURNS]
             recent_items = non_system_items[-KEEP_LAST_TURNS:]
 
-            print(f"[SUMMARY] Splitting context: {len(old_items)} old items to summarize, {len(recent_items)} recent items to keep")
+            logger.info(f"[SUMMARY] Splitting context: {len(old_items)} old items to summarize, {len(recent_items)} recent items to keep")
 
             # Generate LLM summary of old items
             summary_text = await self._generate_conversation_summary(old_items)
 
             if not summary_text:
-                print("[SUMMARY] Failed to generate LLM summary, using fallback")
+                logger.info("[SUMMARY] Failed to generate LLM summary, using fallback")
                 summary_text = self._build_fallback_summary()
 
             # Create new context with summary
@@ -520,12 +544,10 @@ class NovaVoiceAgent(Agent):
             )
 
             self._summary_count += 1
-            print(f"[SUMMARY] ✅ Summarization complete (summary #{self._summary_count})")
+            logger.info(f"[SUMMARY] ✅ Summarization complete (summary #{self._summary_count})")
 
         except Exception as e:
-            print(f"[SUMMARY] Summarization failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[SUMMARY] Summarization failed")
         finally:
             self._is_summarizing = False
 
@@ -553,12 +575,274 @@ class NovaVoiceAgent(Agent):
             MESSAGE_COUNT_THRESHOLD = 15
 
             if len(items) > MESSAGE_COUNT_THRESHOLD and not self._is_summarizing:
-                print(f"[SUMMARY] Message count ({len(items)}) exceeds threshold ({MESSAGE_COUNT_THRESHOLD})")
+                logger.info(f"[SUMMARY] Message count ({len(items)}) exceeds threshold ({MESSAGE_COUNT_THRESHOLD})")
                 # Trigger async summarization (non-blocking)
                 asyncio.create_task(self._summarize_and_prune_context())
 
         except Exception as e:
-            print(f"[SUMMARY] Error checking for summarization: {e}")
+            logger.info(f"[SUMMARY] Error checking for summarization: {e}")
+
+    # ===== COACHING AUDIO CUE SYSTEM =====
+
+    async def _start_coaching_listener(self):
+        """Connect to the coaching IPC server and listen for biomechanics messages."""
+        if self._coaching_listener_running:
+            logger.info("[COACHING] Listener already running")
+            return
+
+        from core.ipc_communication import IPCClient
+
+        self._event_loop = asyncio.get_event_loop()
+        self._coaching_ipc = IPCClient(socket_path="/tmp/nowva_coaching.sock")
+
+        def _listen_thread():
+            """Blocking IPC listener running in a daemon thread."""
+            try:
+                if not self._coaching_ipc.connect(timeout=15):
+                    logger.warning("[COACHING] Failed to connect to coaching IPC server")
+                    return
+                logger.info("[COACHING] Connected to coaching IPC server")
+                self._coaching_listener_running = True
+
+                def on_message(message: dict):
+                    if self._event_loop and self._event_loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            self._handle_coaching_message(message),
+                            self._event_loop,
+                        )
+
+                self._coaching_ipc.listen(message_callback=on_message)
+            except Exception as e:
+                logger.error(f"[COACHING] Listener error: {e}")
+            finally:
+                self._coaching_listener_running = False
+
+        thread = threading.Thread(target=_listen_thread, daemon=True)
+        thread.start()
+        logger.info("[COACHING] Listener thread started")
+
+    def _stop_coaching_listener(self):
+        """Disconnect from the coaching IPC server."""
+        if self._coaching_ipc:
+            self._coaching_ipc.disconnect()
+            self._coaching_ipc = None
+        self._coaching_listener_running = False
+        logger.info("[COACHING] Listener stopped")
+
+    async def _handle_coaching_message(self, message: dict):
+        """Dispatch incoming coaching message through the orchestrator."""
+        msg_type = message.get("type")
+
+        try:
+            if msg_type == "cache_cues":
+                await self._on_cache_cues(message)
+            elif msg_type == "fault":
+                if self._coaching_orchestrator:
+                    await self._coaching_orchestrator.on_fault(
+                        cue_key=message.get("cue"),
+                        fault_type=message.get("fault_type", ""),
+                        severity=message.get("severity", ""),
+                        message=message.get("message", ""),
+                    )
+            elif msg_type == "rep_complete":
+                rep = message.get("rep_number")
+                depth = message.get("depth_category", "")
+                logger.info(f"[COACHING] Rep {rep} complete — {depth}")
+                if self._coaching_orchestrator:
+                    await self._coaching_orchestrator.on_rep_complete(
+                        rep_number=rep or 0,
+                        depth=depth,
+                        is_clean=message.get("is_clean", False),
+                        faults=message.get("faults_in_rep", []),
+                    )
+            elif msg_type == "frame_data":
+                if self._coaching_orchestrator:
+                    self._coaching_orchestrator.record_angle_sample(
+                        message.get("joint_angles", {})
+                    )
+            elif msg_type == "set_complete":
+                # Ignored — orchestrator handles set completion deterministically
+                # via rep count (avoids duplicate recaps from SessionTracker timeout)
+                pass
+            elif msg_type == "rest_complete":
+                logger.info("[COACHING] Rest timer expired — prompting user")
+                if self._coaching_orchestrator:
+                    self._coaching_orchestrator.on_rest_complete()
+                instructions = (
+                    "[REST COMPLETE] The rest timer just finished. "
+                    "Tell the user it's time for the next set. Be energetic and brief "
+                    "(1-2 sentences). Example: 'Let's go! Time for set 2!'"
+                )
+                await self.session.generate_reply(instructions=instructions)
+            elif msg_type == "play_cue":
+                pass  # Orchestrator handles cue dispatch from rep_complete/fault
+        except Exception as e:
+            logger.error(f"[COACHING] Error handling {msg_type}: {e}")
+
+    async def _on_cache_cues(self, message: dict):
+        """Pre-generate TTS audio for all cues in the message."""
+        from services.audio_cue_service import AudioCueService
+
+        if self.audio_cue_service is None:
+            self.audio_cue_service = AudioCueService()
+
+        cues = message.get("cues", {})
+        exercise = message.get("exercise_name", "unknown")
+        logger.info(f"[COACHING] Pre-caching {len(cues)} cues for {exercise}")
+
+        try:
+            await self.audio_cue_service.cache_cues(cues)
+            # Initialize orchestrator positive cue keys now that cache is ready
+            if self._coaching_orchestrator:
+                from biomechanics.coaching.cue_cache import POSITIVE_CUE_KEYS
+                available = [k for k in cues if k in POSITIVE_CUE_KEYS]
+                self._coaching_orchestrator._positive_cue_keys = available
+        except Exception as e:
+            logger.error(f"[COACHING] TTS cache generation failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Coaching orchestrator helpers
+    # ------------------------------------------------------------------
+
+    async def _init_coaching_orchestrator(self):
+        """Initialize the coaching orchestrator with callbacks."""
+        from services.coaching_orchestrator import CoachingOrchestrator
+
+        self._coaching_orchestrator = CoachingOrchestrator(
+            play_cached_audio_fn=self._play_cached_cue_audio,
+            generate_llm_reply_fn=self._coaching_llm_reply,
+            duck_llm_fn=self._duck_llm_audio,
+            unduck_llm_fn=self._unduck_llm_audio,
+            get_cue_audio_fn=self._get_cached_audio,
+            advance_set_fn=self._advance_workout_set,
+        )
+
+        target_reps = self._get_current_target_reps()
+        self._coaching_orchestrator.reset_set(target_reps=target_reps)
+        self._coaching_orchestrator.start()
+
+    def _get_current_target_reps(self) -> Optional[int]:
+        """Get target reps for the current set from WorkoutSession."""
+        session_data = self.state.get("workout.current_session")
+        if session_data:
+            from core.workout_session import WorkoutSession
+            try:
+                session = WorkoutSession.from_dict(session_data)
+                current_set = session.get_current_set()
+                if current_set:
+                    return current_set.target_reps
+            except Exception:
+                pass
+        return None
+
+    async def _advance_workout_set(self) -> Optional[int]:
+        """Advance WorkoutSession to the next set. Returns new target_reps or None."""
+        from core.workout_session import WorkoutSession
+
+        session_data = self.state.get("workout.current_session")
+        if not session_data:
+            logger.warning("[COACHING] No active session to advance")
+            return None
+
+        try:
+            session = WorkoutSession.from_dict(session_data)
+
+            # Get rest_seconds from the COMPLETED set before advancing
+            completed_set = session.get_current_set()
+            rest_seconds = completed_set.rest_seconds if completed_set else 30
+
+            rep_count = (
+                self._coaching_orchestrator._set_rep_count
+                if self._coaching_orchestrator
+                else 0
+            )
+            session.mark_set_complete(performed_reps=rep_count)
+
+            has_next = session.advance_to_next_set()
+
+            self.state.set("workout.current_session", session.to_dict())
+            self.state.save_state()
+
+            if has_next:
+                next_set = session.get_current_set()
+                new_target = next_set.target_reps if next_set else None
+                logger.info(f"[COACHING] Advanced to next set — target_reps={new_target}")
+
+                # Send rest_start to pose process (via coaching IPC → main.py → pose)
+                if self._coaching_ipc and rest_seconds > 0:
+                    try:
+                        self._coaching_ipc.send_message({
+                            "type": "rest_start",
+                            "rest_seconds": rest_seconds,
+                        })
+                        logger.info(f"[COACHING] Sent rest_start ({rest_seconds}s)")
+                    except Exception as e:
+                        logger.error(f"[COACHING] Failed to send rest_start: {e}")
+
+                return new_target
+            else:
+                logger.info("[COACHING] Workout complete — no more sets")
+                return None
+
+        except Exception:
+            logger.exception("[COACHING] Failed to advance workout set")
+            return None
+
+    async def _play_cached_cue_audio(self, cue_key: str):
+        """Callback: play a cached cue on the secondary audio track."""
+        if self.audio_cue_service:
+            audio_bytes = self.audio_cue_service.get_cue_audio(cue_key)
+            if audio_bytes:
+                await self._publish_cached_audio(audio_bytes)
+                logger.info(f"[COACHING] Played cached cue: {cue_key}")
+
+    async def _coaching_llm_reply(self, instructions: str):
+        """Callback: generate an LLM reply for coaching context."""
+        await self.session.generate_reply(instructions=instructions)
+
+    async def _duck_llm_audio(self):
+        """Callback: pause the LLM audio output (duck) while a cached cue plays."""
+        try:
+            self.session.output.audio.pause()
+        except Exception as e:
+            logger.debug(f"[COACHING] Duck failed (non-critical): {e}")
+
+    async def _unduck_llm_audio(self):
+        """Callback: resume the LLM audio output after cached cue finishes."""
+        try:
+            self.session.output.audio.resume()
+        except Exception as e:
+            logger.debug(f"[COACHING] Unduck failed (non-critical): {e}")
+
+    def _get_cached_audio(self, cue_key: str) -> Optional[bytes]:
+        """Callback: check if cached audio exists for a cue key."""
+        if self.audio_cue_service:
+            return self.audio_cue_service.get_cue_audio(cue_key)
+        return None
+
+    async def _publish_cached_audio(self, pcm_bytes: bytes):
+        """
+        Play pre-cached PCM audio through system speakers via sounddevice.
+
+        Uses a separate sounddevice output stream so cached cues are audible
+        in both console mode (ChatCLI) and production (real LiveKit room).
+        Audio format from OpenAI TTS (pcm): 24kHz, 16-bit signed, mono.
+        """
+        import asyncio
+        import numpy as np
+        import sounddevice as sd
+
+        audio_array = np.frombuffer(pcm_bytes, dtype=np.int16)
+        done_event = asyncio.Event()
+        loop = asyncio.get_event_loop()
+
+        def _play_blocking():
+            sd.play(audio_array, samplerate=24000, blocksize=2400)
+            sd.wait()
+            loop.call_soon_threadsafe(done_event.set)
+
+        loop.run_in_executor(None, _play_blocking)
+        await done_event.wait()
 
     # ===== ONBOARDING TOOLS =====
     # NOTE: Function call logging has been added to representative functions (capture_first_name,
@@ -577,7 +861,7 @@ class NovaVoiceAgent(Agent):
         """
         self.temp_first_name = first_name.strip()
 
-        print(f"[DEBUG] Captured first name: {self.temp_first_name}")
+        logger.debug(f"[DEBUG] Captured first name: {self.temp_first_name}")
 
         # Spell out the name for confirmation (with hyphens)
         spelled_name = "-".join(list(self.temp_first_name.upper()))
@@ -599,7 +883,7 @@ class NovaVoiceAgent(Agent):
         """
         self.first_name_confirmed = True
 
-        print(f"[DEBUG] First name '{self.temp_first_name}' confirmed by user!")
+        logger.debug(f"[DEBUG] First name '{self.temp_first_name}' confirmed by user!")
 
         # Return instruction to the LLM
         return None, "The user confirmed their name is correct. Now ask for their email address. Keep it short and natural."
@@ -623,7 +907,7 @@ class NovaVoiceAgent(Agent):
         """
         self.first_name_retry_count += 1
 
-        print(f"[DEBUG] First name was incorrect, retry attempt {self.first_name_retry_count}/{self.max_retries}")
+        logger.debug(f"[DEBUG] First name was incorrect, retry attempt {self.first_name_retry_count}/{self.max_retries}")
 
         if self.first_name_retry_count >= self.max_retries:
             return None, "Too many retry attempts. Say something like: 'Having trouble with the name. Let's try text input instead - what's your name?' (This should trigger fallback to text mode)"
@@ -632,7 +916,7 @@ class NovaVoiceAgent(Agent):
             # User provided a correction directly - capture it and confirm
             self.temp_first_name = corrected_name.strip()
 
-            print(f"[DEBUG] User provided corrected first name: {self.temp_first_name}")
+            logger.debug(f"[DEBUG] User provided corrected first name: {self.temp_first_name}")
 
             # Spell out the corrected name for confirmation (with hyphens)
             spelled_name = "-".join(list(self.temp_first_name.upper()))
@@ -643,7 +927,7 @@ class NovaVoiceAgent(Agent):
             self.temp_first_name = None
             self.first_name_confirmed = False
 
-            print(f"[DEBUG] User said name was incorrect, asking again...")
+            logger.debug(f"[DEBUG] User said name was incorrect, asking again...")
 
             return None, "The user said their name was not correct. Say 'No problem!' and ask for their name again."
 
@@ -671,7 +955,7 @@ class NovaVoiceAgent(Agent):
             # Fallback: use normalized email even if not perfectly valid
             self.temp_email = normalized_email
 
-        print(f"[DEBUG] Captured email: {self.temp_email}")
+        logger.debug(f"[DEBUG] Captured email: {self.temp_email}")
 
         # Return instruction to the LLM
         return None, f"You just captured the email '{self.temp_email}'. Now read it back naturally and ask if it's correct. Keep it short."
@@ -685,7 +969,7 @@ class NovaVoiceAgent(Agent):
         """
         self.email_confirmed = True
 
-        print(f"[DEBUG] Email '{self.temp_email}' confirmed by user!")
+        logger.debug(f"[DEBUG] Email '{self.temp_email}' confirmed by user!")
 
         # Create user account in database
         user_id = None
@@ -711,14 +995,14 @@ class NovaVoiceAgent(Agent):
 
             # Update agent instructions to main_menu mode
             new_instructions = self._get_main_menu_instructions()
-            self.update_instructions(new_instructions)
-            print("[ONBOARDING] Updated agent instructions to main_menu mode")
+            await self.update_instructions(new_instructions)
+            logger.info("[ONBOARDING] Updated agent instructions to main_menu mode")
 
-            print("\n[ONBOARDING] User account created successfully")
-            print("[ONBOARDING] State updated - ready for main menu")
+            logger.info("[ONBOARDING] User account created successfully")
+            logger.info("[ONBOARDING] State updated - ready for main menu")
 
         except Exception as e:
-            print(f"[ERROR] User account creation failed: {str(e)}")
+            logger.error(f"[ERROR] User account creation failed: {str(e)}")
             # Continue even if database creation fails
 
         # Output markers for main.py to capture
@@ -751,7 +1035,7 @@ class NovaVoiceAgent(Agent):
         """
         self.email_retry_count += 1
 
-        print(f"[DEBUG] Email was incorrect, retry attempt {self.email_retry_count}/{self.max_retries}")
+        logger.debug(f"[DEBUG] Email was incorrect, retry attempt {self.email_retry_count}/{self.max_retries}")
 
         if self.email_retry_count >= self.max_retries:
             return None, "Too many retry attempts. Say something like: 'Having trouble with the email. Let's try text input instead - what's your email?' (This should trigger fallback to text mode)"
@@ -772,7 +1056,7 @@ class NovaVoiceAgent(Agent):
                 # Fallback: use normalized email even if not perfectly valid
                 self.temp_email = normalized_email
 
-            print(f"[DEBUG] User provided corrected email: {self.temp_email}")
+            logger.debug(f"[DEBUG] User provided corrected email: {self.temp_email}")
 
             return None, f"The user corrected their email to '{self.temp_email}'. Now read it back naturally and ask if it's correct. Keep it short."
         else:
@@ -780,7 +1064,7 @@ class NovaVoiceAgent(Agent):
             self.temp_email = None
             self.email_confirmed = False
 
-            print(f"[DEBUG] User said email was incorrect, asking again...")
+            logger.debug(f"[DEBUG] User said email was incorrect, asking again...")
 
             return None, "The user said their email was not correct. Say 'No worries!' and ask for their email again."
 
@@ -792,23 +1076,21 @@ class NovaVoiceAgent(Agent):
         Call this when the user wants to start a workout.
         User might say: "start workout", "let's train", "I'm ready", "begin workout"
         """
-        print("[MAIN MENU] User requested to start workout")
+        logger.info("[MAIN MENU] User requested to start workout")
 
-        from db.database import SessionLocal
         from db.schedule_utils import get_todays_workout
         from core.workout_session import WorkoutSession
 
         # Get today's workout from schedule
         db = SessionLocal()
         try:
-            user = self.state.get_user()
-            user_id = user.get("id")
-            name = user.get("name", "there")
+            user_id = self.user_id
+            name = self.user_name
 
             workout = get_todays_workout(db, user_id)
 
             if not workout:
-                print("[WORKOUT] No workout scheduled for today")
+                logger.info("[WORKOUT] No workout scheduled for today")
                 return None, f"Tell the user: 'Hey {name}, you don't have a workout scheduled for today. Would you like to check your upcoming schedule or create a new program?' Keep it helpful and supportive."
 
             # Initialize workout session
@@ -820,13 +1102,23 @@ class NovaVoiceAgent(Agent):
 
             # Store session in state
             self.state.set("workout.current_session", session.to_dict())
+
+            # Set exercise name for main.py to pass to pose estimation
+            first_exercise = session.get_current_exercise()
+            if first_exercise:
+                self.state.set("workout.exercise_name", first_exercise.exercise_name)
+
             self.state.switch_mode("workout")
             self.state.save_state()
 
             # Update agent instructions to workout mode
             new_instructions = self._get_workout_instructions()
-            self.update_instructions(new_instructions)
-            print("[STATE] Switched to workout mode with loaded workout - main.py will detect and start pose estimation")
+            await self.update_instructions(new_instructions)
+            logger.info("[STATE] Switched to workout mode with loaded workout - main.py will detect and start pose estimation")
+
+            # Start coaching IPC listener and orchestrator for real-time biomechanics cues
+            asyncio.create_task(self._start_coaching_listener())
+            await self._init_coaching_orchestrator()
 
             # Get first exercise info
             first_exercise_desc = session.get_current_exercise_description()
@@ -839,9 +1131,7 @@ class NovaVoiceAgent(Agent):
             return result
 
         except Exception as e:
-            print(f"[WORKOUT ERROR] Failed to load workout: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[WORKOUT ERROR] Failed to load workout")
 
             result = (None, f"Tell the user: 'Hmm, I'm having trouble loading your workout right now. Let's try again in a moment.' Keep it reassuring.")
 
@@ -851,6 +1141,192 @@ class NovaVoiceAgent(Agent):
             return result
         finally:
             db.close()
+
+    # ===== QUICK EXERCISE TOOLS =====
+
+    def _normalize_exercise_name(self, raw_name: str) -> Optional[str]:
+        """
+        Normalize a casual exercise name to its formal library name.
+        Returns None if the exercise isn't supported for biomechanics tracking.
+        """
+        name_lower = raw_name.lower().strip()
+
+        EXERCISE_ALIASES = {
+            "squat": "Barbell Back Squat",
+            "squats": "Barbell Back Squat",
+            "back squat": "Barbell Back Squat",
+            "back squats": "Barbell Back Squat",
+            "barbell squat": "Barbell Back Squat",
+            "barbell back squat": "Barbell Back Squat",
+            "front squat": "Barbell Front Squat",
+            "front squats": "Barbell Front Squat",
+            "barbell front squat": "Barbell Front Squat",
+            "goblet squat": "Goblet Squat",
+            "goblet squats": "Goblet Squat",
+            "deadlift": "Barbell Deadlift",
+            "deadlifts": "Barbell Deadlift",
+            "barbell deadlift": "Barbell Deadlift",
+            "romanian deadlift": "Romanian Deadlift",
+            "rdl": "Romanian Deadlift",
+            "sumo deadlift": "Sumo Deadlift",
+            "bench": "Barbell Bench Press",
+            "bench press": "Barbell Bench Press",
+            "barbell bench press": "Barbell Bench Press",
+            "overhead press": "Barbell Overhead Press",
+            "ohp": "Barbell Overhead Press",
+            "press": "Barbell Overhead Press",
+            "military press": "Barbell Overhead Press",
+        }
+
+        return EXERCISE_ALIASES.get(name_lower)
+
+    @function_tool
+    async def start_quick_exercise(self, exercise_name: str, context: RunContext):
+        """
+        Call this when the user wants to do a single exercise without a scheduled workout.
+        User might say: "I want to squat", "let me do some bench press",
+        "I just want to deadlift", "can I just do squats?"
+
+        Args:
+            exercise_name: The exercise the user wants to do (e.g., "squat", "bench press", "deadlift")
+        """
+        logger.info(f"[MAIN MENU] User wants quick exercise: {exercise_name}")
+
+        normalized = self._normalize_exercise_name(exercise_name)
+
+        if not normalized:
+            result = (None, (
+                "Tell the user: 'I can't track that exercise with form feedback just yet. "
+                "Right now I can track squats, deadlifts, bench press, and overhead press. "
+                "Would you like to do one of those?' Keep it helpful and casual."
+            ))
+            self._log_function_call("start_quick_exercise", {"exercise_name": exercise_name}, result)
+            return result
+
+        self.state.set("quick_exercise.exercise_name", normalized)
+        self.state.set("quick_exercise.gathering_params", True)
+        self.state.save_state()
+
+        name = self.user_name
+
+        result = (None, (
+            f"The user wants to do {normalized} as a quick exercise (not part of a scheduled workout). "
+            f"Now ask {name} conversationally about their plan. Ask how many sets they're thinking, "
+            f"how many reps per set, what weight they want to use, and how long they want to rest between sets. "
+            f"Once you have all the details, call confirm_quick_exercise() with the parameters. "
+            f"Keep it natural and conversational — like a coach checking in. "
+            f"If they're unsure about anything, suggest reasonable defaults "
+            f"(3-5 sets, 5-10 reps, 90-120 seconds rest)."
+        ))
+        self._log_function_call("start_quick_exercise", {"exercise_name": exercise_name}, result)
+        return result
+
+    @function_tool
+    async def confirm_quick_exercise(
+        self,
+        sets: int,
+        reps: int,
+        weight: float = 0.0,
+        rest_seconds: int = 120,
+        context: RunContext = None
+    ):
+        """
+        Call this after gathering all parameters for a quick exercise session.
+        This starts workout mode for the single exercise.
+
+        Args:
+            sets: Number of sets to perform
+            reps: Target reps per set
+            weight: Weight in lbs. Use 0 for bodyweight exercises.
+            rest_seconds: Rest between sets in seconds (default 120)
+        """
+        logger.info(f"[QUICK EXERCISE] Confirming: {sets} sets x {reps} reps, "
+                    f"weight={weight}, rest={rest_seconds}s")
+
+        exercise_name = self.state.get("quick_exercise.exercise_name")
+
+        if not exercise_name:
+            return None, ("Tell the user: 'Hmm, I lost track of which exercise we were setting up. "
+                          "Can you tell me again what you'd like to do?' Keep it casual.")
+
+        from core.workout_session import WorkoutSession, ExerciseProgress, SetProgress
+
+        # Build synthetic sets
+        set_list = []
+        for i in range(sets):
+            set_list.append(SetProgress(
+                set_id=None,
+                set_number=i + 1,
+                target_reps=reps,
+                target_weight=weight,
+                intensity_percent=None,
+                rpe_target=None,
+                rest_seconds=rest_seconds,
+                velocity_threshold=None,
+            ))
+
+        exercise = ExerciseProgress(
+            workout_exercise_id=None,
+            exercise_id=None,
+            exercise_name=exercise_name,
+            muscle_group=None,
+            category="Strength",
+            order_number=1,
+            notes=None,
+            sets=set_list,
+        )
+
+        workout_data = {
+            "workout_id": None,
+            "workout_name": f"Quick {exercise_name}",
+            "description": f"Ad-hoc {exercise_name} session",
+            "exercises": []
+        }
+
+        session = WorkoutSession(
+            user_id=self.user_id,
+            schedule_id=None,
+            workout_data=workout_data,
+            is_quick_exercise=True,
+        )
+        session.exercises = [exercise]
+
+        # Store in state and switch to workout mode
+        self.state.set("workout.current_session", session.to_dict())
+        self.state.set("quick_exercise.gathering_params", False)
+        self.state.set("workout.exercise_name", exercise_name)
+
+        self.state.switch_mode("workout")
+        self.state.save_state()
+
+        # Update agent instructions to workout mode
+        new_instructions = self._get_workout_instructions()
+        await self.update_instructions(new_instructions)
+        logger.info("[STATE] Switched to workout mode with quick exercise - main.py will detect and start pose estimation")
+
+        # Start coaching IPC listener and orchestrator for real-time biomechanics cues
+        asyncio.create_task(self._start_coaching_listener())
+        await self._init_coaching_orchestrator()
+
+        # Get first exercise description
+        first_desc = session.get_current_exercise_description()
+
+        name = self.user_name
+        weight_str = f" at {weight}" if weight else ""
+
+        result = (None, (
+            f"Quick exercise started! {exercise_name}: {sets} sets of {reps} reps{weight_str}. "
+            f"First up: {first_desc}. "
+            f"Tell {name} enthusiastically that you're ready to go — "
+            f"you'll be tracking their form and counting reps. "
+            f"Tell them to get set up and let you know when they're ready!"
+        ))
+        self._log_function_call("confirm_quick_exercise", {
+            "sets": sets, "reps": reps, "weight": weight, "rest_seconds": rest_seconds
+        }, result)
+        return result
+
+    # ===== SCHEDULE & INFO TOOLS =====
 
     @function_tool
     async def view_schedule(self, days_ahead: int = 7, context: RunContext = None):
@@ -862,17 +1338,15 @@ class NovaVoiceAgent(Agent):
         Args:
             days_ahead: Number of days to look ahead (default 7)
         """
-        print(f"[MAIN MENU] User requested schedule (next {days_ahead} days)")
+        logger.info(f"[MAIN MENU] User requested schedule (next {days_ahead} days)")
 
-        from db.database import SessionLocal
         from db.schedule_utils import get_upcoming_workouts
         from datetime import datetime
 
         db = SessionLocal()
         try:
-            user = self.state.get_user()
-            user_id = user.get("id")
-            name = user.get("name", "there")
+            user_id = self.user_id
+            name = self.user_name
 
             workouts = get_upcoming_workouts(db, user_id, days_ahead)
 
@@ -896,9 +1370,7 @@ class NovaVoiceAgent(Agent):
             return None, f"The user wants to see their schedule. Tell them they have {len(workouts)} workouts in the next {days_ahead} days:\n{schedule_text}\n\nKeep the delivery natural and conversational."
 
         except Exception as e:
-            print(f"[SCHEDULE ERROR] Failed to load schedule: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[SCHEDULE ERROR] Failed to load schedule")
             return None, "There was an error loading the schedule. Apologize and suggest trying again."
         finally:
             db.close()
@@ -918,24 +1390,22 @@ class NovaVoiceAgent(Agent):
                       - If they say a day name → pass it (e.g., "monday", "friday")
                       Supported formats: "today", "tomorrow", "monday", "next friday", "in 3 days"
         """
-        print(f"[MAIN MENU] User requested exercises for: {date_text}")
+        logger.info(f"[MAIN MENU] User requested exercises for: {date_text}")
 
-        from db.database import SessionLocal
         from db.schedule_utils import get_upcoming_workouts
         from datetime import datetime, date, timedelta
         from utils.date_parser import parse_natural_date, DateParseError
 
         db = SessionLocal()
         try:
-            user = self.state.get_user()
-            user_id = user.get("id")
-            name = user.get("name", "there")
+            user_id = self.user_id
+            name = self.user_name
 
             # Parse the date
             try:
                 target_date = parse_natural_date(date_text)
             except DateParseError as e:
-                print(f"[WORKOUT VIEW] Date parsing failed: {e}")
+                logger.info(f"[WORKOUT VIEW] Date parsing failed: {e}")
                 # Ask the LLM to interpret and retry
                 return None, f"I had trouble understanding '{date_text}' as a date. Please call this function again with a clearer date like 'today', 'tomorrow', or a day of the week."
 
@@ -994,9 +1464,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Workout for {date_str} - {workout.name}:\n\n{exercises_text}\n\nPresent this information naturally and conversationally."
 
         except Exception as e:
-            print(f"[WORKOUT VIEW ERROR] Failed to load exercises: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[WORKOUT VIEW ERROR] Failed to load exercises")
             return None, "There was an error loading the workout details. Apologize and suggest trying again."
         finally:
             db.close()
@@ -1022,14 +1490,12 @@ class NovaVoiceAgent(Agent):
             workout_description: Description of workout to move (e.g., "leg day", "tuesday's workout", "today's workout")
             target_date_text: Natural language target date (e.g., "tomorrow", "next friday", "in 3 days")
         """
-        from db.database import SessionLocal
         from db.schedule_utils import find_schedule_by_criteria, move_workout
         from utils.date_parser import parse_natural_date, get_date_description, DateParseError
         from datetime import date, timedelta
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1090,9 +1556,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I moved '{schedule.workout.name}' to {target_desc}. Your schedule is updated."
 
         except Exception as e:
-            print(f"[ERROR] move_workout_to_date failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] move_workout_to_date failed")
             return None, f"Sorry {name}, I ran into an issue moving that workout. Let's try again."
         finally:
             db.close()
@@ -1116,14 +1580,12 @@ class NovaVoiceAgent(Agent):
             workout1_description: First workout (e.g., "tuesday's workout", "leg day")
             workout2_description: Second workout (e.g., "thursday's workout", "push day")
         """
-        from db.database import SessionLocal
         from db.schedule_utils import find_schedule_by_criteria, swap_workouts
         from utils.date_parser import parse_natural_date
         from datetime import date, timedelta
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1170,9 +1632,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I swapped '{matches1[0].workout.name}' and '{matches2[0].workout.name}'. Your schedule is updated."
 
         except Exception as e:
-            print(f"[ERROR] swap_two_workouts failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] swap_two_workouts failed")
             return None, f"Sorry {name}, I ran into an issue swapping those workouts. Let's try again."
         finally:
             db.close()
@@ -1195,13 +1655,11 @@ class NovaVoiceAgent(Agent):
             week1_description: First week (e.g., "this week", "next week")
             week2_description: Second week (e.g., "the week after", "next week")
         """
-        from db.database import SessionLocal
         from db.schedule_utils import swap_weeks
         from utils.date_parser import parse_week_range, DateParseError
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1221,9 +1679,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I swapped all workouts between {week1_description} and {week2_description}. {len(swapped_pairs)} workouts were moved."
 
         except Exception as e:
-            print(f"[ERROR] swap_entire_weeks failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] swap_entire_weeks failed")
             return None, f"Sorry {name}, I ran into an issue swapping those weeks. Let's try again."
         finally:
             db.close()
@@ -1246,12 +1702,10 @@ class NovaVoiceAgent(Agent):
         Args:
             reason: Optional reason for skipping (e.g., "tired", "injured", "travel")
         """
-        from db.database import SessionLocal
         from db.schedule_utils import get_todays_workout, skip_workout
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1270,9 +1724,7 @@ class NovaVoiceAgent(Agent):
             return None, f"No problem, {name}. I've marked today's workout as skipped. Rest up and we'll get back to it next time!"
 
         except Exception as e:
-            print(f"[ERROR] skip_workout_today failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] skip_workout_today failed")
             return None, f"Sorry {name}, I ran into an issue. Let's try again."
         finally:
             db.close()
@@ -1293,13 +1745,11 @@ class NovaVoiceAgent(Agent):
         Args:
             rest_date_text: Natural language date for rest day (e.g., "tomorrow", "friday")
         """
-        from db.database import SessionLocal
         from db.schedule_utils import add_rest_day
         from utils.date_parser import parse_natural_date, get_date_description, DateParseError
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1319,9 +1769,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I added a rest day on {rest_desc} and pushed {shifted_count} future workouts forward by one day."
 
         except Exception as e:
-            print(f"[ERROR] add_rest_day_and_shift failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] add_rest_day_and_shift failed")
             return None, f"Sorry {name}, I ran into an issue. Let's try again."
         finally:
             db.close()
@@ -1344,14 +1792,12 @@ class NovaVoiceAgent(Agent):
             workout_description: Workout to repeat (e.g., "today's workout", "leg day")
             repeat_date_text: Date to repeat on (e.g., "friday", "next monday")
         """
-        from db.database import SessionLocal
         from db.schedule_utils import find_schedule_by_criteria, repeat_workout
         from utils.date_parser import parse_natural_date, get_date_description, DateParseError
         from datetime import date
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1391,9 +1837,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I added '{matches[0].workout.name}' on {repeat_desc}."
 
         except Exception as e:
-            print(f"[ERROR] repeat_workout_on_date failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] repeat_workout_on_date failed")
             return None, f"Sorry {name}, I ran into an issue. Let's try again."
         finally:
             db.close()
@@ -1416,13 +1860,11 @@ class NovaVoiceAgent(Agent):
             week_description: Week to deload (e.g., "this week", "next week")
             intensity_percentage: Target intensity as percentage (default 70%)
         """
-        from db.database import SessionLocal
         from db.schedule_utils import apply_deload_week
         from utils.date_parser import parse_week_range, DateParseError
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1446,9 +1888,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I set {week_description} as a deload week at {intensity_percentage}% intensity. {modified_count} workouts were modified."
 
         except Exception as e:
-            print(f"[ERROR] apply_deload_to_week failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] apply_deload_to_week failed")
             return None, f"Sorry {name}, I ran into an issue. Let's try again."
         finally:
             db.close()
@@ -1471,13 +1911,11 @@ class NovaVoiceAgent(Agent):
             start_date_text: Vacation start date
             end_date_text: Vacation end date
         """
-        from db.database import SessionLocal
         from db.schedule_utils import clear_date_range
         from utils.date_parser import parse_natural_date, DateParseError
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1497,9 +1935,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I cleared {cleared_count} workouts from {start_date} to {end_date}. Enjoy your break, {name}!"
 
         except Exception as e:
-            print(f"[ERROR] clear_schedule_for_vacation failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] clear_schedule_for_vacation failed")
             return None, f"Sorry {name}, I ran into an issue. Let's try again."
         finally:
             db.close()
@@ -1520,12 +1956,10 @@ class NovaVoiceAgent(Agent):
         Args:
             days: Number of days to shift forward (default: 1)
         """
-        from db.database import SessionLocal
         from db.schedule_utils import reschedule_remaining_week
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1542,9 +1976,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I pushed {rescheduled_count} remaining workouts forward by {days} day{'s' if days > 1 else ''}."
 
         except Exception as e:
-            print(f"[ERROR] push_remaining_week_forward failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] push_remaining_week_forward failed")
             return None, f"Sorry {name}, I ran into an issue. Let's try again."
         finally:
             db.close()
@@ -1565,12 +1997,10 @@ class NovaVoiceAgent(Agent):
 
         Returns user-friendly confirmation or error message.
         """
-        from db.database import SessionLocal
         from db.schedule_history import undo_last_change
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1582,9 +2012,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I've undone your last change."
 
         except Exception as e:
-            print(f"[ERROR] undo_last_schedule_change failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] undo_last_schedule_change failed")
             return None, f"Sorry {name}, I ran into an issue undoing that change. Let's try again."
         finally:
             db.close()
@@ -1608,12 +2036,10 @@ class NovaVoiceAgent(Agent):
 
         Returns formatted list of recent changes.
         """
-        from db.database import SessionLocal
         from db.schedule_history import get_recent_changes, format_change_for_display
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1635,9 +2061,7 @@ class NovaVoiceAgent(Agent):
             return None, response.strip()
 
         except Exception as e:
-            print(f"[ERROR] view_schedule_change_history failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] view_schedule_change_history failed")
             return None, f"Sorry {name}, I ran into an issue retrieving your change history."
         finally:
             db.close()
@@ -1658,12 +2082,10 @@ class NovaVoiceAgent(Agent):
 
         Provides quality score and specific rest day recommendations.
         """
-        from db.database import SessionLocal
         from db.recovery_analysis import analyze_schedule_recovery, format_recommendation_for_display
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1686,9 +2108,7 @@ class NovaVoiceAgent(Agent):
             return None, response.strip()
 
         except Exception as e:
-            print(f"[ERROR] analyze_schedule_for_recovery failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] analyze_schedule_for_recovery failed")
             return None, f"Sorry {name}, I ran into an issue analyzing your schedule."
         finally:
             db.close()
@@ -1710,12 +2130,10 @@ class NovaVoiceAgent(Agent):
         Args:
             shift_future_workouts: Whether to push future workouts forward (default: True)
         """
-        from db.database import SessionLocal
         from db.recovery_analysis import apply_all_recommended_rest_days
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1730,9 +2148,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I added {added_count} rest day{'s' if added_count != 1 else ''}{shift_msg}. Your recovery should be much better now!"
 
         except Exception as e:
-            print(f"[ERROR] apply_recommended_rest_days failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] apply_recommended_rest_days failed")
             return None, f"Sorry {name}, I ran into an issue adding those rest days."
         finally:
             db.close()
@@ -1753,12 +2169,10 @@ class NovaVoiceAgent(Agent):
 
         Analyzes fatigue score, velocity decline, RPE trends, and time since last deload.
         """
-        from db.database import SessionLocal
         from db.training_load import check_deload_recommendation
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1781,9 +2195,7 @@ class NovaVoiceAgent(Agent):
             return None, response.strip()
 
         except Exception as e:
-            print(f"[ERROR] check_if_deload_needed failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] check_if_deload_needed failed")
             return None, f"Sorry {name}, I ran into an issue checking your training load."
         finally:
             db.close()
@@ -1801,12 +2213,10 @@ class NovaVoiceAgent(Agent):
         - "add that deload week"
         - "yes please"
         """
-        from db.database import SessionLocal
         from db.training_load import check_deload_recommendation, apply_deload_recommendation
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1828,9 +2238,7 @@ class NovaVoiceAgent(Agent):
             return None, f"Done! I've applied a {intensity_pct}% deload week starting {week_str}. Focus on recovery and lighter training this week!"
 
         except Exception as e:
-            print(f"[ERROR] apply_deload_week_recommendation failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] apply_deload_week_recommendation failed")
             return None, f"Sorry {name}, I ran into an issue applying the deload week."
         finally:
             db.close()
@@ -1852,13 +2260,11 @@ class NovaVoiceAgent(Agent):
         Args:
             weeks: Number of weeks to show (default: 4)
         """
-        from db.database import SessionLocal
         from db.models import TrainingLoadMetrics
         from sqlalchemy import desc
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         db = SessionLocal()
         try:
@@ -1893,9 +2299,7 @@ class NovaVoiceAgent(Agent):
             return None, response.strip()
 
         except Exception as e:
-            print(f"[ERROR] view_training_load_history failed: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] view_training_load_history failed")
             return None, f"Sorry {name}, I ran into an issue retrieving your training load."
         finally:
             db.close()
@@ -1906,11 +2310,10 @@ class NovaVoiceAgent(Agent):
         Call this when the user wants to view their progress, stats, or history.
         This includes requests about performance trends, personal records, or past workouts.
         """
-        print("[MAIN MENU] User requested to view progress")
+        logger.info("[MAIN MENU] User requested to view progress")
 
         # TODO: Fetch actual progress data from database
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # For now, placeholder response
         return None, f"The user wants to see their progress. Acknowledge their request and let them know this feature is coming soon - they'll be able to see workout history, personal records, and progress charts. Keep it encouraging."
@@ -1921,13 +2324,76 @@ class NovaVoiceAgent(Agent):
         Call this when the user wants to update their profile or settings.
         User might say: "update profile", "change settings", "edit my info"
         """
-        print("[MAIN MENU] User requested to update profile")
+        logger.info("[MAIN MENU] User requested to update profile")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # For now, placeholder response
         return None, f"The user wants to update their profile. Say something like: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
+
+    async def _enter_program_creation_mode(self, db, user_id: str, name: str, extracted_params: dict, user_request: str = "") -> str:
+        """
+        Shared logic for entering program creation mode.
+        Caches user data, stores extracted params, switches mode, and returns greeting.
+
+        Args:
+            db: Active database session
+            user_id: User's ID
+            name: User's display name
+            extracted_params: Parameters extracted from user's request
+            user_request: Original user request text
+
+        Returns:
+            Greeting/instruction string for the agent
+        """
+        # Query and cache user's existing data ONCE before switching modes
+        from db.models import User
+        db_user = db.query(User).filter(User.id == user_id).first()
+        existing_data = {}
+        if db_user:
+            existing_data = {
+                "height_cm": float(db_user.height_cm) if db_user.height_cm else None,
+                "weight_kg": float(db_user.weight_kg) if db_user.weight_kg else None,
+                "age": int(db_user.age) if db_user.age else None,
+                "sex": db_user.sex
+            }
+            logger.info(f"[PROGRAM] Cached existing user data: height={existing_data.get('height_cm')}, weight={existing_data.get('weight_kg')}, age={existing_data.get('age')}, sex={existing_data.get('sex')}")
+
+        self.state.set("program_creation.existing_data", existing_data)
+
+        # Store extracted parameters with precaptured_ prefix
+        param_mappings = {
+            'goal': 'precaptured_goal',
+            'duration': 'precaptured_duration',
+            'frequency': 'precaptured_frequency',
+            'notes': 'precaptured_notes',
+            'sport': 'precaptured_sport',
+            'injuries': 'precaptured_injuries',
+            'session_duration': 'precaptured_session_duration',
+        }
+
+        for key, state_key in param_mappings.items():
+            if key in extracted_params:
+                self.state.set(f"program_creation.{state_key}", extracted_params[key])
+                logger.info(f"[PROGRAM] Pre-captured {key}: {extracted_params[key]}")
+
+        # Also store the raw request for goal context
+        if 'goal' in extracted_params and user_request:
+            self.state.set("program_creation.precaptured_goal_raw", user_request)
+
+        self.state.switch_mode("program_creation")
+        self.state.save_state()
+
+        new_instructions = self._get_program_creation_instructions()
+        await self.update_instructions(new_instructions)
+        logger.info("[PROGRAM] Updated agent instructions to program_creation mode")
+
+        # Check if user has existing programs for appropriate greeting
+        has_programs = has_any_programs(db, user_id)
+        if has_programs:
+            return f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'I see you already have some programs. Let's create a new one for you, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY start with Question 1 based on your instructions. Keep it encouraging and conversational."
+        else:
+            return f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'Oh! Let's create your first program, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY ask Question 1 based on your instructions. Keep it encouraging and conversational."
 
     def _extract_program_params_from_request(self, user_request: str) -> dict:
         """
@@ -1948,7 +2414,7 @@ class NovaVoiceAgent(Agent):
         # Extract GOAL/CATEGORY
         hypertrophy_keywords = ['muscle', 'bigger', 'size', 'mass', 'hypertrophy', 'bulk', 'grow', 'butt', 'glutes', 'chest', 'arms', 'legs', 'aesthetic', 'look good', 'shredded', 'toned']
         strength_keywords = ['stronger', 'strength', 'powerlifting', 'max', '1rm', 'heavy', 'strong']
-        power_keywords = ['explosive', 'power', 'jump', 'vertical', 'sprint', 'athletics', 'speed', 'fast', 'quick']
+        power_keywords = ['explosive', 'power', 'jump', 'vertical', 'sprint', 'athletics', 'athleticism', 'athlete', 'speed', 'fast', 'quick']
 
         hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in request_lower)
         strength_score = sum(1 for kw in strength_keywords if kw in request_lower)
@@ -2070,145 +2536,35 @@ class NovaVoiceAgent(Agent):
         Args:
             user_request: The user's full original request (enables smart parameter extraction)
         """
-        print("\n" + "="*80)
-        print("[MAIN MENU] create_program() CALLED")
-        print(f"[MAIN MENU] User request: {user_request}")
-        print("="*80)
+        logger.info("="*80)
+        logger.info("[MAIN MENU] create_program() CALLED")
+        logger.info(f"[MAIN MENU] User request: {user_request}")
+        logger.info("="*80)
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
-        print(f"[PROGRAM] User: {name} (ID: {user_id})")
+        logger.info(f"[PROGRAM] User: {name} (ID: {user_id})")
 
         # Extract program parameters from user request
         extracted_params = {}
         if user_request:
             extracted_params = self._extract_program_params_from_request(user_request)
             if extracted_params:
-                print(f"[PROGRAM] Extracted parameters: {extracted_params}")
+                logger.info(f"[PROGRAM] Extracted parameters: {extracted_params}")
 
         # Check if user has any existing programs
         db = SessionLocal()
         try:
             has_programs = has_any_programs(db, user_id)
-            print(f"[PROGRAM] User has programs: {has_programs}")
+            logger.info(f"[PROGRAM] User has programs: {has_programs}")
 
-            if not has_programs:
-                # No programs - switch to program_creation mode
-                print("[PROGRAM] User has no programs - switching to program_creation mode")
-
-                # Query and cache user's existing data ONCE before switching modes
-                from db.models import User
-                db_user = db.query(User).filter(User.id == user_id).first()
-                existing_data = {}
-                if db_user:
-                    # Convert Decimal to float for JSON serialization
-                    existing_data = {
-                        "height_cm": float(db_user.height_cm) if db_user.height_cm else None,
-                        "weight_kg": float(db_user.weight_kg) if db_user.weight_kg else None,
-                        "age": int(db_user.age) if db_user.age else None,
-                        "sex": db_user.sex
-                    }
-                    print(f"[PROGRAM] Cached existing user data: height={existing_data.get('height_cm')}, weight={existing_data.get('weight_kg')}, age={existing_data.get('age')}, sex={existing_data.get('sex')}")
-
-                # Store in state to avoid re-querying
-                self.state.set("program_creation.existing_data", existing_data)
-
-                # Store extracted parameters with precaptured_ prefix
-                if 'goal' in extracted_params:
-                    self.state.set("program_creation.precaptured_goal", extracted_params['goal'])
-                    self.state.set("program_creation.precaptured_goal_raw", user_request)
-                    print(f"[PROGRAM] Pre-captured goal: {extracted_params['goal']}")
-                if 'duration' in extracted_params:
-                    self.state.set("program_creation.precaptured_duration", extracted_params['duration'])
-                    print(f"[PROGRAM] Pre-captured duration: {extracted_params['duration']} weeks")
-                if 'frequency' in extracted_params:
-                    self.state.set("program_creation.precaptured_frequency", extracted_params['frequency'])
-                    print(f"[PROGRAM] Pre-captured frequency: {extracted_params['frequency']} days/week")
-                if 'notes' in extracted_params:
-                    self.state.set("program_creation.precaptured_notes", extracted_params['notes'])
-                    print(f"[PROGRAM] Pre-captured notes: {extracted_params['notes']}")
-                if 'sport' in extracted_params:
-                    self.state.set("program_creation.precaptured_sport", extracted_params['sport'])
-                    print(f"[PROGRAM] Pre-captured sport: {extracted_params['sport']}")
-                if 'injuries' in extracted_params:
-                    self.state.set("program_creation.precaptured_injuries", extracted_params['injuries'])
-                    print(f"[PROGRAM] Pre-captured injuries: {extracted_params['injuries']}")
-                if 'session_duration' in extracted_params:
-                    self.state.set("program_creation.precaptured_session_duration", extracted_params['session_duration'])
-                    print(f"[PROGRAM] Pre-captured session duration: {extracted_params['session_duration']} min")
-
-                self.state.switch_mode("program_creation")
-                self.state.save_state()
-
-                # Update agent instructions to program_creation mode
-                new_instructions = self._get_program_creation_instructions()
-                await self.update_instructions(new_instructions)
-                print("[PROGRAM] Updated agent instructions to program_creation mode")
-
-                # Start the program creation flow DIRECTLY - no need for create_program()
-                return None, f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'Oh! Let's create your first program, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY ask Question 1 based on your instructions. Keep it encouraging and conversational."
-            else:
-                # Has programs - but user said "create", so they likely want to create a NEW one
-                # Skip the confirmation and go straight to creating a new program
-                print("[PROGRAM] User has existing programs but requested creation - proceeding to create new program")
-
-                # Query and cache user's existing data ONCE before switching modes
-                from db.models import User
-                db_user = db.query(User).filter(User.id == user_id).first()
-                existing_data = {}
-                if db_user:
-                    # Convert Decimal to float for JSON serialization
-                    existing_data = {
-                        "height_cm": float(db_user.height_cm) if db_user.height_cm else None,
-                        "weight_kg": float(db_user.weight_kg) if db_user.weight_kg else None,
-                        "age": int(db_user.age) if db_user.age else None,
-                        "sex": db_user.sex
-                    }
-                    print(f"[PROGRAM] Cached existing user data: height={existing_data.get('height_cm')}, weight={existing_data.get('weight_kg')}, age={existing_data.get('age')}, sex={existing_data.get('sex')}")
-
-                # Store in state to avoid re-querying
-                self.state.set("program_creation.existing_data", existing_data)
-
-                # Store extracted parameters with precaptured_ prefix
-                if 'goal' in extracted_params:
-                    self.state.set("program_creation.precaptured_goal", extracted_params['goal'])
-                    self.state.set("program_creation.precaptured_goal_raw", user_request)
-                    print(f"[PROGRAM] Pre-captured goal: {extracted_params['goal']}")
-                if 'duration' in extracted_params:
-                    self.state.set("program_creation.precaptured_duration", extracted_params['duration'])
-                    print(f"[PROGRAM] Pre-captured duration: {extracted_params['duration']} weeks")
-                if 'frequency' in extracted_params:
-                    self.state.set("program_creation.precaptured_frequency", extracted_params['frequency'])
-                    print(f"[PROGRAM] Pre-captured frequency: {extracted_params['frequency']} days/week")
-                if 'notes' in extracted_params:
-                    self.state.set("program_creation.precaptured_notes", extracted_params['notes'])
-                    print(f"[PROGRAM] Pre-captured notes: {extracted_params['notes']}")
-                if 'sport' in extracted_params:
-                    self.state.set("program_creation.precaptured_sport", extracted_params['sport'])
-                    print(f"[PROGRAM] Pre-captured sport: {extracted_params['sport']}")
-                if 'injuries' in extracted_params:
-                    self.state.set("program_creation.precaptured_injuries", extracted_params['injuries'])
-                    print(f"[PROGRAM] Pre-captured injuries: {extracted_params['injuries']}")
-                if 'session_duration' in extracted_params:
-                    self.state.set("program_creation.precaptured_session_duration", extracted_params['session_duration'])
-                    print(f"[PROGRAM] Pre-captured session duration: {extracted_params['session_duration']} min")
-
-                # Switch to program_creation mode
-                self.state.switch_mode("program_creation")
-                self.state.save_state()
-
-                # Update agent instructions to program_creation mode
-                new_instructions = self._get_program_creation_instructions()
-                await self.update_instructions(new_instructions)
-                print("[PROGRAM] Updated agent instructions to program_creation mode")
-
-                # Start the program creation flow
-                return None, f"Program creation started. You are now in program_creation mode. The 'PARAMETER COLLECTION ORDER' section at the top of your instructions shows the EXACT order to ask questions. Say: 'I see you already have some programs. Let's create a new one for you, {name}! I'll ask you a few quick questions.' Then IMMEDIATELY start with Question 1 based on your instructions. Keep it encouraging and conversational."
+            # Enter program creation mode (same logic whether or not user has existing programs)
+            greeting = await self._enter_program_creation_mode(db, user_id, name, extracted_params, user_request)
+            return None, greeting
 
         except Exception as e:
-            print(f"[ERROR] Failed to check user programs: {e}")
+            logger.error(f"[ERROR] Failed to check user programs: {e}")
             return None, f"There was an error checking your programs. Say something like: '{name}, I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
         finally:
             db.close()
@@ -2231,11 +2587,10 @@ class NovaVoiceAgent(Agent):
         3. Ask what they want to change
         4. Generate the update using AI
         """
-        print("[MAIN MENU] User requested to update program")
+        logger.info("[MAIN MENU] User requested to update program")
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         # Check if user has any programs
         db = SessionLocal()
@@ -2253,7 +2608,7 @@ class NovaVoiceAgent(Agent):
                 self.state.set("program_update.selected_program_id", program["id"])
                 self.state.set("program_update.selected_program_name", program["name"])
 
-                print(f"[PROGRAM UPDATE] User has 1 program: {program['name']} (ID: {program['id']})")
+                logger.info(f"[PROGRAM UPDATE] User has 1 program: {program['name']} (ID: {program['id']})")
 
                 return None, f"Say something like: 'Sure! I can update your {program['name']} program. What would you like to change about it?' Keep it conversational."
             else:
@@ -2265,12 +2620,12 @@ class NovaVoiceAgent(Agent):
                 # Store programs in state for selection
                 self.state.set("program_update.available_programs", programs)
 
-                print(f"[PROGRAM UPDATE] User has {len(programs)} programs")
+                logger.info(f"[PROGRAM UPDATE] User has {len(programs)} programs")
 
                 return None, f"Say something like: '{name}, you have {len(programs)} programs: {program_list}. Which one would you like to update?' Keep it friendly."
 
         except Exception as e:
-            print(f"[ERROR] Failed to list programs: {e}")
+            logger.error(f"[ERROR] Failed to list programs: {e}")
             return None, f"Say something like: '{name}, I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
         finally:
             db.close()
@@ -2283,8 +2638,7 @@ class NovaVoiceAgent(Agent):
         Args:
             program_name: The name of the program the user wants to update
         """
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Get available programs from state
         programs = self.state.get("program_update.available_programs", [])
@@ -2310,7 +2664,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_update.selected_program_id", selected_program["id"])
         self.state.set("program_update.selected_program_name", selected_program["name"])
 
-        print(f"[PROGRAM UPDATE] Selected program: {selected_program['name']} (ID: {selected_program['id']})")
+        logger.info(f"[PROGRAM UPDATE] Selected program: {selected_program['name']} (ID: {selected_program['id']})")
 
         return None, f"Great! I'll update your {selected_program['name']} program. What would you like to change about it? For example, you could change the training frequency, duration, exercises, or intensity."
 
@@ -2322,9 +2676,8 @@ class NovaVoiceAgent(Agent):
         Args:
             change_request: The user's description of what they want to change
         """
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         # Get selected program
         program_id = self.state.get("program_update.selected_program_id")
@@ -2336,7 +2689,7 @@ class NovaVoiceAgent(Agent):
         # Store change request
         self.state.set("program_update.change_request", change_request)
 
-        print(f"[PROGRAM UPDATE] Change request: {change_request}")
+        logger.info(f"[PROGRAM UPDATE] Change request: {change_request}")
 
         # Check if this is a safe simple change (title/description only)
         db = SessionLocal()
@@ -2347,7 +2700,7 @@ class NovaVoiceAgent(Agent):
 
             if update_type != "requires_llm":
                 # Safe simple update - apply immediately
-                print(f"[PROGRAM UPDATE] Detected safe simple update: {update_type}")
+                logger.info(f"[PROGRAM UPDATE] Detected safe simple update: {update_type}")
                 success, message = handle_simple_update(db, program_id, change_request)
 
                 if success:
@@ -2356,11 +2709,11 @@ class NovaVoiceAgent(Agent):
                     return None, f"Say something like: 'Done! {message}. Your {program_name} program has been updated.' Keep it quick and positive."
                 else:
                     # Simple update failed
-                    print(f"[PROGRAM UPDATE] Simple update failed: {message}")
+                    logger.info(f"[PROGRAM UPDATE] Simple update failed: {message}")
                     return None, f"Say something like: 'I had trouble updating that. {message}' Keep it apologetic."
 
             # Training-related change - need LLM validation
-            print(f"[PROGRAM UPDATE] Training change detected, validating with LLM...")
+            logger.info(f"[PROGRAM UPDATE] Training change detected, validating with LLM...")
 
             from db.models import User
             db_user = db.query(User).filter(User.id == user_id).first()
@@ -2398,7 +2751,7 @@ class NovaVoiceAgent(Agent):
 
             if not is_risky:
                 # Safe change - proceed directly to update
-                print(f"[PROGRAM UPDATE] ✅ Validation passed, proceeding with update")
+                logger.info(f"[PROGRAM UPDATE] ✅ Validation passed, proceeding with update")
 
                 # Store user profile for update job
                 self.state.set("program_update.user_profile", user_profile)
@@ -2410,9 +2763,9 @@ class NovaVoiceAgent(Agent):
                 warning = validation_result.get("warning", "This change may not be ideal for your goals.")
                 alternative = validation_result.get("alternative", "")
 
-                print(f"[PROGRAM UPDATE] ⚠️  Risky change detected")
-                print(f"[PROGRAM UPDATE]    Warning: {warning}")
-                print(f"[PROGRAM UPDATE]    Alternative: {alternative}")
+                logger.info(f"[PROGRAM UPDATE] ⚠️  Risky change detected")
+                logger.info(f"[PROGRAM UPDATE]    Warning: {warning}")
+                logger.info(f"[PROGRAM UPDATE]    Alternative: {alternative}")
 
                 # Store validation result and user profile
                 self.state.set("program_update.validation_result", validation_result)
@@ -2426,9 +2779,7 @@ class NovaVoiceAgent(Agent):
                     return None, f"Say something like: 'I need to mention something. {warning} Are you sure you want to make this change?' Keep it concerned but supportive."
 
         except Exception as e:
-            print(f"[ERROR] Failed to process change request: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[ERROR] Failed to process change request")
             return None, f"Error processing change request. Try again."
         finally:
             db.close()
@@ -2444,8 +2795,7 @@ class NovaVoiceAgent(Agent):
         """
         import httpx
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Get all required data from state
         program_id = self.state.get("program_update.selected_program_id")
@@ -2460,7 +2810,7 @@ class NovaVoiceAgent(Agent):
 
         # Handle validation choice if pending
         if awaiting_choice and validation_result:
-            print(f"[PROGRAM UPDATE] Processing user choice: {user_response}")
+            logger.info(f"[PROGRAM UPDATE] Processing user choice: {user_response}")
 
             alternative = validation_result.get("alternative", "")
             user_response_lower = user_response.lower()
@@ -2486,26 +2836,26 @@ class NovaVoiceAgent(Agent):
 
             elif wants_alternative and alternative:
                 # Use the LLM's suggested alternative
-                print(f"[PROGRAM UPDATE] User chose alternative: {alternative}")
+                logger.info(f"[PROGRAM UPDATE] User chose alternative: {alternative}")
                 change_request = alternative  # Override with alternative
             elif wants_original:
                 # User insists on original (respect autonomy)
-                print(f"[PROGRAM UPDATE] User insists on original request")
+                logger.info(f"[PROGRAM UPDATE] User insists on original request")
                 # Keep change_request as is
             else:
                 # Ambiguous response - default to alternative if available, otherwise original
                 if alternative:
-                    print(f"[PROGRAM UPDATE] Ambiguous response, defaulting to alternative")
+                    logger.info(f"[PROGRAM UPDATE] Ambiguous response, defaulting to alternative")
                     change_request = alternative
                 else:
-                    print(f"[PROGRAM UPDATE] Ambiguous response, proceeding with original")
+                    logger.info(f"[PROGRAM UPDATE] Ambiguous response, proceeding with original")
 
             # Clear validation state
             self.state.set("program_update.awaiting_choice", False)
             self.state.set("program_update.validation_result", None)
 
-        print(f"[PROGRAM UPDATE] Starting update job for program {program_id}")
-        print(f"[PROGRAM UPDATE] Change: {change_request}")
+        logger.info(f"[PROGRAM UPDATE] Starting update job for program {program_id}")
+        logger.info(f"[PROGRAM UPDATE] Change: {change_request}")
 
         try:
             # Call FastAPI endpoint
@@ -2528,14 +2878,12 @@ class NovaVoiceAgent(Agent):
 
             # Store job_id in state
             self.state.set("program_update.job_id", job_id)
-            print(f"[PROGRAM UPDATE] ✅ Started update job: {job_id}")
+            logger.info(f"[PROGRAM UPDATE] ✅ Started update job: {job_id}")
 
             return None, f"Say something like: 'Perfect! I'm updating your {program_name} program now. This will take about a minute. Hang tight!' Wait 45 seconds, then call check_program_update_status()."
 
         except Exception as e:
-            print(f"[PROGRAM UPDATE] ❌ ERROR: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[PROGRAM UPDATE] ERROR")
             return None, f"Error starting update. Say something like: '{name}, I had trouble starting the update. Let me try again.'"
 
     @function_tool
@@ -2546,8 +2894,7 @@ class NovaVoiceAgent(Agent):
         """
         import httpx
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         job_id = self.state.get("program_update.job_id")
         program_name = self.state.get("program_update.selected_program_name")
@@ -2574,11 +2921,11 @@ class NovaVoiceAgent(Agent):
 
                 if diff:
                     diff_summary = "\n".join([f"- {change}" for change in diff])
-                    print(f"[PROGRAM UPDATE] ✅ Update complete!")
-                    print(f"[PROGRAM UPDATE] Changes:\n{diff_summary}")
+                    logger.info(f"[PROGRAM UPDATE] ✅ Update complete!")
+                    logger.info(f"[PROGRAM UPDATE] Changes:\n{diff_summary}")
                     changes_text = f"Here's what changed:\n{diff_summary}\n"
                 else:
-                    print(f"[PROGRAM UPDATE] ✅ Update complete!")
+                    logger.info(f"[PROGRAM UPDATE] ✅ Update complete!")
                     changes_text = ""
 
                 # Clear update state
@@ -2588,16 +2935,16 @@ class NovaVoiceAgent(Agent):
 
             elif status == "failed":
                 error = data.get("error_message", "Unknown error")
-                print(f"[PROGRAM UPDATE] ❌ Update failed: {error}")
+                logger.info(f"[PROGRAM UPDATE] ❌ Update failed: {error}")
                 return None, f"Update failed. Say something like: '{name}, I had trouble updating your program. Let's try again.'"
 
             else:
                 # Still in progress
-                print(f"[PROGRAM UPDATE] Update in progress: {progress}%")
+                logger.info(f"[PROGRAM UPDATE] Update in progress: {progress}%")
                 return None, f"Update is {progress}% complete. Wait 15 more seconds, then call check_program_update_status() again. Don't say anything, just wait."
 
         except Exception as e:
-            print(f"[PROGRAM UPDATE] Error checking status: {e}")
+            logger.info(f"[PROGRAM UPDATE] Error checking status: {e}")
             return None, f"Error checking status. Wait 10 seconds and call check_program_update_status() again."
 
     # ===== PROGRAM CREATION HELPER TOOLS =====
@@ -2613,9 +2960,8 @@ class NovaVoiceAgent(Agent):
             height_value: The height as spoken by the user (e.g., "5'10\"", "175 cm"), or None to use DB value
             weight_value: The weight as spoken by the user (e.g., "185 pounds", "80 kg"), or None to use DB value
         """
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         # Check database for existing values if not provided
         db = SessionLocal()
@@ -2626,19 +2972,19 @@ class NovaVoiceAgent(Agent):
             # If no new values provided, try to use existing DB values
             if height_value is None and weight_value is None and db_user:
                 if db_user.height_cm and db_user.weight_kg:
-                    print(f"[PROGRAM] Using existing DB values: height={db_user.height_cm} cm, weight={db_user.weight_kg} kg")
+                    logger.info(f"[PROGRAM] Using existing DB values: height={db_user.height_cm} cm, weight={db_user.weight_kg} kg")
                     self.state.set("program_creation.height_cm", float(db_user.height_cm))
                     self.state.set("program_creation.weight_kg", float(db_user.weight_kg))
                     # When loading from DB, we're confirming stats - need to also call capture_age_sex()
                     return None, "Height and weight loaded. Now call capture_age_sex() with no arguments, then ask about their fitness goal."
                 else:
                     # DB data incomplete - need to ask for it
-                    print(f"[PROGRAM] No complete height/weight data in DB - need to ask user")
+                    logger.info(f"[PROGRAM] No complete height/weight data in DB - need to ask user")
                     return None, "No height and weight on file. Ask: 'What's your height and weight?'"
 
             # Parse new values if provided
             if height_value:
-                print(f"[PROGRAM] Capturing new height and weight: {height_value}, {weight_value}")
+                logger.info(f"[PROGRAM] Capturing new height and weight: {height_value}, {weight_value}")
 
                 height_cm = self._normalize_height_to_cm(height_value)
                 if height_cm is None or height_cm < 50 or height_cm > 300:
@@ -2653,18 +2999,18 @@ class NovaVoiceAgent(Agent):
                     db_user.height_cm = height_cm
                     db_user.weight_kg = weight_kg
                     db.commit()
-                    print(f"[PROGRAM] Saved to database: height={height_cm} cm, weight={weight_kg} kg")
+                    logger.info(f"[PROGRAM] Saved to database: height={height_cm} cm, weight={weight_kg} kg")
 
                 # Save to state
                 self.state.set("program_creation.height_cm", height_cm)
                 self.state.set("program_creation.weight_kg", weight_kg)
 
-                print(f"[PROGRAM] Height: {height_cm} cm, Weight: {weight_kg} kg")
+                logger.info(f"[PROGRAM] Height: {height_cm} cm, Weight: {weight_kg} kg")
 
                 return None, "Captured. Immediately ask the next question."
 
         except Exception as e:
-            print(f"[ERROR] Failed to handle height/weight: {e}")
+            logger.error(f"[ERROR] Failed to handle height/weight: {e}")
             db.rollback()
         finally:
             db.close()
@@ -2682,9 +3028,8 @@ class NovaVoiceAgent(Agent):
             age: User's age in years, or None to use DB value
             sex: "male", "female", "M", "F", etc., or None to use DB value
         """
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
         # Check database for existing values if not provided
         db = SessionLocal()
@@ -2695,19 +3040,19 @@ class NovaVoiceAgent(Agent):
             # If no new values provided, try to use existing DB values
             if age is None and sex is None and db_user:
                 if db_user.age and db_user.sex:
-                    print(f"[PROGRAM] Using existing DB values: age={db_user.age}, sex={db_user.sex}")
+                    logger.info(f"[PROGRAM] Using existing DB values: age={db_user.age}, sex={db_user.sex}")
                     self.state.set("program_creation.age", int(db_user.age))
                     self.state.set("program_creation.sex", db_user.sex)
                     # When loading from DB, stats confirmation is complete - ask about goal
                     return None, "Age and sex loaded. Stats confirmation complete. Immediately ask about their fitness goal."
                 else:
                     # DB data incomplete - need to ask for it
-                    print(f"[PROGRAM] No complete age/sex data in DB - need to ask user")
+                    logger.info(f"[PROGRAM] No complete age/sex data in DB - need to ask user")
                     return None, "No age and sex on file. Ask: 'How old are you, and are you male or female?'"
 
             # Validate and normalize new values if provided
             if age is not None:
-                print(f"[PROGRAM] Capturing new age and sex: {age}, {sex}")
+                logger.info(f"[PROGRAM] Capturing new age and sex: {age}, {sex}")
 
                 if age < 13 or age > 100:
                     return None, f"That age seems unusual. Say: 'Hmm, that age doesn't seem right. How old are you?' Keep it friendly."
@@ -2726,13 +3071,13 @@ class NovaVoiceAgent(Agent):
                     db_user.age = age
                     db_user.sex = sex_normalized
                     db.commit()
-                    print(f"[PROGRAM] Saved to database: age={age}, sex={sex_normalized}")
+                    logger.info(f"[PROGRAM] Saved to database: age={age}, sex={sex_normalized}")
 
                 # Save to state
                 self.state.set("program_creation.age", age)
                 self.state.set("program_creation.sex", sex_normalized)
 
-                print(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
+                logger.info(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
 
                 # Check and summarize conversation after basic stats collected (Milestone 1)
                 # This prevents context buildup from lengthy stat confirmations
@@ -2741,7 +3086,7 @@ class NovaVoiceAgent(Agent):
                 return None, "Captured. Immediately ask the next question."
 
         except Exception as e:
-            print(f"[ERROR] Failed to handle age/sex: {e}")
+            logger.error(f"[ERROR] Failed to handle age/sex: {e}")
             db.rollback()
         finally:
             db.close()
@@ -2840,7 +3185,7 @@ class NovaVoiceAgent(Agent):
         Args:
             goal_description: The user's goal as they described it (e.g., "I want to look good for summer", "get stronger", "improve my vertical jump")
         """
-        print(f"[PROGRAM] Capturing goal: {goal_description}")
+        logger.info(f"[PROGRAM] Capturing goal: {goal_description}")
 
         # VALIDATION: Check if prerequisites were collected (height, weight, age, sex)
         # HOWEVER: If user has existing data in DB, we allow goals to be asked first
@@ -2855,11 +3200,10 @@ class NovaVoiceAgent(Agent):
                              existing_data.get("age") and existing_data.get("sex"))
 
         if not (height_cm and weight_kg and age and sex) and not has_existing_stats:
-            print(f"[ERROR] Goal asked before prerequisites! height={height_cm}, weight={weight_kg}, age={age}, sex={sex}, existing_data={has_existing_stats}")
+            logger.error(f"[ERROR] Goal asked before prerequisites! height={height_cm}, weight={weight_kg}, age={age}, sex={sex}, existing_data={has_existing_stats}")
             return None, f"ERROR: You MUST ask for height/weight (Question 1) and age/sex (Question 2) BEFORE asking about goals (Question 3). Go back and ask Questions 1 and 2 first!"
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Categorize the goal
         goal_category = self._categorize_goal(goal_description)
@@ -2868,7 +3212,7 @@ class NovaVoiceAgent(Agent):
         self.state.set("program_creation.goal_raw", goal_description)
         self.state.set("program_creation.goal_category", goal_category)
 
-        print(f"[PROGRAM] Goal categorized as: {goal_category}")
+        logger.info(f"[PROGRAM] Goal categorized as: {goal_category}")
 
         # Create confirmation message based on category
         if goal_category == "power":
@@ -2890,7 +3234,8 @@ class NovaVoiceAgent(Agent):
 
         # Power keywords
         power_keywords = [
-            "explosive", "power", "athletic", "speed", "jump", "vertical",
+            "explosive", "power", "athletic", "athleticism", "athlete",
+            "speed", "jump", "vertical",
             "sprint", "agility", "quick", "fast", "sport", "performance"
         ]
 
@@ -2912,13 +3257,16 @@ class NovaVoiceAgent(Agent):
         strength_score = sum(1 for kw in strength_keywords if kw in goal_lower)
         hypertrophy_score = sum(1 for kw in hypertrophy_keywords if kw in goal_lower)
 
-        # Return category with highest score
+        # Return category with highest score, default to strength if no matches
+        max_score = max(power_score, strength_score, hypertrophy_score)
+        if max_score == 0:
+            return "strength"  # Safe default when no keywords match
+
         if power_score > strength_score and power_score > hypertrophy_score:
             return "power"
         elif strength_score > hypertrophy_score:
             return "strength"
         else:
-            # Default to hypertrophy if unclear or tied
             return "hypertrophy"
 
     def _get_recommended_duration(self, goal_category: str) -> int:
@@ -2938,10 +3286,9 @@ class NovaVoiceAgent(Agent):
         Args:
             duration_weeks: Number of weeks for the program (e.g., 8, 12, 16)
         """
-        print(f"[PROGRAM] Capturing program duration: {duration_weeks} weeks")
+        logger.info(f"[PROGRAM] Capturing program duration: {duration_weeks} weeks")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Validate duration
         if duration_weeks < 2 or duration_weeks > 52:
@@ -2950,7 +3297,7 @@ class NovaVoiceAgent(Agent):
         # Store in state
         self.state.set("program_creation.duration_weeks", duration_weeks)
 
-        print(f"[PROGRAM] Duration set to: {duration_weeks} weeks")
+        logger.info(f"[PROGRAM] Duration set to: {duration_weeks} weeks")
 
         return None, "Captured. Immediately ask the next question."
 
@@ -2962,10 +3309,9 @@ class NovaVoiceAgent(Agent):
         Args:
             days_per_week: Number of training days per week (e.g., 3, 4, 5)
         """
-        print(f"[PROGRAM] Capturing training frequency: {days_per_week} days/week")
+        logger.info(f"[PROGRAM] Capturing training frequency: {days_per_week} days/week")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Validate frequency
         if days_per_week < 1 or days_per_week > 7:
@@ -2974,7 +3320,7 @@ class NovaVoiceAgent(Agent):
         # Store in state
         self.state.set("program_creation.days_per_week", days_per_week)
 
-        print(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
+        logger.info(f"[PROGRAM] Frequency set to: {days_per_week} days/week")
 
         # Check and summarize conversation after main parameters collected (Milestone 2)
         # Core program structure is now defined, can clear early conversation
@@ -2991,10 +3337,9 @@ class NovaVoiceAgent(Agent):
         Args:
             duration_minutes: Session duration in minutes (e.g., 60, 90, 45)
         """
-        print(f"[PROGRAM] Capturing session duration: {duration_minutes} minutes")
+        logger.info(f"[PROGRAM] Capturing session duration: {duration_minutes} minutes")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Validate (reasonable range)
         if duration_minutes < 20 or duration_minutes > 180:
@@ -3002,7 +3347,7 @@ class NovaVoiceAgent(Agent):
 
         # Store in state
         self.state.set("program_creation.session_duration", duration_minutes)
-        print(f"[PROGRAM] Session duration set to: {duration_minutes} minutes")
+        logger.info(f"[PROGRAM] Session duration set to: {duration_minutes} minutes")
 
         return None, "Captured. Immediately ask the next question."
 
@@ -3015,11 +3360,11 @@ class NovaVoiceAgent(Agent):
         Args:
             injury_description: Description of injuries or "none"
         """
-        print(f"[PROGRAM] Capturing injury history: {injury_description}")
+        logger.info(f"[PROGRAM] Capturing injury history: {injury_description}")
 
         # Store in state
         self.state.set("program_creation.injury_history", injury_description)
-        print(f"[PROGRAM] Injury history saved")
+        logger.info(f"[PROGRAM] Injury history saved")
 
         return None, "Captured. Immediately ask the next question."
 
@@ -3032,7 +3377,7 @@ class NovaVoiceAgent(Agent):
         Args:
             sport_name: Name of sport (e.g., "basketball", "powerlifting") or "none"
         """
-        print(f"[PROGRAM] Capturing specific sport: {sport_name}")
+        logger.info(f"[PROGRAM] Capturing specific sport: {sport_name}")
 
         # Normalize to lowercase for consistency
         sport_normalized = sport_name.lower().strip()
@@ -3041,7 +3386,7 @@ class NovaVoiceAgent(Agent):
 
         # Store in state
         self.state.set("program_creation.specific_sport", sport_normalized)
-        print(f"[PROGRAM] Specific sport set to: {sport_normalized}")
+        logger.info(f"[PROGRAM] Specific sport set to: {sport_normalized}")
 
         return None, "Captured. Immediately ask the next question."
 
@@ -3054,11 +3399,11 @@ class NovaVoiceAgent(Agent):
         Args:
             notes: User's additional notes/preferences or "none"
         """
-        print(f"[PROGRAM] Capturing user notes: {notes}")
+        logger.info(f"[PROGRAM] Capturing user notes: {notes}")
 
         # Store in state
         self.state.set("program_creation.user_notes", notes)
-        print(f"[PROGRAM] User notes saved")
+        logger.info(f"[PROGRAM] User notes saved")
 
         # Check and summarize conversation after all optional parameters collected (Milestone 3)
         # Almost done with collection, keep context lean for final steps
@@ -3074,17 +3419,16 @@ class NovaVoiceAgent(Agent):
         Args:
             age: User's age in years
         """
-        print(f"[PROGRAM] Capturing age: {age}")
+        logger.info(f"[PROGRAM] Capturing age: {age}")
 
         # Validate age
         if age < 13 or age > 100:
-            user = self.state.get_user()
-            name = user.get("name", "there")
+            name = self.user_name
             return None, f"That age seems unusual. Say: 'Hmm, that doesn't seem right. How old are you?' Keep it friendly."
 
         # Store in state
         self.state.set("program_creation.age", age)
-        print(f"[PROGRAM] Age set to: {age}")
+        logger.info(f"[PROGRAM] Age set to: {age}")
 
         return None, "Captured. Immediately ask the next question."
 
@@ -3096,7 +3440,7 @@ class NovaVoiceAgent(Agent):
         Args:
             sex: "male", "female", "M", "F", etc.
         """
-        print(f"[PROGRAM] Capturing sex: {sex}")
+        logger.info(f"[PROGRAM] Capturing sex: {sex}")
 
         # Normalize
         sex_normalized = sex.lower().strip()
@@ -3105,13 +3449,12 @@ class NovaVoiceAgent(Agent):
         elif sex_normalized in ["f", "female", "woman", "girl"]:
             sex_normalized = "female"
         else:
-            user = self.state.get_user()
-            name = user.get("name", "there")
+            name = self.user_name
             return None, f"I didn't catch that. Say: 'Sorry, are you male or female?' Keep it simple."
 
         # Store in state
         self.state.set("program_creation.sex", sex_normalized)
-        print(f"[PROGRAM] Sex set to: {sex_normalized}")
+        logger.info(f"[PROGRAM] Sex set to: {sex_normalized}")
 
         return None, "Captured. Immediately ask the next question."
 
@@ -3136,16 +3479,16 @@ class NovaVoiceAgent(Agent):
         Args:
             enabled: True to enable VBT programming, False to disable
         """
-        print(f"[PROGRAM] Setting VBT capability: {enabled}")
+        logger.info(f"[PROGRAM] Setting VBT capability: {enabled}")
 
         # Store in state
         self.state.set("program_creation.has_vbt_capability", enabled)
 
         # Log the decision for debugging
         if enabled:
-            print("[PROGRAM] ✅ VBT ENABLED - Program will include velocity-based training")
+            logger.info("[PROGRAM] ✅ VBT ENABLED - Program will include velocity-based training")
         else:
-            print("[PROGRAM] ❌ VBT DISABLED - Program will use traditional percentage-based loading")
+            logger.info("[PROGRAM] ❌ VBT DISABLED - Program will use traditional percentage-based loading")
 
         # Return continuation signal
         return None, "Captured. Immediately ask the next question."
@@ -3159,26 +3502,23 @@ class NovaVoiceAgent(Agent):
         Args:
             fitness_level: The user's fitness level (e.g., "beginner", "intermediate", "I've been lifting for 2 years")
         """
-        print(f"[PROGRAM] Capturing fitness level: {fitness_level}")
-        print(f"[DEBUG] Step 1: Getting user from state...")
+        logger.info(f"[PROGRAM] Capturing fitness level: {fitness_level}")
+        logger.debug(f"[DEBUG] Step 1: Getting user from state...")
 
-        user = self.state.get_user()
-        print(f"[DEBUG] Step 2: User retrieved: {user}")
-
-        name = user.get("name", "there")
-        print(f"[DEBUG] Step 3: Name is: {name}")
+        name = self.user_name
+        logger.debug(f"[DEBUG] Step 2: User name: {name}")
 
         # Normalize fitness level
-        print(f"[DEBUG] Step 4: Normalizing fitness level...")
+        logger.debug(f"[DEBUG] Step 4: Normalizing fitness level...")
         normalized_level = self._normalize_fitness_level(fitness_level)
-        print(f"[DEBUG] Step 5: Normalized to: {normalized_level}")
+        logger.debug(f"[DEBUG] Step 5: Normalized to: {normalized_level}")
 
         # Store in state
-        print(f"[DEBUG] Step 6: Storing in state...")
+        logger.debug(f"[DEBUG] Step 6: Storing in state...")
         self.state.set("program_creation.fitness_level", normalized_level)
-        print(f"[DEBUG] Step 7: Stored successfully")
+        logger.debug(f"[DEBUG] Step 7: Stored successfully")
 
-        print(f"[PROGRAM] Fitness level normalized to: {normalized_level}")
+        logger.info(f"[PROGRAM] Fitness level normalized to: {normalized_level}")
 
         # Get all collected data
         height_cm = self.state.get("program_creation.height_cm")
@@ -3189,23 +3529,20 @@ class NovaVoiceAgent(Agent):
         days_per_week = self.state.get("program_creation.days_per_week")
 
         # Print summary to console
-        print("\n" + "="*60)
-        print("[PROGRAM CREATION] All parameters collected:")
-        print(f"  User: {name} (ID: {user.get('id')})")
-        print(f"  Height: {height_cm} cm")
-        print(f"  Weight: {weight_kg} kg")
-        print(f"  Goal Category: {goal_category}")
-        print(f"  Goal Description: \"{goal_raw}\"")
-        print(f"  Duration: {duration_weeks} weeks")
-        print(f"  Training Frequency: {days_per_week} days/week")
-        print(f"  Fitness Level: {normalized_level}")
-        print("="*60 + "\n")
+        logger.info("="*60)
+        logger.info("[PROGRAM CREATION] All parameters collected:")
+        logger.info(f"  User: {name} (ID: {self.user_id})")
+        logger.info(f"  Height: {height_cm} cm, Weight: {weight_kg} kg")
+        logger.info(f"  Goal: {goal_category} (\"{goal_raw}\")")
+        logger.info(f"  Duration: {duration_weeks} weeks, Frequency: {days_per_week} days/week")
+        logger.info(f"  Fitness Level: {normalized_level}")
+        logger.info("="*60 + "\n")
 
         # Automatically determine VBT capability based on collected parameters
-        print(f"[PROGRAM] Determining VBT capability...")
-        print(f"[PROGRAM] Fitness Level: {normalized_level}")
-        print(f"[PROGRAM] Goal Category: {goal_category}")
-        print(f"[PROGRAM] Sport: {self.state.get('program_creation.specific_sport', 'none')}")
+        logger.info(f"[PROGRAM] Determining VBT capability...")
+        logger.info(f"[PROGRAM] Fitness Level: {normalized_level}")
+        logger.info(f"[PROGRAM] Goal Category: {goal_category}")
+        logger.info(f"[PROGRAM] Sport: {self.state.get('program_creation.specific_sport', 'none')}")
 
         should_enable_vbt = self._should_enable_vbt(
             fitness_level=normalized_level,
@@ -3213,7 +3550,7 @@ class NovaVoiceAgent(Agent):
             specific_sport=self.state.get("program_creation.specific_sport", "none")
         )
 
-        print(f"[PROGRAM] VBT Decision: {'ENABLED' if should_enable_vbt else 'DISABLED'}")
+        logger.info(f"[PROGRAM] VBT Decision: {'ENABLED' if should_enable_vbt else 'DISABLED'}")
 
         # Store VBT decision and completion flag in state for prompt to use
         self.state.set("program_creation.vbt_enabled", should_enable_vbt)
@@ -3226,11 +3563,10 @@ class NovaVoiceAgent(Agent):
         Determine if VBT should be enabled based on training parameters.
 
         VBT is enabled when:
-        1. Fitness level is intermediate or advanced (required)
-        2. AND one of:
-           - Goal is power or athletic_performance
-           - Goal is strength AND fitness level is advanced
-           - Sport involves explosiveness
+        1. Goal is power or athletic_performance (any fitness level)
+           - Beginners get VBT limited to basic power exercises only
+        2. Goal is strength AND fitness level is advanced
+        3. Sport involves explosiveness (intermediate or advanced)
 
         Args:
             fitness_level: beginner, intermediate, or advanced
@@ -3240,27 +3576,30 @@ class NovaVoiceAgent(Agent):
         Returns:
             True if VBT should be enabled, False otherwise
         """
-        # Rule 1: Beginners NEVER get VBT
-        if fitness_level == "beginner":
-            print("[VBT] Disabled: beginner level (form mastery priority)")
-            return False
+        # Rule 1: Power/athletic goals get VBT at any level (beginners limited to basic exercises by program generator)
+        if goal_category in ["power", "athletic_performance"]:
+            if fitness_level == "beginner":
+                logger.info(f"[VBT] Enabled (BASIC only): {goal_category} goal with beginner level — limited to basic power exercises")
+            else:
+                logger.info(f"[VBT] Enabled: {goal_category} goal with {fitness_level} level")
+            return True
 
         # Rule 2: Hypertrophy-only goals don't use VBT
         if goal_category == "hypertrophy" and specific_sport == "none":
-            print("[VBT] Disabled: hypertrophy goal without sport context")
+            logger.info("[VBT] Disabled: hypertrophy goal without sport context")
             return False
 
-        # Rule 3: Power goals (intermediate or advanced) use VBT
-        if goal_category in ["power", "athletic_performance"]:
-            print(f"[VBT] Enabled: {goal_category} goal with {fitness_level} level")
-            return True
+        # Rule 3: Beginners with non-power goals don't get VBT
+        if fitness_level == "beginner":
+            logger.info("[VBT] Disabled: beginner level with non-power goal (form mastery priority)")
+            return False
 
         # Rule 4: Advanced strength athletes use VBT
         if goal_category == "strength" and fitness_level == "advanced":
-            print(f"[VBT] Enabled: advanced strength training")
+            logger.info("[VBT] Enabled: advanced strength training")
             return True
 
-        # Rule 5: Check if sport involves explosiveness
+        # Rule 5: Check if sport involves explosiveness (intermediate/advanced only)
         explosive_sports = [
             "sprinting", "track and field", "olympic weightlifting", "powerlifting",
             "basketball", "football", "volleyball", "jumping", "throwing",
@@ -3269,11 +3608,11 @@ class NovaVoiceAgent(Agent):
 
         sport_lower = specific_sport.lower() if specific_sport else ""
         if any(sport in sport_lower for sport in explosive_sports):
-            print(f"[VBT] Enabled: explosive sport ({specific_sport}) with {fitness_level} level")
+            logger.info(f"[VBT] Enabled: explosive sport ({specific_sport}) with {fitness_level} level")
             return True
 
         # Default: No VBT
-        print(f"[VBT] Disabled: {fitness_level} + {goal_category} + {specific_sport} doesn't warrant VBT")
+        logger.info(f"[VBT] Disabled: {fitness_level} + {goal_category} + {specific_sport} doesn't warrant VBT")
         return False
 
     def _normalize_fitness_level(self, level_str: str) -> str:
@@ -3310,30 +3649,29 @@ class NovaVoiceAgent(Agent):
         """
         import httpx
 
-        print("\n" + "="*80)
-        print("[PROGRAM] ⚡ generate_workout_program() CALLED (FastAPI mode)")
-        print("="*80)
+        logger.info("="*80)
+        logger.info("[PROGRAM] ⚡ generate_workout_program() CALLED (FastAPI mode)")
+        logger.info("="*80)
 
-        user = self.state.get_user()
-        user_id = user.get("id")
-        name = user.get("name", "there")
+        user_id = self.user_id
+        name = self.user_name
 
-        print(f"[PROGRAM] User: {name} (ID: {user_id})")
+        logger.info(f"[PROGRAM] User: {name} (ID: {user_id})")
 
         # Check if already generated
         saved_program_id = self.state.get("program_creation.saved_program_id")
         if saved_program_id:
-            print("[PROGRAM] ⚠️  Program already generated - skipping duplicate call")
+            logger.info("[PROGRAM] ⚠️  Program already generated - skipping duplicate call")
             return None, f"Program already generated. Now call finish_program_creation() to complete."
 
         # Check if job already started
         existing_job_id = self.state.get("program_creation.job_id")
         if existing_job_id:
-            print(f"[PROGRAM] ⚠️  Generation job already started: {existing_job_id}")
+            logger.info(f"[PROGRAM] ⚠️  Generation job already started: {existing_job_id}")
             return None, f"Generation already started. Now call check_program_status() to see if it's done."
 
         # Get all parameters from state
-        print("[PROGRAM] Retrieving parameters from state...")
+        logger.info("[PROGRAM] Retrieving parameters from state...")
         height_cm = self.state.get("program_creation.height_cm")
         weight_kg = self.state.get("program_creation.weight_kg")
         age = self.state.get("program_creation.age")
@@ -3362,18 +3700,21 @@ class NovaVoiceAgent(Agent):
         if not fitness_level: missing.append("fitness_level")
 
         if missing:
-            print(f"[PROGRAM] ❌ ERROR: Missing required parameters: {', '.join(missing)}")
-            print(f"[PROGRAM] Current state: height={height_cm}, weight={weight_kg}, age={age}, sex={sex}, goal={goal_category}, duration={duration_weeks}, days={days_per_week}, fitness={fitness_level}")
+            logger.info(f"[PROGRAM] ❌ ERROR: Missing required parameters: {', '.join(missing)}")
+            logger.info(f"[PROGRAM] Current state: height={height_cm}, weight={weight_kg}, age={age}, sex={sex}, goal={goal_category}, duration={duration_weeks}, days={days_per_week}, fitness={fitness_level}")
             return None, f"ERROR: Cannot generate program - missing required parameters: {', '.join(missing)}. You MUST collect all parameters in order before calling generate_workout_program(). Go back and ask the missing questions."
 
-        print("[PROGRAM] ✅ All parameters validated successfully")
+        logger.info("[PROGRAM] ✅ All parameters validated successfully")
 
         try:
-            print("[PROGRAM] 🌐 Calling FastAPI to start generation...")
+            logger.info("[PROGRAM] 🌐 Calling FastAPI to start generation...")
 
             # Prepare request payload with all new parameters
+            user_info = self.state.get_user()
             params = {
                 "user_id": user_id,
+                "name": user_info.get("name", "Unknown"),
+                "email": user_info.get("email", "unknown@nowva.ai"),
                 "height_cm": height_cm,
                 "weight_kg": weight_kg,
                 "age": age,
@@ -3390,7 +3731,7 @@ class NovaVoiceAgent(Agent):
                 "has_vbt_capability": has_vbt_capability
             }
 
-            print(f"[PROGRAM] 🎯 VBT Status: {'ENABLED' if has_vbt_capability else 'DISABLED'}")
+            logger.info(f"[PROGRAM] 🎯 VBT Status: {'ENABLED' if has_vbt_capability else 'DISABLED'}")
 
             # Call FastAPI endpoint to start generation
             fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
@@ -3401,12 +3742,15 @@ class NovaVoiceAgent(Agent):
                     timeout=10.0
                 )
                 data = response.json()
+                if response.status_code != 202:
+                    logger.error(f"[PROGRAM] FastAPI returned {response.status_code}: {data}")
+                    raise Exception(f"FastAPI error {response.status_code}: {data}")
                 job_id = data["job_id"]
 
             # Store job_id in state
             self.state.set("program_creation.job_id", job_id)
-            print(f"[PROGRAM] ✅ Started generation job: {job_id}")
-            print("="*80 + "\n")
+            logger.info(f"[PROGRAM] ✅ Started generation job: {job_id}")
+            logger.info("="*80 + "\n")
 
             # Tell agent to wait and check status
             result = (None, f"Program generation started! Wait 45 seconds, then call check_program_status() to see if it's done. Don't say anything yet, just wait and call check_program_status() after 45 seconds.")
@@ -3417,10 +3761,8 @@ class NovaVoiceAgent(Agent):
             return result
 
         except Exception as e:
-            print(f"\n[PROGRAM] ❌ ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            print("="*80 + "\n")
+            logger.exception("[PROGRAM] ERROR")
+            logger.info("="*80 + "\n")
 
             result = (None, f"Error starting generation. Say something like: '{name}, I had trouble starting your program. Let me try again.' Keep it apologetic.")
 
@@ -3437,8 +3779,7 @@ class NovaVoiceAgent(Agent):
         """
         import httpx
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         job_id = self.state.get("program_creation.job_id")
         if not job_id:
@@ -3464,22 +3805,22 @@ class NovaVoiceAgent(Agent):
                 # Store in state
                 self.state.set("program_creation.saved_program_id", program_id)
 
-                print(f"[PROGRAM] ✅ Program generation complete! ID: {program_id}")
+                logger.info(f"[PROGRAM] ✅ Program generation complete! ID: {program_id}")
 
                 return None, f"Program is ready! Say something like: 'Great news! Your custom program is ready. I've saved it to your account.' Then call finish_program_creation(). Be enthusiastic!"
 
             elif status == "failed":
                 error = data.get("error_message", "Unknown error")
-                print(f"[PROGRAM] ❌ Generation failed: {error}")
+                logger.info(f"[PROGRAM] ❌ Generation failed: {error}")
                 return None, f"Generation failed. Say something like: 'Hmmm, seems like I had trouble creating your program. Let me try again.' Keep it apologetic."
 
             else:
                 # Still in progress
-                print(f"[PROGRAM] Generation in progress: {progress}%")
+                logger.info(f"[PROGRAM] Generation in progress: {progress}%")
                 return None, f"Program is {progress}% complete. Wait 15 more seconds, then call check_program_status() again. Don't say anything, just wait."
 
         except Exception as e:
-            print(f"[PROGRAM] Error checking status: {e}")
+            logger.info(f"[PROGRAM] Error checking status: {e}")
             return None, f"Error checking status. Wait 10 seconds and call check_program_status() again."
 
 
@@ -3562,17 +3903,17 @@ Generate programs that are challenging but achievable, progressive, and scientif
             with open(cag_knowledge_path, 'r', encoding='utf-8') as f:
                 cag_knowledge = f.read()
 
-            print(f"[PROGRAM] Loaded CAG knowledge base ({len(cag_knowledge)} characters)")
+            logger.info(f"[PROGRAM] Loaded CAG knowledge base ({len(cag_knowledge)} characters)")
 
             # Combine base prompt with CAG knowledge
             full_prompt = base_prompt + "\n\n" + "="*80 + "\n" + cag_knowledge
             return full_prompt
 
         except FileNotFoundError:
-            print("[PROGRAM] ⚠️  WARNING: CAG knowledge base file not found, using base prompt only")
+            logger.info("[PROGRAM] ⚠️  WARNING: CAG knowledge base file not found, using base prompt only")
             return base_prompt
         except Exception as e:
-            print(f"[PROGRAM] ⚠️  WARNING: Error loading CAG knowledge base: {e}")
+            logger.info(f"[PROGRAM] ⚠️  WARNING: Error loading CAG knowledge base: {e}")
             return base_prompt
 
 
@@ -3581,10 +3922,9 @@ Generate programs that are challenging but achievable, progressive, and scientif
         """
         Call this to complete the program creation process and return to main menu.
         """
-        print("[PROGRAM] Finishing program creation, returning to main menu...")
+        logger.info("[PROGRAM] Finishing program creation, returning to main menu...")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         # Clear program creation state
         self.state.set("program_creation", None)
@@ -3595,8 +3935,8 @@ Generate programs that are challenging but achievable, progressive, and scientif
 
         # Update agent instructions to main_menu mode
         new_instructions = self._get_main_menu_instructions()
-        self.update_instructions(new_instructions)
-        print("[STATE] Returned to main_menu mode and updated instructions")
+        await self.update_instructions(new_instructions)
+        logger.info("[STATE] Returned to main_menu mode and updated instructions")
 
         return None, f"Program creation complete. Say something like: 'All set! Your program is ready to go. You can start your first workout whenever you're ready, or explore the other options. What would you like to do?' Keep it motivating."
 
@@ -3608,9 +3948,8 @@ Generate programs that are challenging but achievable, progressive, and scientif
         Call this when the user wants to end/stop their workout.
         User might say: "stop workout", "I'm done", "end session", "finish"
         """
-        print("[WORKOUT] User requested to end workout")
+        logger.info("[WORKOUT] User requested to end workout")
 
-        from db.database import SessionLocal
         from db.schedule_utils import mark_workout_completed
         from db.progress_utils import log_completed_set
         from core.workout_session import WorkoutSession
@@ -3624,44 +3963,54 @@ Generate programs that are challenging but achievable, progressive, and scientif
                 session = WorkoutSession.from_dict(session_data)
                 session.end_session()
 
-                # Log all completed sets to database
-                db = SessionLocal()
-                try:
-                    for set_data in session.get_completed_sets_for_logging():
-                        # Only log if reps were actually performed
-                        if set_data["performed_reps"] > 0:
-                            log_completed_set(
-                                db=db,
-                                user_id=session.user_id,
-                                set_id=set_data["set_id"],
-                                performed_reps=set_data["performed_reps"],
-                                performed_weight=set_data.get("performed_weight"),
-                                rpe=set_data.get("rpe"),
-                                measured_velocity=set_data.get("measured_velocity")
-                            )
-                            print(f"[WORKOUT] Logged set {set_data['set_id']}")
+                # Only log to database for scheduled workouts (not quick exercises)
+                if not session.is_quick_exercise:
+                    db = SessionLocal()
+                    try:
+                        for set_data in session.get_completed_sets_for_logging():
+                            # Only log if reps were actually performed
+                            if set_data["performed_reps"] > 0:
+                                log_completed_set(
+                                    db=db,
+                                    user_id=session.user_id,
+                                    set_id=set_data["set_id"],
+                                    performed_reps=set_data["performed_reps"],
+                                    performed_weight=set_data.get("performed_weight"),
+                                    rpe=set_data.get("rpe"),
+                                    measured_velocity=set_data.get("measured_velocity")
+                                )
+                                logger.info(f"[WORKOUT] Logged set {set_data['set_id']}")
 
-                    # Mark workout as completed in schedule
-                    mark_workout_completed(db, session.schedule_id)
-                    print(f"[WORKOUT] Marked schedule {session.schedule_id} as completed")
+                        # Mark workout as completed in schedule
+                        mark_workout_completed(db, session.schedule_id)
+                        logger.info(f"[WORKOUT] Marked schedule {session.schedule_id} as completed")
 
-                    # Get progress summary
-                    summary = session.get_progress_summary()
+                    except Exception as e:
+                        logger.exception("[WORKOUT ERROR] Failed to save workout data")
+                    finally:
+                        db.close()
+                else:
+                    logger.info("[QUICK EXERCISE] Skipping DB logging for ad-hoc session")
 
-                except Exception as e:
-                    print(f"[WORKOUT ERROR] Failed to save workout data: {e}")
-                    import traceback
-                    traceback.print_exc()
-                finally:
-                    db.close()
+                # Get progress summary
+                summary = session.get_progress_summary()
 
             except Exception as e:
-                print(f"[WORKOUT ERROR] Failed to process session: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("[WORKOUT ERROR] Failed to process session")
 
-        # Clear workout session from state
+        # Clear workout session and quick exercise state
         self.state.set("workout.current_session", None)
+        self.state.set("workout.exercise_name", None)
+        self.state.set("quick_exercise.exercise_name", None)
+        self.state.set("quick_exercise.gathering_params", False)
+
+        # Stop coaching orchestrator, IPC listener, and clean up audio track
+        if self._coaching_orchestrator:
+            self._coaching_orchestrator.stop()
+            self._coaching_orchestrator = None
+        self._stop_coaching_listener()
+        self._audio_track_published = False
+        self._audio_source = None
 
         # Switch back to main menu mode (main.py monitors state file)
         self.state.switch_mode("main_menu")
@@ -3670,11 +4019,10 @@ Generate programs that are challenging but achievable, progressive, and scientif
 
         # Update agent instructions to main_menu mode
         new_instructions = self._get_main_menu_instructions()
-        self.update_instructions(new_instructions)
-        print("[STATE] Switched to main_menu mode and updated instructions - main.py will detect and stop pose estimation")
+        await self.update_instructions(new_instructions)
+        logger.info("[STATE] Switched to main_menu mode and updated instructions - main.py will detect and stop pose estimation")
 
-        user = self.state.get_user()
-        name = user.get("name", "there")
+        name = self.user_name
 
         return None, f"The user wants to end the workout. Say something like: 'Great work today, {name}! You crushed it. All your progress has been saved. Returning to the main menu.' Keep it celebratory and proud."
 
@@ -3695,14 +4043,14 @@ Generate programs that are challenging but achievable, progressive, and scientif
             weight: Weight used (optional, kg or lbs)
             rpe: Rate of perceived exertion 1-10 (optional)
         """
-        print(f"[WORKOUT] User completed set: {reps} reps, weight={weight}, rpe={rpe}")
+        logger.info(f"[WORKOUT] User completed set: {reps} reps, weight={weight}, rpe={rpe}")
 
         from core.workout_session import WorkoutSession
 
         # Get current session from state
         session_data = self.state.get("workout.current_session")
         if not session_data:
-            print("[WORKOUT ERROR] No active session")
+            logger.info("[WORKOUT ERROR] No active session")
             return None, "Tell the user: 'Hmm, I don't have an active workout session. Let's start a workout first!' Keep it helpful."
 
         try:
@@ -3728,8 +4076,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
             self.state.set("workout.current_session", session.to_dict())
             self.state.save_state()
 
-            user = self.state.get_user()
-            name = user.get("name", "there")
+            name = self.user_name
 
             if has_next:
                 # Get next set info
@@ -3747,9 +4094,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
                 return None, f"Tell the user: 'YES! That's the last one, {name}! You completed {summary['completed_sets']} total sets today. Amazing work! Ready to wrap up?' Keep it celebratory."
 
         except Exception as e:
-            print(f"[WORKOUT ERROR] Failed to complete set: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[WORKOUT ERROR] Failed to complete set")
             return None, "Tell the user: 'Good set! Let me know when you're ready for the next one.' Keep it simple."
 
     @function_tool
@@ -3761,7 +4106,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
         Args:
             reason: Optional reason for skipping (e.g., "injury", "no equipment")
         """
-        print(f"[WORKOUT] User wants to skip exercise. Reason: {reason}")
+        logger.info(f"[WORKOUT] User wants to skip exercise. Reason: {reason}")
 
         from core.workout_session import WorkoutSession
 
@@ -3795,9 +4140,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
                 return None, f"Tell the user: 'Alright, skipped {exercise_name}. That was the last exercise! Great work on what you did today. Ready to wrap up?' Keep it encouraging."
 
         except Exception as e:
-            print(f"[WORKOUT ERROR] Failed to skip exercise: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[WORKOUT ERROR] Failed to skip exercise")
             return None, "Tell the user: 'Okay, let's move on to the next exercise.' Keep it simple."
 
     @function_tool
@@ -3806,7 +4149,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
         Call this when the user asks what's next or wants to preview upcoming exercises.
         User might say: "what's next", "what exercise is coming up", "show me next"
         """
-        print("[WORKOUT] User wants to see next exercise")
+        logger.info("[WORKOUT] User wants to see next exercise")
 
         from core.workout_session import WorkoutSession
 
@@ -3832,9 +4175,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
                     return None, "Tell the user: 'You're done! That was the last exercise. Great job!' Keep it celebratory."
 
         except Exception as e:
-            print(f"[WORKOUT ERROR] Failed to get next exercise: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[WORKOUT ERROR] Failed to get next exercise")
             return None, "Tell the user: 'Let's focus on this exercise first!' Keep it simple."
 
     @function_tool
@@ -3843,7 +4184,7 @@ Generate programs that are challenging but achievable, progressive, and scientif
         Call this when the user asks about their progress or where they are in the workout.
         User might say: "how much left", "where am I", "progress", "how many sets left"
         """
-        print("[WORKOUT] User wants to see workout progress")
+        logger.info("[WORKOUT] User wants to see workout progress")
 
         from core.workout_session import WorkoutSession
 
@@ -3858,72 +4199,69 @@ Generate programs that are challenging but achievable, progressive, and scientif
 
             summary = session.get_progress_summary()
 
-            user = self.state.get_user()
-            name = user.get("name", "there")
+            name = self.user_name
 
             return None, f"Tell the user: 'You're crushing it, {name}! You've completed {summary['completed_sets']} out of {summary['total_sets']} sets. That's {summary['percent_complete']}% done. Currently on {summary['current_exercise_name']}.' Keep it motivating and clear."
 
         except Exception as e:
-            print(f"[WORKOUT ERROR] Failed to get progress: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("[WORKOUT ERROR] Failed to get progress")
             return None, "Tell the user: 'Keep pushing! You're doing great.' Keep it simple and encouraging."
 
 
 async def entrypoint(ctx: agents.JobContext):
     """Main entry point for Nova voice agent"""
 
-    print("[NOVA] Entrypoint function called")
+    logger.info("[NOVA] Entrypoint function called")
 
     # Initialize state management
     # Check if user_id is provided in room metadata (for returning users)
-    print("[NOVA] Checking for user_id in room metadata...")
+    logger.info("[NOVA] Checking for user_id in room metadata...")
     user_id = ctx.room.metadata.get('user_id') if ctx.room.metadata else None
-    print(f"[NOVA] user_id from metadata: {user_id}")
+    logger.info(f"[NOVA] user_id from metadata: {user_id}")
 
     # If no user_id from metadata, try to find the most recent state file
     # (for console mode where metadata isn't available)
     if not user_id:
         import glob
-        print("[NOVA] Searching for state files...")
+        logger.info("[NOVA] Searching for state files...")
         state_files = glob.glob('.agent_state_*.json')
-        print(f"[NOVA] Found {len(state_files)} state files")
+        logger.info(f"[NOVA] Found {len(state_files)} state files")
         if state_files:
             # Get most recently modified state file
             latest_state = max(state_files, key=os.path.getmtime)
             # Extract user_id from filename
             user_id = latest_state.replace('.agent_state_', '').replace('.json', '')
-            print(f"[NOVA] Found recent state file for user: {user_id}")
+            logger.info(f"[NOVA] Found recent state file for user: {user_id}")
 
-    print(f"[NOVA] Creating AgentState with user_id: {user_id}...")
+    logger.info(f"[NOVA] Creating AgentState with user_id: {user_id}...")
     state = AgentState(user_id=user_id)
-    print(f"[NOVA] AgentState created successfully")
+    logger.info(f"[NOVA] AgentState created successfully")
 
-    print(f"[NOVA] Starting with mode: {state.get_mode()}")
+    logger.info(f"[NOVA] Starting with mode: {state.get_mode()}")
     if user_id:
-        print(f"[NOVA] Loaded existing user: {user_id}")
+        logger.info(f"[NOVA] Loaded existing user: {user_id}")
 
     # IPC is not needed - state file is used for communication with main.py
     ipc_client = None
 
     # Initialize OpenAI Realtime API model
     # Replaces separate STT (Deepgram) + LLM (OpenAI) + TTS (Inworld)
-    print("[NOVA] Initializing OpenAI Realtime model...")
+    logger.info("[NOVA] Initializing OpenAI Realtime model...")
     realtime_model = openai.realtime.RealtimeModel(
         voice=os.getenv("REALTIME_VOICE", "alloy"),
-        temperature=float(os.getenv("REALTIME_TEMPERATURE", "0.8")),
-        turn_detection={
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 300,
-        },
+        turn_detection=TurnDetection(
+            type="semantic_vad",
+            eagerness="low",           # Patient — let users finish thinking before responding
+            create_response=True,
+            interrupt_response=True,
+        ),
+        input_audio_noise_reduction="near_field",
         modalities=["audio", "text"],
     )
-    print("[NOVA] Realtime model initialized")
+    logger.info("[NOVA] Realtime model initialized")
 
     # Initialize agent session with Realtime model
-    print("[NOVA] Creating agent session...")
+    logger.info("[NOVA] Creating agent session...")
     session = AgentSession(
         llm=realtime_model,
         preemptive_generation=True,
@@ -3931,23 +4269,24 @@ async def entrypoint(ctx: agents.JobContext):
         # Long-running tools (like GPT-5 program generation) should handle their own timeouts
         # Our generate_workout_program() has a 300s timeout configured
     )
-    print("[NOVA] Agent session created")
+    logger.info("[NOVA] Agent session created")
 
     # Create agent with state management and IPC - tools are automatically registered via @function_tool decorators
-    print("[NOVA] Creating NovaVoiceAgent instance...")
+    logger.info("[NOVA] Creating NovaVoiceAgent instance...")
     agent = NovaVoiceAgent(state=state, ipc_client=ipc_client)
-    print("[NOVA] NovaVoiceAgent created")
+    agent._room = ctx.room  # Pass room reference for coaching audio track publishing
+    logger.info("[NOVA] NovaVoiceAgent created")
 
-    print("[NOVA] Starting session (connecting to room)...")
-    print("[NOVA] This may require microphone permissions on macOS")
+    logger.info("[NOVA] Starting session (connecting to room)...")
+    logger.info("[NOVA] This may require microphone permissions on macOS")
     await session.start(
         room=ctx.room,
         agent=agent,
     )
-    print("[NOVA] Session started successfully!")
+    logger.info("[NOVA] Session started successfully!")
 
-    print(f"Nova voice agent started in room: {ctx.room.name}")
-    print(f"Agent state: {state}")
+    logger.info(f"Nova voice agent started in room: {ctx.room.name}")
+    logger.info(f"Agent state: {state}")
 
 
 if __name__ == "__main__":
@@ -3962,7 +4301,7 @@ if __name__ == "__main__":
         global shutting_down
         if not shutting_down:
             shutting_down = True
-            print("\n[SHUTDOWN] Gracefully shutting down agent...")
+            logger.info("[SHUTDOWN] Gracefully shutting down agent...")
             sys.exit(0)
 
     # Register signal handlers
@@ -3977,10 +4316,10 @@ if __name__ == "__main__":
             )
         )
     except KeyboardInterrupt:
-        print("\n[SHUTDOWN] Agent stopped by user")
+        logger.info("[SHUTDOWN] Agent stopped by user")
         sys.exit(0)
     except Exception as e:
         # Suppress termios errors during shutdown
         if "termios" not in str(e).lower():
-            print(f"[ERROR] {e}")
+            logger.error(f"[ERROR] {e}")
         sys.exit(0)

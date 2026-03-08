@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-Live Fault Detection Demo
+Live Fault Detection Demo with Derivative-Based Rep Detection
 
 Uses webcam + MediaPipe + IK + Fault Detection to provide real-time
-squat form feedback.
+squat form feedback. Features derivative-based rep counting and tempo analysis.
 
 Usage:
     python scripts/demo_fault_detection.py
 
 Controls:
-    'q' - Quit
+    'q' - Quit (shows timeseries plot)
     'r' - Reset rep counter
     's' - Toggle skeleton display
     'v' - Start/Stop video recording
     'd' - Toggle debug mode (show raw angles)
+    'f' - Toggle temporal filter
 """
 
 import sys
 from pathlib import Path
 from datetime import datetime
+from collections import deque
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -32,6 +34,7 @@ from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
 from biomechanics.faults import RuleEngine, RepCounter, RepCounterConfig
 from biomechanics.utils.types import FaultSeverity
 from biomechanics.utils.filters import JointAngleFilter
+from biomechanics.utils.derivatives import DerivativeTracker
 
 
 # Colors (BGR)
@@ -42,6 +45,7 @@ COLOR_RED = (0, 0, 255)
 COLOR_WHITE = (255, 255, 255)
 COLOR_GRAY = (128, 128, 128)
 COLOR_BLUE = (255, 100, 100)
+COLOR_CYAN = (255, 255, 0)
 
 
 def severity_color(severity: FaultSeverity) -> tuple:
@@ -87,13 +91,13 @@ def draw_skeleton(frame, skeleton_2d, color=COLOR_GREEN):
             cv2.circle(frame, (int(kp.x), int(kp.y)), 5, color, -1)
 
 
-def draw_info_panel(frame, rep_counter, angles, raw_angles, faults, recent_faults, fps, is_recording, debug_mode, filter_enabled):
+def draw_info_panel(frame, rep_counter, angles, derivatives, raw_angles, faults, recent_faults, fps, is_recording, debug_mode, filter_enabled):
     """Draw info panel on frame."""
     h, w = frame.shape[:2]
 
     # Semi-transparent background for panel
-    panel_width = 380
-    panel_height = 350 if debug_mode else 300
+    panel_width = 400
+    panel_height = 450 if debug_mode else 300
     overlay = frame.copy()
     cv2.rectangle(overlay, (10, 10), (panel_width, panel_height), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
@@ -117,10 +121,16 @@ def draw_info_panel(frame, rep_counter, angles, raw_angles, faults, recent_fault
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLOR_GREEN, 2)
     y += line_height
 
-    # State with threshold info
-    state_color = COLOR_YELLOW if rep_counter.in_rep else COLOR_WHITE
-    state_text = "IN REP" if rep_counter.in_rep else "STANDING"
-    cv2.putText(frame, f"State: {state_text}", (20, y),
+    # State/Phase with color coding
+    phase = rep_counter.phase.upper()
+    phase_colors = {
+        "IDLE": COLOR_WHITE,
+        "DESCENDING": COLOR_CYAN,
+        "BOTTOM": COLOR_YELLOW,
+        "ASCENDING": COLOR_GREEN,
+    }
+    state_color = phase_colors.get(phase, COLOR_WHITE)
+    cv2.putText(frame, f"Phase: {phase}", (20, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 2)
     y += line_height + 5
 
@@ -134,8 +144,9 @@ def draw_info_panel(frame, rep_counter, angles, raw_angles, faults, recent_fault
         knee_avg = angles.avg_knee_flexion
         trunk = angles.trunk_flexion
 
-        # Color code based on threshold
-        hip_color = COLOR_YELLOW if hip_avg >= 15 else COLOR_WHITE
+        # Color code based on thresholds
+        hip_color = COLOR_YELLOW if hip_avg >= rep_counter.config.entry_hip_angle else COLOR_WHITE
+        knee_color = COLOR_GREEN if knee_avg >= rep_counter.config.min_depth_knee_angle else COLOR_WHITE
         cv2.putText(frame, f"  Hip: {hip_avg:.1f}°  Knee: {knee_avg:.1f}°", (20, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, hip_color, 1)
         y += line_height - 5
@@ -144,15 +155,41 @@ def draw_info_panel(frame, rep_counter, angles, raw_angles, faults, recent_fault
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_WHITE, 1)
         y += line_height
 
-        # Debug mode - show more angles
+        # Debug mode - show more angles and velocity
         if debug_mode:
+            # Show filter status
+            filter_status = "FILTERED" if filter_enabled else "RAW"
+            filter_color = COLOR_GREEN if filter_enabled else COLOR_ORANGE
+            cv2.putText(frame, f"  Mode: {filter_status}", (20, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, filter_color, 1)
+            y += line_height - 8
+
             cv2.putText(frame, f"  Hip L/R: {angles.hip_flexion_l:.1f}/{angles.hip_flexion_r:.1f}", (20, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_BLUE, 1)
             y += line_height - 8
-            cv2.putText(frame, f"  Knee L/R: {angles.knee_flexion_l:.1f}/{angles.knee_flexion_r:.1f}", (20, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_BLUE, 1)
-            y += line_height - 8
-            cv2.putText(frame, f"  Threshold: {rep_counter.config.entry_threshold}° (entry)", (20, y),
+
+            # Show velocity if available
+            if derivatives is not None:
+                vel = derivatives.avg_knee_velocity
+                vel_color = COLOR_CYAN if vel < 0 else COLOR_GREEN if vel > 0 else COLOR_WHITE
+                cv2.putText(frame, f"  Velocity: {vel:.1f} deg/s", (20, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, vel_color, 1)
+                y += line_height - 8
+
+                accel = derivatives.avg_knee_acceleration
+                cv2.putText(frame, f"  Accel: {accel:.1f} deg/s²", (20, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_GRAY, 1)
+                y += line_height - 8
+
+            # Show raw vs filtered comparison if filter is on
+            if filter_enabled and raw_angles:
+                raw_hip = (raw_angles.hip_flexion_l + raw_angles.hip_flexion_r) / 2
+                filt_hip = (angles.hip_flexion_l + angles.hip_flexion_r) / 2
+                cv2.putText(frame, f"  Raw Hip: {raw_hip:.1f}  Filt: {filt_hip:.1f}", (20, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_GRAY, 1)
+                y += line_height - 8
+
+            cv2.putText(frame, f"  Entry: {rep_counter.config.entry_knee_angle}°  Depth: {rep_counter.config.min_depth_knee_angle}°", (20, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, COLOR_BLUE, 1)
             y += line_height
 
@@ -188,7 +225,7 @@ def draw_info_panel(frame, rep_counter, angles, raw_angles, faults, recent_fault
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 2)
 
     # Controls hint
-    cv2.putText(frame, "V=Record  R=Reset  D=Debug  Q=Quit", (20, h - 15),
+    cv2.putText(frame, "V=Record  R=Reset  D=Debug  F=Filter  Q=Quit", (20, h - 15),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_GRAY, 1)
 
 
@@ -208,6 +245,22 @@ def draw_fault_alert(frame, fault):
     cv2.putText(frame, fault.message, (20, h - 75),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, COLOR_WHITE, 2)
     cv2.putText(frame, f"Severity: {fault.severity.value.upper()}", (20, h - 45),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 1)
+
+
+def draw_go_deeper_alert(frame):
+    """Draw 'GO DEEPER!' alert for insufficient depth."""
+    h, w = frame.shape[:2]
+
+    # Draw orange banner
+    alert_h = 80
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, h - alert_h - 30), (w, h - 30), COLOR_ORANGE, -1)
+    cv2.addWeighted(overlay, 0.8, frame, 0.2, 0, frame)
+
+    cv2.putText(frame, "GO DEEPER!", (w//2 - 120, h - 65),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, COLOR_WHITE, 3)
+    cv2.putText(frame, "Rep not counted - didn't hit depth", (w//2 - 180, h - 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_WHITE, 1)
 
 
@@ -234,9 +287,105 @@ def draw_rep_complete(frame, rep_data):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, COLOR_WHITE, 2)
 
 
+def plot_timeseries(timeseries_data, output_dir):
+    """Plot knee angle timeseries and save/show it."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not installed - skipping plot")
+        return
+
+    if not timeseries_data['timestamps']:
+        print("No data to plot")
+        return
+
+    # Convert to numpy arrays
+    timestamps = np.array(timeseries_data['timestamps'])
+    timestamps = timestamps - timestamps[0]  # Start from 0
+
+    knee_angles = np.array(timeseries_data['knee_angles'])
+    velocities = np.array(timeseries_data['velocities'])
+    phases = timeseries_data['phases']
+
+    # Create figure with subplots
+    fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+
+    # Plot 1: Knee angle over time
+    ax1 = axes[0]
+
+    # Color code by phase
+    phase_colors = {
+        "idle": "#808080",      # gray
+        "descending": "#00BFFF", # cyan
+        "bottom": "#FFD700",     # yellow
+        "ascending": "#00FF00",  # green
+    }
+
+    # Plot each phase segment with different colors
+    for i in range(len(timestamps) - 1):
+        color = phase_colors.get(phases[i], "#808080")
+        ax1.plot(timestamps[i:i+2], knee_angles[i:i+2], color=color, linewidth=2)
+
+    ax1.axhline(y=95, color='r', linestyle='--', alpha=0.7, label='Depth threshold (95°)')
+    ax1.set_ylabel('Knee Flexion Angle (°)', fontsize=12)
+    ax1.set_title('Knee Angle Timeseries', fontsize=14)
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim(0, max(knee_angles) * 1.1 if len(knee_angles) > 0 else 120)
+
+    # Plot 2: Velocity over time
+    # Sign convention: positive velocity = angle increasing (descending/flexing)
+    #                  negative velocity = angle decreasing (ascending/extending)
+    ax2 = axes[1]
+    ax2.plot(timestamps, velocities, 'b-', linewidth=1, alpha=0.7)
+    ax2.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+    ax2.axhline(y=100, color='r', linestyle='--', alpha=0.5, label='Too fast eccentric (>100°/s)')
+    ax2.axhline(y=-15, color='orange', linestyle='--', alpha=0.5, label='Stalling threshold')
+    ax2.fill_between(timestamps, velocities, 0,
+                     where=(np.array(velocities) > 0), alpha=0.3, color='cyan', label='Descending')
+    ax2.fill_between(timestamps, velocities, 0,
+                     where=(np.array(velocities) < 0), alpha=0.3, color='green', label='Ascending')
+    ax2.set_xlabel('Time (seconds)', fontsize=12)
+    ax2.set_ylabel('Velocity (°/sec)', fontsize=12)
+    ax2.set_title('Knee Angle Velocity', fontsize=14)
+    ax2.legend(loc='upper right')
+    ax2.grid(True, alpha=0.3)
+
+    # Add phase legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#808080', label='Idle'),
+        Patch(facecolor='#00BFFF', label='Descending'),
+        Patch(facecolor='#FFD700', label='Bottom'),
+        Patch(facecolor='#00FF00', label='Ascending'),
+    ]
+    ax1.legend(handles=legend_elements, loc='upper left', title='Phase')
+
+    plt.tight_layout()
+
+    # Save plot
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    plot_path = output_dir / f"timeseries_{timestamp}.png"
+    plt.savefig(plot_path, dpi=150)
+    print(f"Timeseries plot saved to: {plot_path}")
+
+    # Also save data as CSV
+    csv_path = output_dir / f"timeseries_{timestamp}.csv"
+    with open(csv_path, 'w') as f:
+        f.write("timestamp,knee_angle,velocity,phase\n")
+        for i in range(len(timestamps)):
+            f.write(f"{timestamps[i]:.3f},{knee_angles[i]:.2f},{velocities[i]:.2f},{phases[i]}\n")
+    print(f"Timeseries data saved to: {csv_path}")
+
+    # Show plot
+    plt.show()
+
+
 def main():
     print("=" * 50)
     print("  SQUAT FORM ANALYZER - Live Demo")
+    print("  (Derivative-Based Rep Detection)")
     print("=" * 50)
     print("\nInitializing...")
 
@@ -249,11 +398,17 @@ def main():
     # One Euro Filter: min_cutoff=1.0 (smooth), beta=0.007 (responsive to fast movements)
     angle_filter = JointAngleFilter(min_cutoff=1.0, beta=0.007)
 
-    # Lower thresholds for easier rep detection
+    # Derivative tracker for velocity/acceleration
+    derivative_tracker = DerivativeTracker(smoothing_alpha=0.3)
+
+    # Rep counter with new thresholds
     rep_config = RepCounterConfig(
-        entry_threshold=15.0,  # Very low - triggers when you start bending
-        exit_threshold=12.0,   # Exit when nearly standing
-        min_rep_duration_frames=10,  # At least 10 frames (~0.3s at 30fps)
+        entry_knee_angle=30.0,      # Knee flexion to start rep
+        exit_knee_angle=25.0,       # Knee flexion to end rep
+        entry_hip_angle=20.0,       # Hip flexion backup entry
+        exit_hip_angle=18.0,        # Hip flexion backup exit
+        min_depth_knee_angle=95.0,  # Knee must reach this for valid rep
+        min_rep_duration_frames=15, # ~0.5 sec at 30fps
     )
     rep_counter = RepCounter(rep_config)
 
@@ -275,28 +430,42 @@ def main():
     print("\nCamera opened successfully!")
     print(f"Resolution: {frame_width}x{frame_height}")
     print("\nControls:")
-    print("  'q' - Quit")
+    print("  'q' - Quit (shows timeseries plot)")
     print("  'r' - Reset rep counter")
     print("  's' - Toggle skeleton display")
     print("  'v' - Start/Stop video recording")
     print("  'd' - Toggle debug mode")
+    print("  'f' - Toggle filter")
     print("\nStand back so your full body is visible.")
     print("Start squatting to see form analysis!\n")
 
     # State
     show_skeleton = True
     debug_mode = True  # Start with debug on to see angles
+    filter_enabled = True  # Temporal smoothing filter
     recent_faults = {}
     fault_decay_time = 5.0
     fault_timestamps = []
     rep_complete_time = 0
+    go_deeper_time = 0  # Time when "go deeper" feedback was triggered
     last_rep_data = None
     frame_times = []
+    raw_angles = None
+    derivatives = None
 
     # Video recording
     is_recording = False
     video_writer = None
     output_dir = Path(__file__).parent.parent / "recordings"
+
+    # Timeseries data collection
+    timeseries_data = {
+        'timestamps': [],
+        'knee_angles': [],
+        'velocities': [],
+        'phases': [],
+    }
+    session_start_time = time.time()
 
     while True:
         ret, frame = cap.read()
@@ -314,6 +483,7 @@ def main():
         angles = None
         faults = []
         rep_data = None
+        feedback = None
 
         if skeleton_3d is not None:
             # Compute joint angles
@@ -321,7 +491,13 @@ def main():
 
             # Apply temporal smoothing filter (One Euro Filter)
             # This removes noise and jitter for stable rep detection
-            angles = angle_filter.filter_angles(raw_angles)
+            if filter_enabled:
+                angles = angle_filter.filter_angles(raw_angles)
+            else:
+                angles = raw_angles
+
+            # Compute derivatives (velocity, acceleration)
+            derivatives = derivative_tracker.update(angles)
 
             # Run fault detection
             faults = rule_engine.evaluate(
@@ -330,8 +506,8 @@ def main():
                 rep_number=rep_counter.rep_count + 1
             )
 
-            # Update rep counter
-            rep_data = rep_counter.update(angles, faults)
+            # Update rep counter with derivatives
+            rep_data, feedback = rep_counter.update(angles, derivatives, faults)
 
             if rep_data is not None:
                 last_rep_data = rep_data
@@ -343,6 +519,10 @@ def main():
                     rep_data.max_depth_angle, angles, rep_data.rep_number
                 )
                 faults.extend(depth_faults)
+
+            if feedback == "go_deeper":
+                go_deeper_time = time.time()
+                print("GO DEEPER! - Rep not counted (didn't hit depth)")
 
             # Track recent faults
             now = time.time()
@@ -356,6 +536,12 @@ def main():
             for t, ft in fault_timestamps:
                 recent_faults[ft] = recent_faults.get(ft, 0) + 1
 
+            # Collect timeseries data
+            timeseries_data['timestamps'].append(time.time() - session_start_time)
+            timeseries_data['knee_angles'].append(angles.avg_knee_flexion)
+            timeseries_data['velocities'].append(derivatives.avg_knee_velocity if derivatives else 0)
+            timeseries_data['phases'].append(rep_counter.phase)
+
         # Draw skeleton
         if show_skeleton and skeleton_2d is not None:
             skel_color = COLOR_RED if faults else (COLOR_YELLOW if rep_counter.in_rep else COLOR_GREEN)
@@ -368,7 +554,7 @@ def main():
         fps = 1.0 / (sum(frame_times) / len(frame_times)) if frame_times else 0
 
         # Draw info panel
-        draw_info_panel(frame, rep_counter, angles, faults, recent_faults, fps, is_recording, debug_mode)
+        draw_info_panel(frame, rep_counter, angles, derivatives, raw_angles, faults, recent_faults, fps, is_recording, debug_mode, filter_enabled)
 
         # Draw fault alert (most severe)
         if faults:
@@ -376,8 +562,12 @@ def main():
             if worst_fault.severity in (FaultSeverity.MODERATE, FaultSeverity.SEVERE):
                 draw_fault_alert(frame, worst_fault)
 
+        # Draw "GO DEEPER!" alert
+        if time.time() - go_deeper_time < 2.0:
+            draw_go_deeper_alert(frame)
+
         # Draw rep complete overlay (briefly)
-        if last_rep_data and time.time() - rep_complete_time < 1.5:
+        elif last_rep_data and time.time() - rep_complete_time < 1.5:
             draw_rep_complete(frame, last_rep_data)
 
         # Write frame if recording
@@ -395,14 +585,28 @@ def main():
             rep_counter.reset()
             rule_engine.reset()
             angle_filter.reset()
+            derivative_tracker.reset()
             recent_faults.clear()
             fault_timestamps.clear()
+            # Reset timeseries but keep session
+            timeseries_data = {
+                'timestamps': [],
+                'knee_angles': [],
+                'velocities': [],
+                'phases': [],
+            }
+            session_start_time = time.time()
             print("Rep counter reset!")
         elif key == ord('s'):
             show_skeleton = not show_skeleton
         elif key == ord('d'):
             debug_mode = not debug_mode
             print(f"Debug mode: {'ON' if debug_mode else 'OFF'}")
+        elif key == ord('f'):
+            filter_enabled = not filter_enabled
+            if not filter_enabled:
+                angle_filter.reset()
+            print(f"Filter: {'ON' if filter_enabled else 'OFF'}")
         elif key == ord('v'):
             if not is_recording:
                 # Start recording
@@ -439,6 +643,13 @@ def main():
     if is_recording:
         print(f"  Video saved to: {output_dir}")
     print("=" * 50)
+
+    # Plot timeseries on quit
+    if len(timeseries_data['timestamps']) > 10:
+        print("\nGenerating timeseries plot...")
+        plot_timeseries(timeseries_data, output_dir)
+    else:
+        print("\nNot enough data for timeseries plot (need at least 10 frames)")
 
 
 if __name__ == "__main__":

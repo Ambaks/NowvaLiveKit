@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
@@ -68,6 +69,32 @@ def get_db():
                 logger.warning("Database connection already closed during cleanup (SSL timeout). This is expected after long operations.")
             else:
                 # Re-raise other operational errors
+                raise
+
+
+@contextmanager
+def get_db_session():
+    """
+    Context manager for database sessions.
+    Automatically handles closing (and rollback on error).
+
+    Usage:
+        with get_db_session() as db:
+            user = db.query(User).filter(User.id == user_id).first()
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        try:
+            db.close()
+        except OperationalError as e:
+            if "SSL connection has been closed unexpectedly" in str(e):
+                logger.warning("Database connection already closed during cleanup (SSL timeout).")
+            else:
                 raise
 
 

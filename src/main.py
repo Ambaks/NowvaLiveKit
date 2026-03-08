@@ -39,7 +39,9 @@ class NowvaApp:
         self.session_manager = SessionManager()
         self.session_logger = SessionLogger.get_instance()
         self.ipc_server = None
+        self.coaching_ipc = None  # Second IPC server for forwarding to voice agent
         self.pose_process = None
+        self.fastapi_process = None
         self.current_user = None
         self.state = None  # Track state for cleanup
 
@@ -60,6 +62,22 @@ class NowvaApp:
                 print(f"[SIGNAL] Error resetting state: {e}")
         # Re-raise to allow normal shutdown
         raise KeyboardInterrupt
+
+    def _start_fastapi_server(self):
+        """Start the FastAPI backend server as a subprocess."""
+        project_root = str(Path(__file__).parent.parent)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).parent)
+        env["DYLD_FALLBACK_LIBRARY_PATH"] = f"/opt/homebrew/lib:{env.get('DYLD_FALLBACK_LIBRARY_PATH', '')}"
+
+        self.fastapi_process = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "api.main:app", "--port", "8000"],
+            cwd=project_root,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        print(f"[FASTAPI] Server started (PID: {self.fastapi_process.pid})")
 
     def check_session(self):
         """Check if user has an existing session"""
@@ -138,13 +156,15 @@ class NowvaApp:
 
         return server_thread
 
-    def start_pose_estimation(self, cam0_id: int = 0, cam1_id: int = 1):
+    def start_pose_estimation(self, cam0_id: int = 0, cam1_id: int = 1,
+                              exercise_name: str = "Barbell Back Squat"):
         """
         Start pose estimation process
 
         Args:
             cam0_id: First camera ID
             cam1_id: Second camera ID
+            exercise_name: Name of the exercise for coaching cues
         """
         print("\nStarting pose estimation process...")
 
@@ -152,7 +172,7 @@ class NowvaApp:
         pose_script = Path(__file__).parent / 'pose' / 'pose_estimation_process.py'
 
         self.pose_process = subprocess.Popen(
-            [sys.executable, str(pose_script), str(cam0_id), str(cam1_id)],
+            [sys.executable, str(pose_script), str(cam0_id), str(cam1_id), exercise_name],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -241,6 +261,10 @@ class NowvaApp:
         print("\n" + "="*60)
         print("NOWVA - AI-Powered Smart Squat Rack")
         print("="*60)
+
+        # Start FastAPI backend server
+        print("\nStarting FastAPI backend...")
+        self._start_fastapi_server()
 
         # Initialize database
         print("\nInitializing database...")
@@ -346,21 +370,68 @@ class NowvaApp:
                     })
                     last_mode = current_mode
 
-                # Handle workout mode
-                if current_mode == "workout" and not pose_running:
+                # Handle workout mode — only start if workout session is fully configured
+                # (workout.current_session is set by confirm_quick_exercise/start_workout)
+                has_workout_session = self.state.get("workout.current_session") is not None
+                if current_mode == "workout" and not pose_running and has_workout_session:
                     print("\n" + "="*50)
                     print("STARTING WORKOUT SESSION")
                     print("="*50)
+
+                    # Start coaching IPC server for forwarding messages to voice agent
+                    if not self.coaching_ipc:
+                        print("[COACHING IPC] Starting coaching IPC server...")
+                        self.coaching_ipc = IPCServer(socket_path="/tmp/nowva_coaching.sock")
+
+                        def coaching_message_handler(message: dict):
+                            """Handle messages FROM voice agent (reverse direction)."""
+                            msg_type = message.get("type")
+                            if msg_type == "rest_start":
+                                rest_sec = message.get("rest_seconds", 30)
+                                print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
+                                if self.ipc_server and self.ipc_server.client_socket:
+                                    try:
+                                        self.ipc_server.send_message(message)
+                                        print(f"[REST] Forwarded rest_start to pose process")
+                                    except Exception as e:
+                                        print(f"[REST] Failed to forward to pose process: {e}")
+
+                        def run_coaching_server():
+                            self.coaching_ipc.start(message_callback=coaching_message_handler)
+                            self.coaching_ipc.listen()
+
+                        coaching_thread = threading.Thread(target=run_coaching_server, daemon=True)
+                        coaching_thread.start()
+                        print("[COACHING IPC] Waiting for voice agent to connect...")
 
                     # Start IPC server for pose estimation communication
                     if not self.ipc_server:
                         print("[IPC] Starting IPC server...")
 
                         def ipc_message_handler(message: dict):
-                            """Handle messages from pose estimation"""
+                            """Handle messages from pose estimation / biomechanics pipeline"""
                             msg_type = message.get('type')
 
-                            if msg_type == 'rep_count':
+                            # --- New biomechanics message types ---
+                            if msg_type == 'rep_complete':
+                                rep_num = message.get('rep_number')
+                                depth = message.get('depth_category', '')
+                                print(f"[BIOMECH] Rep {rep_num} complete — {depth}")
+                            elif msg_type == 'fault':
+                                print(f"[BIOMECH] Fault: {message.get('fault_type')} ({message.get('severity')})")
+                            elif msg_type == 'set_complete':
+                                print(f"[BIOMECH] Set {message.get('set_number')} complete — {message.get('total_reps')} reps")
+                            elif msg_type == 'cache_cues':
+                                cues = message.get('cues', {})
+                                print(f"[BIOMECH] Caching {len(cues)} audio cues for {message.get('exercise_name')}")
+                            elif msg_type == 'play_cue':
+                                print(f"[BIOMECH] Play cue: {message.get('cue')}")
+                            elif msg_type == 'rest_complete':
+                                print("[BIOMECH] Rest timer expired")
+                            elif msg_type == 'pipeline_status':
+                                print(f"[BIOMECH] Pipeline: {message.get('status')}")
+                            # --- Legacy / backward-compatible types ---
+                            elif msg_type == 'rep_count':
                                 value = message.get('value')
                                 print(f"[IPC] Rep count: {value}")
                             elif msg_type == 'feedback':
@@ -373,14 +444,43 @@ class NowvaApp:
                                 value = message.get('value')
                                 print(f"[IPC] Error: {value}")
 
-                        ipc_thread = self.start_ipc_server()
-                        self.ipc_server.message_callback = ipc_message_handler
+                            # Forward coaching-relevant messages to voice agent
+                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data'):
+                                if self.coaching_ipc and self.coaching_ipc.client_socket:
+                                    try:
+                                        self.coaching_ipc.send_message(message)
+                                    except Exception as e:
+                                        print(f"[COACHING IPC] Forward failed: {e}")
+                                else:
+                                    print(f"[COACHING IPC] No voice agent connected — dropping {msg_type}")
+
+                        # Create IPC server directly with the correct handler
+                        # (avoids race condition with start_ipc_server's old handler)
+                        self.ipc_server = IPCServer()
+
+                        def run_server():
+                            self.ipc_server.start(message_callback=ipc_message_handler)
+                            self.ipc_server.listen()
+
+                        ipc_thread = threading.Thread(target=run_server, daemon=True)
+                        ipc_thread.start()
                         await asyncio.sleep(1)
                         print("[IPC] Server ready")
 
-                    self.start_pose_estimation()
+                    if getattr(self, 'simulate_mode', False):
+                        print("[SIMULATE] Skipping real pose estimation — use simulate_squat_workout.py")
+                    else:
+                        # Read exercise name from state (set by voice agent)
+                        exercise_name = self.state.get("workout.exercise_name", "Barbell Back Squat")
+                        if not exercise_name:
+                            session_data = self.state.get("workout.current_session")
+                            if session_data and session_data.get("exercises"):
+                                exercise_name = session_data["exercises"][0].get("exercise_name", "Barbell Back Squat")
+                            else:
+                                exercise_name = "Barbell Back Squat"
+                        self.start_pose_estimation(exercise_name=exercise_name)
                     pose_running = True
-                    print("[POSE] Pose estimation started")
+                    print("[POSE] Pose estimation started" if not getattr(self, 'simulate_mode', False) else "[SIMULATE] IPC servers ready — waiting for simulator")
 
                 elif current_mode != "workout" and pose_running:
                     print("\n" + "="*50)
@@ -389,6 +489,14 @@ class NowvaApp:
                     if self.pose_process:
                         self.pose_process.terminate()
                         self.pose_process.wait()
+                    if self.coaching_ipc:
+                        self.coaching_ipc.stop()
+                        self.coaching_ipc = None
+                        print("[COACHING IPC] Stopped")
+                    if self.ipc_server:
+                        self.ipc_server.stop()
+                        self.ipc_server = None
+                        print("[IPC] Server stopped")
                     pose_running = False
                     print("[POSE] Pose estimation stopped")
 
@@ -420,6 +528,15 @@ class NowvaApp:
             self.pose_process.terminate()
             self.pose_process.wait()
 
+        if self.coaching_ipc:
+            print("Stopping coaching IPC server...")
+            self.coaching_ipc.stop()
+
+        if self.fastapi_process:
+            print("Stopping FastAPI server...")
+            self.fastapi_process.terminate()
+            self.fastapi_process.wait()
+
         if self.ipc_server:
             print("Stopping IPC server...")
             self.ipc_server.stop()
@@ -437,7 +554,14 @@ class NowvaApp:
 
 async def main():
     """Entry point"""
+    import argparse
+    parser = argparse.ArgumentParser(description="Nowva Main Application")
+    parser.add_argument("--simulate", action="store_true",
+                        help="Skip real pose estimation (use simulate_squat_workout.py instead)")
+    args = parser.parse_args()
+
     app = NowvaApp()
+    app.simulate_mode = args.simulate
     await app.run()
 
 

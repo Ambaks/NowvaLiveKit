@@ -12,10 +12,13 @@ from biomechanics.viz.overlay_2d import (
     FPSCounter,
 )
 
+from biomechanics.viz.dashboard import DebugDashboard
+
 __all__ = [
     "draw_skeleton",
     "draw_fps",
     "draw_skeleton_with_fps",
     "draw_keypoint_labels",
     "FPSCounter",
+    "DebugDashboard",
 ]

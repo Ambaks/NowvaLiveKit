@@ -133,6 +133,9 @@ class Exercise(BaseModel):
     rotation_group: str                         # Interchangeable exercises share group
     variation_tags: list[str] = []             # ["incline", "close_grip", "pause"]
 
+    # VBT (Velocity-Based Training)
+    vbt_eligible: bool = False                 # Has measurable bar path for velocity tracking
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LAYER 1 — ATHLETE PROFILE
@@ -171,6 +174,9 @@ class AthleteProfile(BaseModel):
 
     # Emphasis
     weak_points: list[str] = []                 # Muscle group names to prioritize
+
+    # VBT
+    vbt_capability: bool = False               # User has VBT equipment
 
     # Derived (computed by Layer 1)
     effective_goal: str = ""                    # After sport mapping
@@ -223,6 +229,8 @@ class ProgramStrategy(BaseModel):
     emphasis_muscles: list[MuscleGroup] = []
     deemphasis_muscles: list[MuscleGroup] = []
     mesocycle_count: int                        # How many mesocycles in the program
+    vbt_enabled: bool = False
+    vbt_protocol: str = ""                     # "velocity_based" | "load_velocity" | ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +270,10 @@ class PrescribedSet(BaseModel):
     rest_seconds: int
     tempo: Optional[str] = None
     notes: str = ""
+    # VBT fields
+    velocity_target: Optional[float] = None    # Target bar velocity in m/s
+    velocity_min: Optional[float] = None       # Stop set if velocity drops below
+    velocity_max: Optional[float] = None       # Upper bound for velocity
 
 
 class PrescribedExercise(BaseModel):
@@ -275,6 +287,7 @@ class PrescribedExercise(BaseModel):
     superset_group: Optional[str] = None
     order_in_session: int
     rationale: str = ""
+    vbt_eligible: bool = False
 
 
 class BuiltWorkout(BaseModel):

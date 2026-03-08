@@ -6,7 +6,7 @@ and implement the estimate() and estimate_3d() methods.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 
 from biomechanics.utils.types import Skeleton2D, Skeleton3D
@@ -104,6 +104,23 @@ class PoseEstimator(ABC):
             Skeleton3D with 17 keypoints in world coordinates (meters), or None if no person detected
         """
         pass
+
+    def estimate_both(self, frame: np.ndarray) -> Tuple[Optional[Skeleton2D], Optional[Skeleton3D]]:
+        """
+        Estimate both 2D and 3D pose from a single frame.
+
+        Default implementation calls estimate() and estimate_3d() separately.
+        Subclasses may override for efficiency (e.g., MediaPipe single-pass).
+
+        Args:
+            frame: BGR image as numpy array (H, W, 3)
+
+        Returns:
+            Tuple of (Skeleton2D, Skeleton3D), either may be None
+        """
+        skeleton_2d = self.estimate(frame)
+        skeleton_3d = self.estimate_3d(frame)
+        return skeleton_2d, skeleton_3d
 
     def initialize(self) -> bool:
         """

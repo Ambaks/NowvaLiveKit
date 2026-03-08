@@ -1,0 +1,188 @@
+"""
+IPC Bridge for Voice Agent Communication
+
+Translates pipeline events (faults, reps, frames) into throttled,
+deduplicated JSON messages sent over the existing IPC socket.
+Maintains backward compatibility with the legacy rep_count message format.
+"""
+
+import statistics
+import time
+from collections import defaultdict
+from typing import Any, Dict, List, Optional
+
+from biomechanics.coaching.cue_cache import CueCache
+from biomechanics.config import CoachingConfig, IPCConfig
+from biomechanics.utils.types import FaultEvent, PipelineFrame, RepData, depth_category
+
+
+class IPCBridge:
+    """
+    Translates pipeline events into IPC messages for the voice agent.
+
+    Handles cue caching, frame throttling, fault deduplication,
+    rep completion with depth categorization, and set summaries.
+
+    The ipc_client parameter is duck-typed — any object with a
+    ``send_message(dict)`` method works (IPCClient or a mock).
+    """
+
+    def __init__(
+        self,
+        ipc_client: Any,
+        coaching_config: Optional[CoachingConfig] = None,
+        ipc_config: Optional[IPCConfig] = None,
+    ):
+        self.ipc_client = ipc_client
+        ipc_config = ipc_config or IPCConfig()
+        self.cue_cache = CueCache(coaching_config)
+        self.last_fault_send: Dict[str, float] = defaultdict(float)
+        self.fault_cooldown: float = ipc_config.fault_cooldown_seconds
+        self.frame_send_interval: int = ipc_config.frame_send_interval
+        self.frame_counter: int = 0
+
+    # ------------------------------------------------------------------
+    # Exercise preparation
+    # ------------------------------------------------------------------
+
+    def prepare_exercise(self, exercise_name: str) -> Dict[str, str]:
+        """Cache cues for an exercise and notify the voice agent."""
+        cues = self.cue_cache.prepare_for_exercise(exercise_name)
+        self.ipc_client.send_message({
+            "type": "cache_cues",
+            "exercise_name": exercise_name,
+            "cues": cues,
+        })
+        return cues
+
+    # ------------------------------------------------------------------
+    # Frame data (throttled)
+    # ------------------------------------------------------------------
+
+    def send_frame_data(self, frame: PipelineFrame) -> None:
+        """Send frame data every N frames. Skips if no joint angles."""
+        self.frame_counter += 1
+        if self.frame_counter % self.frame_send_interval != 0:
+            return
+        if frame.joint_angles is None:
+            return
+
+        total = frame.total_latency_ms
+        fps = round(1000.0 / total, 1) if total > 0 else 0.0
+
+        self.ipc_client.send_message({
+            "type": "frame_data",
+            "joint_angles": frame.joint_angles.as_dict(),
+            "fps": fps,
+            "frame_index": frame.frame_index,
+        })
+
+    # ------------------------------------------------------------------
+    # Fault events (deduplicated per fault type)
+    # ------------------------------------------------------------------
+
+    def send_fault(self, fault: FaultEvent) -> None:
+        """Send a fault message, rate-limited per fault type."""
+        now = fault.timestamp or time.time()
+
+        if now - self.last_fault_send[fault.fault_type] < self.fault_cooldown:
+            return
+
+        cue_key = self.cue_cache.get_cue_for_fault(fault.fault_type, now)
+
+        self.ipc_client.send_message({
+            "type": "fault",
+            "fault_type": fault.fault_type,
+            "severity": fault.severity.value,
+            "severity_score": fault.severity_score,
+            "message": fault.message,
+            "cue": cue_key,
+            "rep_number": fault.rep_number,
+        })
+
+        self.last_fault_send[fault.fault_type] = now
+
+    # ------------------------------------------------------------------
+    # Rep completion
+    # ------------------------------------------------------------------
+
+    def send_rep_complete(self, rep: RepData) -> None:
+        """Send rep data and legacy rep_count.
+
+        Note: rep count and positive reinforcement cues are now dispatched
+        by the CoachingOrchestrator on the voice agent side based on the
+        rep_complete message data (no more play_cue messages from here).
+        """
+        self.ipc_client.send_message({
+            "type": "rep_complete",
+            "rep_number": rep.rep_number,
+            "max_depth_angle": round(rep.max_depth_angle, 1),
+            "depth_category": self._depth_category(rep.max_depth_angle),
+            "faults_in_rep": [f.fault_type for f in rep.faults],
+            "rep_duration_ms": round(rep.duration * 1000),
+            "is_clean": rep.is_clean,
+        })
+
+        # Backward compatibility
+        self.ipc_client.send_message({
+            "type": "rep_count",
+            "value": rep.rep_number,
+        })
+
+    # ------------------------------------------------------------------
+    # Set completion
+    # ------------------------------------------------------------------
+
+    def send_set_complete(self, set_number: int, reps: List[RepData]) -> None:
+        """Compute set summary stats and send."""
+        if not reps:
+            return
+
+        depths = [r.max_depth_angle for r in reps]
+        avg_depth = statistics.mean(depths)
+        depth_consistency = statistics.stdev(depths) if len(depths) > 1 else 0.0
+
+        # Build per-fault-type summary
+        fault_summary: Dict[str, Dict[str, Any]] = {}
+        for rep in reps:
+            for fault in rep.faults:
+                key = fault.fault_type
+                if key not in fault_summary:
+                    fault_summary[key] = {"count": 0, "total_severity": 0.0}
+                fault_summary[key]["count"] += 1
+                fault_summary[key]["total_severity"] += fault.severity_score
+
+        for data in fault_summary.values():
+            data["avg_severity"] = round(data["total_severity"] / data["count"], 2)
+            data["total_severity"] = round(data["total_severity"], 2)
+
+        self.ipc_client.send_message({
+            "type": "set_complete",
+            "set_number": set_number,
+            "total_reps": len(reps),
+            "avg_depth": round(avg_depth, 1),
+            "depth_consistency": round(depth_consistency, 1),
+            "clean_reps": sum(1 for r in reps if r.is_clean),
+            "fault_summary": fault_summary,
+        })
+
+    # ------------------------------------------------------------------
+    # Pipeline status
+    # ------------------------------------------------------------------
+
+    def send_pipeline_status(self, status: str, latency: Dict[str, float]) -> None:
+        """Broadcast pipeline health status."""
+        self.ipc_client.send_message({
+            "type": "pipeline_status",
+            "status": status,
+            "latency_ms": latency,
+        })
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _depth_category(angle: float) -> str:
+        """Categorize squat depth. Delegates to types.depth_category."""
+        return depth_category(angle)

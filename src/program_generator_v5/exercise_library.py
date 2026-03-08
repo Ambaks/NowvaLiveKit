@@ -45,6 +45,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Knees caving inward', 'Excessive forward lean', 'Rising on toes at bottom'],
         rotation_group="squat_glutes_quads_heavy_compound",
         variation_tags=[],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_front_squat",
@@ -75,6 +76,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbows dropping during ascent', 'Excessive forward lean', 'Wrist flexibility limiting rack position'],
         rotation_group="squat_glutes_quads_heavy_compound",
         variation_tags=['front_loaded'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_conventional_deadlift",
@@ -107,6 +109,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Bar drifting away from body', 'Hyperextending at lockout'],
         rotation_group="hip_hinge_glutes_hamstrings_heavy_compound",
         variation_tags=[],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_sumo_deadlift",
@@ -139,6 +142,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Knees caving inward', 'Hips shooting up first', 'Losing upper back tightness'],
         rotation_group="hip_hinge_glutes_quads_heavy_compound",
         variation_tags=['sumo'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_romanian_deadlift",
@@ -169,6 +173,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Bending knees too much', 'Not hinging enough at hips'],
         rotation_group="hip_hinge_glutes_hamstrings_light_compound",
         variation_tags=['stretch', 'stretch'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_bench_press",
@@ -198,6 +203,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Flaring elbows to 90 degrees', 'Bouncing bar off chest', 'Losing shoulder blade position'],
         rotation_group="horizontal_push_chest_heavy_compound",
         variation_tags=[],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_incline_bench_press",
@@ -226,6 +232,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bench angle too steep', 'Flaring elbows excessively', 'Lifting hips off bench'],
         rotation_group="horizontal_push_chest_front_delts_heavy_compound",
         variation_tags=['incline', 'stretch'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_overhead_press",
@@ -256,6 +263,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Excessive low back arch', 'Pressing bar forward not up', 'Not achieving full lockout'],
         rotation_group="vertical_push_front_delts_side_delts_heavy_compound",
         variation_tags=['overhead'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_push_press",
@@ -287,6 +295,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Dipping too deep', 'Pressing before leg drive finishes', 'Leaning back excessively'],
         rotation_group="power_upper_front_delts_side_delts_power",
         variation_tags=[],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_bent_over_row",
@@ -378,6 +387,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hyperextending lower back at top', 'Pushing through toes', 'Not achieving full hip extension'],
         rotation_group="hip_hinge_glutes_heavy_compound",
         variation_tags=[],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_good_morning",
@@ -520,6 +530,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Grip too narrow causing wrist strain', 'Flaring elbows out', 'Not locking out fully'],
         rotation_group="horizontal_push_chest_triceps_light_compound",
         variation_tags=['close_grip'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_floor_press",
@@ -548,6 +559,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bouncing arms off floor', 'Losing shoulder position', 'Inconsistent pause at bottom'],
         rotation_group="horizontal_push_chest_triceps_light_compound",
         variation_tags=[],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_curl",
@@ -3940,6 +3952,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling early with arms', 'Not finishing hip extension', 'Rounding back'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'pull'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_hang_high_pull",
@@ -3971,6 +3984,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling with arms first', 'Not using hips', 'Not getting elbows high'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'hang', 'pull'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_hang_power_clean",
@@ -4002,6 +4016,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling with arms instead of hips', 'Catching too deep', 'Landing on toes'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'hang', 'catch'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_hang_clean",
@@ -4033,6 +4048,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling with arms instead of hips', 'Not getting under the bar', 'Landing on toes'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'hang'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="barbell_power_clean",
@@ -4065,6 +4081,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling early with arms', 'Rounding back off floor', 'Not catching properly'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'from_floor'],
+        vbt_eligible=True,
     ),
     Exercise(
         id="dumbbell_snatch",

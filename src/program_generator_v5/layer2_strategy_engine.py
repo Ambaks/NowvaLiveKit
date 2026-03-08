@@ -138,6 +138,17 @@ def build_strategy(
                         training_goal=effective_goal,
                     )
 
+    # ── Step 7: VBT protocol selection ───────────────────────────────────────
+    vbt_enabled = profile.vbt_capability
+    vbt_protocol = ""
+    if vbt_enabled:
+        if effective_goal == "power":
+            vbt_protocol = "velocity_based"     # Primary metric = bar speed
+        elif effective_goal == "strength":
+            vbt_protocol = "load_velocity"      # Primary = load, velocity for autoregulation
+        else:  # hypertrophy
+            vbt_protocol = "load_velocity"      # Velocity for fatigue monitoring
+
     return ProgramStrategy(
         split=split,
         week_profiles=week_profiles,
@@ -146,6 +157,8 @@ def build_strategy(
         emphasis_muscles=emphasis_muscles,
         deemphasis_muscles=deemphasis_muscles,
         mesocycle_count=num_mesocycles,
+        vbt_enabled=vbt_enabled,
+        vbt_protocol=vbt_protocol,
     )
 
 

@@ -117,6 +117,10 @@ models/*.h5
 models/*.pkl
 checkpoints/
 *.ckpt
+src/biomechanics/pose/models/
+
+# Training data
+data/
 
 # User data (ensure no sensitive data is committed)
 user_data/

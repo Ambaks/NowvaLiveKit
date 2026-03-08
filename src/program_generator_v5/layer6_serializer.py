@@ -93,6 +93,8 @@ def serialize_to_v3(
             "split_name": program.strategy.split.name,
             "periodization_model": program.strategy.periodization_model,
             "mesocycle_count": program.strategy.mesocycle_count,
+            "vbt_enabled": program.strategy.vbt_enabled,
+            "vbt_protocol": program.strategy.vbt_protocol,
         },
 
         # ── Stats ─────────────────────────────────────────────────────────────
@@ -204,6 +206,7 @@ def _serialize_exercise(exercise: PrescribedExercise) -> dict:
         "superset_group": exercise.superset_group,
         "muscle_contributions": exercise.muscle_contributions,
         "rationale": exercise.rationale,
+        "vbt_eligible": exercise.vbt_eligible,
         "sets": [_serialize_set(s) for s in exercise.sets],
         # Compact set notation for display
         "set_notation": _build_set_notation(exercise),
@@ -212,7 +215,7 @@ def _serialize_exercise(exercise: PrescribedExercise) -> dict:
 
 def _serialize_set(set_obj: PrescribedSet) -> dict:
     """Serialize a single set."""
-    return {
+    result = {
         "set_number": set_obj.set_number,
         "reps": set_obj.reps,
         "rpe": set_obj.rpe,
@@ -222,6 +225,12 @@ def _serialize_set(set_obj: PrescribedSet) -> dict:
         "tempo": set_obj.tempo,
         "notes": set_obj.notes,
     }
+    # Include VBT fields when present
+    if set_obj.velocity_target is not None:
+        result["velocity_target"] = set_obj.velocity_target
+        result["velocity_min"] = set_obj.velocity_min
+        result["velocity_max"] = set_obj.velocity_max
+    return result
 
 
 def _build_set_notation(exercise: PrescribedExercise) -> str:
@@ -257,6 +266,10 @@ def _build_set_notation(exercise: PrescribedExercise) -> str:
     # Add rest if notable
     if first_set.rest_seconds and first_set.rest_seconds >= 120:
         notation += f", rest {first_set.rest_seconds}s"
+
+    # Add velocity target if present
+    if first_set.velocity_target is not None:
+        notation += f", {first_set.velocity_target} m/s target"
 
     # Add tempo if present
     if first_set.tempo:

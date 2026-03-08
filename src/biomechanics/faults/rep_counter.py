@@ -1,12 +1,18 @@
 """
-Rep Counter with State Machine
+Rep Counter with Robust Phase Detection
 
-Tracks rep boundaries using hip flexion angle transitions.
-Uses IDLE/IN_REP state machine with minimum duration filtering.
+Tracks rep boundaries using knee angle position and velocity.
+Uses 4-state machine: IDLE → DESCENDING → BOTTOM → ASCENDING
+
+Key robustness features:
+- Uses knee angle as primary signal (more stable than hip)
+- Velocity sign determines direction with hysteresis
+- Minimum dwell time in each state prevents noise-induced flipping
+- Angle-based bottom detection (max knee flexion) with velocity confirmation
 """
 
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from dataclasses import dataclass, field
 import time
 
@@ -15,32 +21,61 @@ from biomechanics.utils.types import JointAngles, FaultEvent, RepData
 
 class RepState(str, Enum):
     """State machine states for rep detection."""
-    IDLE = "idle"       # Standing, not in a rep
-    IN_REP = "in_rep"   # Currently performing a rep
+    IDLE = "idle"              # Standing, not in a rep
+    DESCENDING = "descending"  # Moving down (positive velocity, angle increasing)
+    BOTTOM = "bottom"          # At bottom, velocity near zero or reversing
+    ASCENDING = "ascending"    # Moving up (negative velocity, angle decreasing)
 
 
 @dataclass
 class RepCounterConfig:
     """Configuration for rep detection."""
-    entry_threshold: float = 30.0       # Hip flexion angle to enter rep (degrees)
-    exit_threshold: float = 25.0        # Hip flexion angle to exit rep (degrees)
-    min_rep_duration_frames: int = 20   # Minimum frames for valid rep
-    use_knee_flexion: bool = False      # If True, use knee flexion instead of hip
+    # Angle thresholds (degrees)
+    entry_knee_angle: float = 30.0      # Knee flexion to start tracking rep
+    exit_knee_angle: float = 25.0       # Knee flexion to complete rep (hysteresis)
+    min_depth_knee_angle: float = 95.0  # Knee must reach this for valid rep
+
+    # Hip-based entry (backup)
+    entry_hip_angle: float = 20.0       # Hip flexion threshold for entry
+    exit_hip_angle: float = 18.0        # Hip flexion threshold for exit
+
+    # Velocity thresholds (deg/sec)
+    # Positive = descending (angle increasing), Negative = ascending (angle decreasing)
+    descending_velocity: float = 10.0   # Min velocity to confirm descending
+    ascending_velocity: float = -10.0   # Max velocity to confirm ascending (negative)
+    stopped_velocity: float = 8.0       # Abs velocity below this = stopped
+
+    # Minimum frames in each state (prevents noise flipping)
+    min_frames_descending: int = 2      # ~66ms at 30fps
+    min_frames_bottom: int = 2          # ~66ms at 30fps
+    min_frames_ascending: int = 2       # ~66ms at 30fps
+
+    # Rep validation
+    min_rep_duration_frames: int = 15   # ~0.5 sec at 30fps
+
+    # Bottom detection
+    bottom_angle_tolerance: float = 5.0  # Degrees from max to consider "at bottom"
 
 
 class RepCounter:
     """
-    Counts reps using a state machine based on hip/knee flexion.
+    Counts reps using a 4-state machine with robust phase detection.
 
     State transitions:
-    - IDLE -> IN_REP: When avg hip flexion crosses entry_threshold (descending)
-    - IN_REP -> IDLE: When avg hip flexion drops below exit_threshold (ascending)
-                      AND minimum rep duration has elapsed
+    - IDLE -> DESCENDING:
+        * knee_angle > entry_threshold AND velocity > descending_velocity
 
-    On rep completion, returns RepData with:
-    - max_depth_angle: Maximum knee flexion achieved during rep
-    - faults: List of faults detected during rep
-    - timing data
+    - DESCENDING -> BOTTOM:
+        * velocity drops below stopped_velocity (direction reversal)
+        * OR knee_angle within tolerance of max depth AND velocity < descending_velocity
+
+    - BOTTOM -> ASCENDING:
+        * velocity < ascending_velocity (moving up)
+        * AND minimum dwell time in BOTTOM
+
+    - ASCENDING -> IDLE:
+        * knee_angle < exit_threshold
+        * Validates: depth requirement, minimum duration
     """
 
     def __init__(self, config: Optional[RepCounterConfig] = None):
@@ -56,6 +91,10 @@ class RepCounter:
         self._min_depth_angle: float = 180.0
         self._current_faults: List[FaultEvent] = []
 
+        # State dwell tracking
+        self._frames_in_state: int = 0
+        self._prev_state: RepState = RepState.IDLE
+
         # For timing analysis
         self._bottom_frame: int = 0
         self._bottom_time: float = 0.0
@@ -65,11 +104,17 @@ class RepCounter:
         self._hip_asymmetry_sum: float = 0.0
         self._angle_samples: int = 0
 
+        # Velocity history for smoothing state decisions
+        self._velocity_history: List[float] = []
+        self._velocity_window: int = 3  # frames
+
     def reset(self) -> None:
         """Reset the counter to initial state."""
         self.state = RepState.IDLE
         self.rep_count = 0
         self._reset_rep_tracking()
+        self._frames_in_state = 0
+        self._velocity_history.clear()
 
     def _reset_rep_tracking(self) -> None:
         """Reset tracking variables for a new rep."""
@@ -85,94 +130,205 @@ class RepCounter:
         self._hip_asymmetry_sum = 0.0
         self._angle_samples = 0
 
-    def _get_flexion_angle(self, angles: JointAngles) -> float:
-        """Get the primary flexion angle for rep detection."""
-        if self.config.use_knee_flexion:
-            return angles.avg_knee_flexion
-        else:
-            return (angles.hip_flexion_l + angles.hip_flexion_r) / 2
+    def _get_hip_flexion(self, angles: JointAngles) -> float:
+        """Get average hip flexion angle."""
+        return (angles.hip_flexion_l + angles.hip_flexion_r) / 2
+
+    def _get_smoothed_velocity(self, velocity: float) -> float:
+        """Get smoothed velocity using short history."""
+        self._velocity_history.append(velocity)
+        if len(self._velocity_history) > self._velocity_window:
+            self._velocity_history.pop(0)
+        return sum(self._velocity_history) / len(self._velocity_history)
 
     @property
     def in_rep(self) -> bool:
-        """Return True if currently in a rep."""
-        return self.state == RepState.IN_REP
+        """Return True if currently in a rep (any active state)."""
+        return self.state in (RepState.DESCENDING, RepState.BOTTOM, RepState.ASCENDING)
+
+    @property
+    def phase(self) -> str:
+        """Return current phase name."""
+        return self.state.value
 
     def add_fault(self, fault: FaultEvent) -> None:
         """Add a fault to the current rep's fault list."""
         self._current_faults.append(fault)
 
+    def _start_rep(self, angles: JointAngles) -> None:
+        """Initialize tracking for a new rep."""
+        current_time = angles.timestamp if angles.timestamp is not None else time.time()
+        knee_flexion = angles.avg_knee_flexion
+
+        self._rep_start_time = current_time
+        self._rep_start_frame = angles.frame_index
+        self._frames_in_rep = 1
+        self._max_depth_angle = knee_flexion
+        self._min_depth_angle = knee_flexion
+        self._knee_asymmetry_sum = angles.knee_asymmetry
+        self._hip_asymmetry_sum = angles.hip_asymmetry
+        self._angle_samples = 1
+
+    def _track_depth(self, angles: JointAngles) -> None:
+        """Track depth and asymmetry during rep."""
+        knee_flexion = angles.avg_knee_flexion
+        current_time = angles.timestamp if angles.timestamp is not None else time.time()
+
+        self._frames_in_rep += 1
+
+        if knee_flexion > self._max_depth_angle:
+            self._max_depth_angle = knee_flexion
+            self._bottom_frame = angles.frame_index
+            self._bottom_time = current_time
+
+        if knee_flexion < self._min_depth_angle:
+            self._min_depth_angle = knee_flexion
+
+        self._knee_asymmetry_sum += angles.knee_asymmetry
+        self._hip_asymmetry_sum += angles.hip_asymmetry
+        self._angle_samples += 1
+
+    def _change_state(self, new_state: RepState) -> None:
+        """Change state and reset dwell counter."""
+        self._prev_state = self.state
+        self.state = new_state
+        self._frames_in_state = 0
+
     def update(
+        self,
+        angles: JointAngles,
+        derivatives=None,
+        faults: Optional[List[FaultEvent]] = None,
+    ) -> Tuple[Optional[RepData], Optional[str]]:
+        """
+        Update rep counter with new joint angles and derivatives.
+
+        Args:
+            angles: Current frame's joint angles
+            derivatives: AngleDerivatives with velocity/acceleration (optional)
+            faults: List of faults detected this frame (optional)
+
+        Returns:
+            Tuple of (RepData if rep completed, feedback message if any)
+            feedback can be: "go_deeper" if rep didn't hit depth
+        """
+        if faults:
+            self._current_faults.extend(faults)
+
+        knee_angle = angles.avg_knee_flexion
+        hip_angle = self._get_hip_flexion(angles)
+
+        # Get velocity (default to position-based if no derivatives)
+        if derivatives is not None:
+            raw_velocity = derivatives.avg_knee_velocity
+            velocity = self._get_smoothed_velocity(raw_velocity)
+        else:
+            velocity = 0.0
+
+        # Track state dwell time
+        self._frames_in_state += 1
+
+        completed_rep: Optional[RepData] = None
+        feedback: Optional[str] = None
+
+        # ===== STATE MACHINE =====
+
+        if self.state == RepState.IDLE:
+            # Entry condition: knee angle above threshold AND moving down (positive velocity)
+            # Or fallback: hip angle threshold if no derivatives
+            entry_by_position = knee_angle >= self.config.entry_knee_angle
+            entry_by_hip = hip_angle >= self.config.entry_hip_angle
+
+            if derivatives is not None:
+                # With derivatives: require positive velocity (descending)
+                descending = velocity > self.config.descending_velocity
+                if (entry_by_position or entry_by_hip) and descending:
+                    self._change_state(RepState.DESCENDING)
+                    self._start_rep(angles)
+            else:
+                # Without derivatives: use position only
+                if entry_by_position or entry_by_hip:
+                    self._change_state(RepState.DESCENDING)
+                    self._start_rep(angles)
+
+        elif self.state == RepState.DESCENDING:
+            self._track_depth(angles)
+
+            # Transition to BOTTOM when:
+            # 1. Velocity drops (no longer descending fast)
+            # 2. AND we've been descending for minimum frames
+            if derivatives is not None:
+                stopped = abs(velocity) < self.config.stopped_velocity
+                reversing = velocity < 0  # Starting to go back up
+                at_depth = knee_angle >= (self._max_depth_angle - self.config.bottom_angle_tolerance)
+
+                if self._frames_in_state >= self.config.min_frames_descending:
+                    if stopped or (reversing and at_depth):
+                        self._change_state(RepState.BOTTOM)
+                        self._bottom_time = angles.timestamp if angles.timestamp is not None else time.time()
+            else:
+                # Without derivatives: position-based - angle started decreasing
+                if knee_angle < self._max_depth_angle - self.config.bottom_angle_tolerance:
+                    self._change_state(RepState.ASCENDING)
+
+        elif self.state == RepState.BOTTOM:
+            self._track_depth(angles)
+
+            # Transition to ASCENDING when velocity becomes clearly negative
+            if derivatives is not None:
+                ascending = velocity < self.config.ascending_velocity
+
+                if self._frames_in_state >= self.config.min_frames_bottom:
+                    if ascending:
+                        self._change_state(RepState.ASCENDING)
+            else:
+                # Without derivatives: immediate transition
+                self._change_state(RepState.ASCENDING)
+
+        elif self.state == RepState.ASCENDING:
+            self._track_depth(angles)
+
+            # Rep completion: knee angle drops below exit threshold
+            exit_condition = knee_angle < self.config.exit_knee_angle
+
+            # Also check hip angle as backup
+            exit_by_hip = hip_angle < self.config.exit_hip_angle
+
+            if self._frames_in_state >= self.config.min_frames_ascending:
+                if exit_condition or exit_by_hip:
+                    # Validate rep
+                    if self._frames_in_rep >= self.config.min_rep_duration_frames:
+                        if self._max_depth_angle >= self.config.min_depth_knee_angle:
+                            self.rep_count += 1
+                            completed_rep = self._create_rep_data(angles)
+                        else:
+                            feedback = "go_deeper"
+
+                    self._change_state(RepState.IDLE)
+                    self._reset_rep_tracking()
+                    self._velocity_history.clear()
+
+        return completed_rep, feedback
+
+    def update_legacy(
         self,
         angles: JointAngles,
         faults: Optional[List[FaultEvent]] = None,
     ) -> Optional[RepData]:
         """
-        Update rep counter with new joint angles.
-
-        Args:
-            angles: Current frame's joint angles
-            faults: List of faults detected this frame (optional)
-
-        Returns:
-            RepData if a rep just completed, None otherwise
+        Legacy update method for backward compatibility.
+        Uses simple threshold-based detection without derivatives.
         """
-        if faults:
-            self._current_faults.extend(faults)
-
-        flexion = self._get_flexion_angle(angles)
-        knee_flexion = angles.avg_knee_flexion
-        completed_rep: Optional[RepData] = None
-
-        if self.state == RepState.IDLE:
-            # Check for rep entry (flexion increasing above threshold)
-            if flexion >= self.config.entry_threshold:
-                self.state = RepState.IN_REP
-                self._rep_start_time = angles.timestamp if angles.timestamp is not None else time.time()
-                self._rep_start_frame = angles.frame_index
-                self._frames_in_rep = 1
-                self._max_depth_angle = knee_flexion
-                self._min_depth_angle = knee_flexion
-                self._knee_asymmetry_sum = angles.knee_asymmetry
-                self._hip_asymmetry_sum = angles.hip_asymmetry
-                self._angle_samples = 1
-
-        elif self.state == RepState.IN_REP:
-            self._frames_in_rep += 1
-
-            # Track depth
-            if knee_flexion > self._max_depth_angle:
-                self._max_depth_angle = knee_flexion
-                self._bottom_frame = angles.frame_index
-                self._bottom_time = angles.timestamp if angles.timestamp is not None else time.time()
-
-            if knee_flexion < self._min_depth_angle:
-                self._min_depth_angle = knee_flexion
-
-            # Track asymmetry
-            self._knee_asymmetry_sum += angles.knee_asymmetry
-            self._hip_asymmetry_sum += angles.hip_asymmetry
-            self._angle_samples += 1
-
-            # Check for rep exit (flexion dropping below threshold)
-            if flexion < self.config.exit_threshold:
-                # Only count if minimum duration met
-                if self._frames_in_rep >= self.config.min_rep_duration_frames:
-                    self.rep_count += 1
-                    completed_rep = self._create_rep_data(angles)
-
-                # Reset regardless
-                self.state = RepState.IDLE
-                self._reset_rep_tracking()
-
-        return completed_rep
+        rep_data, _ = self.update(angles, derivatives=None, faults=faults)
+        return rep_data
 
     def _create_rep_data(self, angles: JointAngles) -> RepData:
         """Create RepData for a completed rep."""
         end_time = angles.timestamp if angles.timestamp is not None else time.time()
 
         # Calculate descent and ascent times
-        descent_time = self._bottom_time - self._rep_start_time
-        ascent_time = end_time - self._bottom_time
+        descent_time = self._bottom_time - self._rep_start_time if self._bottom_time > 0 else 0
+        ascent_time = end_time - self._bottom_time if self._bottom_time > 0 else 0
 
         # Calculate average asymmetry
         avg_knee_asym = (

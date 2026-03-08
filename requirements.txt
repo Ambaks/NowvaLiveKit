@@ -2,11 +2,11 @@
 # Python 3.11.2 recommended
 
 # =============================================================================
-# VOICE AGENT - GPT-4 Realtime API
+# VOICE AGENT - OpenAI Realtime API
 # =============================================================================
-livekit>=0.17.0
-livekit-agents>=0.10.0
-livekit-plugins-openai>=0.7.0          # GPT-4 Realtime API (handles STT+LLM+TTS)
+livekit>=1.0.0
+livekit-agents>=1.4.0
+livekit-plugins-openai>=1.4.0          # OpenAI Realtime API (handles STT+LLM+TTS)
 
 # Note: These are no longer needed with Realtime API:
 # - livekit-plugins-deepgram (STT handled by Realtime)
