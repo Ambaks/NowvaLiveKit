@@ -64,11 +64,16 @@ DEFAULT_CUES: Dict[str, str] = _build_cues(
 EXERCISE_CUE_MAP: Dict[str, Dict[str, str]] = {
     "squat": SQUAT_CUES,
     "back_squat": SQUAT_CUES,
+    "barbell_back_squat": SQUAT_CUES,
+    "barbell_front_squat": SQUAT_CUES,
     "front_squat": SQUAT_CUES,
     "goblet_squat": SQUAT_CUES,
+    "bodyweight_squat": SQUAT_CUES,
     "deadlift": DEADLIFT_CUES,
     "romanian_deadlift": DEADLIFT_CUES,
     "sumo_deadlift": DEADLIFT_CUES,
+    "barbell_deadlift": DEADLIFT_CUES,
+    "barbell_romanian_deadlift": DEADLIFT_CUES,
 }
 
 FAULT_TO_CUE_MAP: Dict[str, str] = {
@@ -114,7 +119,15 @@ class CueCache:
         """
         normalized = exercise_name.lower().replace(" ", "_")
         self.current_exercise = normalized
-        self.cues = dict(EXERCISE_CUE_MAP.get(normalized, DEFAULT_CUES))
+
+        # Exact match first, then substring match (e.g. "barbell_back_squat" contains "squat")
+        cues = EXERCISE_CUE_MAP.get(normalized)
+        if cues is None:
+            for key, value in EXERCISE_CUE_MAP.items():
+                if key in normalized:
+                    cues = value
+                    break
+        self.cues = dict(cues or DEFAULT_CUES)
         self.last_cue_time = 0.0
         return dict(self.cues)
 

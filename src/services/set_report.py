@@ -41,6 +41,7 @@ def generate_set_report(
         return None
 
     try:
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt

@@ -7,6 +7,7 @@ Wires all processing layers into a single pipeline:
 Returns a PipelineFrame per iteration with per-layer timing.
 """
 
+import os
 import time
 from typing import Optional
 
@@ -20,6 +21,10 @@ from biomechanics.faults import RuleEngine, RepCounter, RepCounterConfig
 from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, DEPTH_CLASS_NAMES
 from biomechanics.utils.filters import JointAngleFilter
 from biomechanics.utils.derivatives import DerivativeTracker
+from biomechanics.utils.confidence_blend import ConfidenceBlender
+from biomechanics.utils.velocity_clamp import VelocityClamp
+from biomechanics.utils.bone_constraints import BoneLengthConstraints
+from biomechanics.utils.predictive_state import PredictiveStateEstimator
 
 
 class BiomechanicsPipeline:
@@ -34,6 +39,9 @@ class BiomechanicsPipeline:
     def __init__(self, config: Optional[BiomechanicsConfig] = None):
         self.config = config or BiomechanicsConfig()
         self._frame_index = 0
+
+        # Optional pre-IK filtering (off by default, enable via .env)
+        self._preik_enabled = os.getenv("ENABLE_PREIK_FILTERS", "false").lower() == "true"
 
         # Layer 1: Capture
         self._cap = cv2.VideoCapture(self.config.capture.device_id)
@@ -69,6 +77,30 @@ class BiomechanicsPipeline:
 
         # Derivative computation
         self._derivative_tracker = DerivativeTracker(smoothing_alpha=0.3)
+
+        # Pre-IK skeleton filtering (only initialised when enabled)
+        self._confidence_blender = None
+        self._velocity_clamp = None
+        self._bone_constraints = None
+        self._predictive_estimator = None
+
+        if self._preik_enabled:
+            self._confidence_blender = ConfidenceBlender(
+                min_confidence=self.config.confidence_blend.min_confidence,
+                max_confidence=self.config.confidence_blend.max_confidence,
+            )
+            self._velocity_clamp = VelocityClamp(
+                max_velocity_m_per_s=self.config.velocity_clamp.max_velocity_m_per_s,
+                target_fps=self.config.pipeline.target_fps,
+            )
+            self._bone_constraints = BoneLengthConstraints(
+                calibration_frames=self.config.bone_constraints.calibration_frames,
+                tolerance=self.config.bone_constraints.tolerance,
+            )
+            self._predictive_estimator = PredictiveStateEstimator(
+                horizon_seconds=self.config.predictive_state.horizon_seconds,
+                max_extrapolation_deg=self.config.predictive_state.max_extrapolation_deg,
+            )
 
         # Layer 4: Fault detection
         self._rule_engine = RuleEngine()
@@ -168,6 +200,14 @@ class BiomechanicsPipeline:
             bilstm_class_probs = self._bilstm.current_class_probabilities.tolist()
             latency_ms["bilstm"] = (time.perf_counter() - t0) * 1000.0
 
+        # --- Pre-IK filtering layers (optional) ---
+        if self._preik_enabled:
+            t0 = time.perf_counter()
+            skeleton_3d = self._confidence_blender.blend(skeleton_3d)
+            skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
+            skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+            latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
+
         # --- IK solve ---
         t0 = time.perf_counter()
         raw_angles = self._ik_solver.solve(skeleton_3d)
@@ -181,17 +221,30 @@ class BiomechanicsPipeline:
 
         # --- Fault detection + rep counting ---
         t0 = time.perf_counter()
+
+        # Use predicted angles for fault evaluation when pre-IK filters are on,
+        # otherwise use actual angles directly.
+        if self._preik_enabled:
+            eval_angles = self._predictive_estimator.predict(angles, derivatives)
+        else:
+            eval_angles = angles
+
         faults = self._rule_engine.evaluate(
-            angles,
+            eval_angles,
             in_rep=self._rep_counter.in_rep,
             rep_number=self._rep_counter.rep_count + 1,
         )
 
-        # Track peak angles during reps for baseline calibration
+        # Calibration uses ACTUAL angles
         if not self._rule_engine.calibrated and self._rep_counter.in_rep:
             self._rule_engine.record_frame_for_calibration(angles)
 
+        # Rep counter uses ACTUAL angles
         rep_data, feedback = self._rep_counter.update(angles, derivatives, faults)
+
+        # Phase-aware smoothing only when pre-IK filters are active
+        if self._preik_enabled:
+            self._angle_filter.update_phase(self._rep_counter.phase)
 
         # If rep completed, check depth faults and advance calibration
         if rep_data is not None:
@@ -208,6 +261,28 @@ class BiomechanicsPipeline:
         # Use BiLSTM rep data as primary when enabled and available
         final_rep_data = rep_data
         if self._bilstm is not None and bilstm_rep_data is not None:
+            # Enrich BiLSTM RepData with rule-based metrics so downstream
+            # consumers (IPC bridge, coaching LLM, set reports) get real
+            # angle data, faults, timing, and asymmetry values.
+            metrics = self._rep_counter.snapshot_rep_metrics()
+            bilstm_rep_data.max_depth_angle = metrics["max_depth_angle"]
+            bilstm_rep_data.min_depth_angle = metrics["min_depth_angle"]
+            bilstm_rep_data.descent_time = metrics["descent_time"]
+            bilstm_rep_data.ascent_time = metrics["ascent_time"]
+            bilstm_rep_data.faults = metrics["faults"]
+            bilstm_rep_data.avg_knee_asymmetry = metrics["avg_knee_asymmetry"]
+            bilstm_rep_data.avg_hip_asymmetry = metrics["avg_hip_asymmetry"]
+            self._rep_counter.clear_current_faults()
+
+            # Evaluate depth faults for BiLSTM reps (rule-based only runs
+            # this when its own counter fires, which may not align)
+            depth_faults = self._rule_engine.evaluate_rep_complete(
+                bilstm_rep_data.max_depth_angle, angles, bilstm_rep_data.rep_number
+            )
+            faults.extend(depth_faults)
+            bilstm_rep_data.faults.extend(depth_faults)
+            self._rule_engine.on_rep_complete_calibration(is_clean=bilstm_rep_data.is_clean)
+
             final_rep_data = bilstm_rep_data
 
         return PipelineFrame(

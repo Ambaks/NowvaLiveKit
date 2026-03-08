@@ -119,6 +119,30 @@ class IPCConfig(BaseModel):
     fault_cooldown_seconds: float = 3.0
 
 
+class VelocityClampConfig(BaseModel):
+    """Velocity clamping configuration."""
+    max_velocity_m_per_s: float = 2.5
+    target_fps: int = 30
+
+
+class BoneConstraintsConfig(BaseModel):
+    """Bone length constraint configuration."""
+    calibration_frames: int = 30
+    tolerance: float = 0.15
+
+
+class ConfidenceBlendConfig(BaseModel):
+    """Confidence-weighted blending configuration."""
+    min_confidence: float = 0.1
+    max_confidence: float = 0.9
+
+
+class PredictiveStateConfig(BaseModel):
+    """Predictive fault pre-cueing configuration."""
+    horizon_seconds: float = 0.2
+    max_extrapolation_deg: float = 15.0
+
+
 # =============================================================================
 # FULL CONFIGURATION
 # =============================================================================
@@ -135,6 +159,10 @@ class BiomechanicsConfig(BaseModel):
     coaching: CoachingConfig = Field(default_factory=CoachingConfig)
     ipc: IPCConfig = Field(default_factory=IPCConfig)
     bilstm: BiLSTMConfig = Field(default_factory=BiLSTMConfig)
+    velocity_clamp: VelocityClampConfig = Field(default_factory=VelocityClampConfig)
+    bone_constraints: BoneConstraintsConfig = Field(default_factory=BoneConstraintsConfig)
+    confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
+    predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
 
     # Convenience properties
     @property
@@ -240,6 +268,18 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "bilstm" in raw_config:
         config_dict["bilstm"] = BiLSTMConfig(**raw_config["bilstm"])
+
+    if "velocity_clamp" in raw_config:
+        config_dict["velocity_clamp"] = VelocityClampConfig(**raw_config["velocity_clamp"])
+
+    if "bone_constraints" in raw_config:
+        config_dict["bone_constraints"] = BoneConstraintsConfig(**raw_config["bone_constraints"])
+
+    if "confidence_blend" in raw_config:
+        config_dict["confidence_blend"] = ConfidenceBlendConfig(**raw_config["confidence_blend"])
+
+    if "predictive_state" in raw_config:
+        config_dict["predictive_state"] = PredictiveStateConfig(**raw_config["predictive_state"])
 
     return BiomechanicsConfig(**config_dict)
 

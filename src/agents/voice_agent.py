@@ -8,7 +8,6 @@ import logging
 import os
 import re
 import sys
-import threading
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -75,15 +74,16 @@ class NovaVoiceAgent(Agent):
         self._summary_count: int = 0
         self._openai_client = None  # Lazy-initialized singleton for summarization
 
-        # Coaching audio cue system
-        self.audio_cue_service = None  # Lazy-initialized AudioCueService
-        self._coaching_ipc = None  # IPCClient for receiving coaching messages from main.py
-        self._coaching_listener_running = False
-        self._room = None  # Set from entrypoint for audio publishing
-        self._audio_source = None  # Reusable LiveKit AudioSource for cached cue playback
-        self._audio_track_published = False
-        self._event_loop = None  # Reference to the event loop for thread-to-async bridging
-        self._coaching_orchestrator = None  # CoachingOrchestrator for priority-based dispatch
+        # Coaching service (standalone, owns IPC/orchestrator/audio)
+        self._coaching_service = None
+        self._room = None  # Set from entrypoint
+
+        # Wake word system (workout mode)
+        self._wake_word_active: bool = False
+        self._wake_word_listening: bool = False  # True after wake word detected, waiting for command
+        self._wake_word_timeout_task: Optional[asyncio.Task] = None
+        self._wake_word_phrases: list[str] = ["hey nova", "hey, nova", "a nova"]
+        self._wake_word_timeout_seconds: float = 5.0
 
         # Get initial instructions based on mode
         instructions = self._get_instructions_for_mode()
@@ -214,6 +214,234 @@ class NovaVoiceAgent(Agent):
             await self.session.generate_reply(
                 instructions=f"Start the workout mode. Say something like: 'Alright {name}, let's do this! I'm tracking your form and counting reps. When you're ready, step up to the rack.'"
             )
+
+    # ===== WAKE WORD SYSTEM (WORKOUT MODE) =====
+
+    def _set_workout_turn_detection(self):
+        """Switch to workout mode: suppress auto-responses and interruptions."""
+        try:
+            llm = self.session.llm
+            logger.info(f"[WAKE WORD] session.llm type: {type(llm).__name__}")
+            llm.update_options(
+                turn_detection=TurnDetection(
+                    type="semantic_vad",
+                    eagerness="low",
+                    create_response=False,
+                    interrupt_response=False,
+                )
+            )
+            logger.info("[WAKE WORD] Turn detection set to workout mode (create_response=False, interrupt_response=False)")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to set workout turn detection: {e}", exc_info=True)
+
+    def _set_conversational_turn_detection(self):
+        """Restore normal conversational turn detection (non-workout modes)."""
+        try:
+            self.session.llm.update_options(
+                turn_detection=TurnDetection(
+                    type="semantic_vad",
+                    eagerness="low",
+                    create_response=True,
+                    interrupt_response=True,
+                )
+            )
+            logger.info("[WAKE WORD] Turn detection restored to conversational mode")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to set conversational turn detection: {e}", exc_info=True)
+
+    def _set_active_listening_turn_detection(self):
+        """Temporarily enable responses after wake word detection."""
+        try:
+            self.session.llm.update_options(
+                turn_detection=TurnDetection(
+                    type="semantic_vad",
+                    eagerness="low",
+                    create_response=True,
+                    interrupt_response=True,
+                )
+            )
+            logger.info("[WAKE WORD] Turn detection set to active listening (temporary)")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to set active listening turn detection: {e}", exc_info=True)
+
+    def _on_user_transcription_for_wake_word(self, ev):
+        """Handle user transcriptions during workout mode for wake word detection."""
+        logger.info(
+            f"[WAKE WORD] Transcription event: is_final={ev.is_final} "
+            f"active={self._wake_word_active} listening={self._wake_word_listening} "
+            f"transcript='{getattr(ev, 'transcript', '')[:50]}'"
+        )
+
+        if not self._wake_word_active or self._wake_word_listening:
+            logger.info(f"[WAKE WORD] Skipping (active={self._wake_word_active}, listening={self._wake_word_listening})")
+            return
+
+        if not ev.is_final:
+            return
+
+        transcript = ev.transcript.lower().strip()
+        if not transcript:
+            return
+
+        wake_word_detected = any(phrase in transcript for phrase in self._wake_word_phrases)
+
+        if wake_word_detected:
+            logger.info(f"[WAKE WORD] ★ DETECTED in: '{transcript}'")
+            asyncio.create_task(self._activate_listening_mode(transcript))
+        else:
+            logger.info(f"[WAKE WORD] No wake word in: '{transcript}'")
+
+    def _on_speech_created_for_wake_word(self, ev):
+        """
+        Fallback: cancel auto-generated responses in workout mode.
+        Only cancels non-user-initiated speech (i.e., auto-responses from semantic VAD).
+        Programmatic generate_reply() calls have user_initiated=True and pass through.
+        """
+        logger.info(
+            f"[WAKE WORD] speech_created event: user_initiated={ev.user_initiated} "
+            f"source={getattr(ev, 'source', 'unknown')} "
+            f"active={self._wake_word_active} listening={self._wake_word_listening}"
+        )
+
+        if not self._wake_word_active or self._wake_word_listening:
+            logger.info("[WAKE WORD] Allowing speech (wake word inactive or in listening mode)")
+            return
+
+        if not ev.user_initiated:
+            try:
+                ev.speech_handle.cancel()
+                logger.info("[WAKE WORD] ✗ CANCELLED auto-response (user_initiated=False)")
+            except Exception as e:
+                logger.error(f"[WAKE WORD] Failed to cancel speech: {e}", exc_info=True)
+        else:
+            logger.info("[WAKE WORD] Allowing speech through (user_initiated=True — programmatic call)")
+
+    async def _activate_listening_mode(self, trigger_transcript: str):
+        """Activate listening mode after wake word detection."""
+        # If a coaching LLM call is in progress (context is swapped),
+        # defer the wake word response to avoid context corruption.
+        if self._coaching_service and self._coaching_service.context_lock.locked():
+            logger.info("[WAKE WORD] Coaching LLM in progress — deferring wake word response")
+            return
+
+        logger.info(f"[WAKE WORD] Activating listening mode (trigger: '{trigger_transcript}')")
+        self._wake_word_listening = True
+        self._set_active_listening_turn_detection()
+
+        # Extract command after the wake word (if any)
+        command_after_wake = ""
+        for phrase in self._wake_word_phrases:
+            if phrase in trigger_transcript.lower():
+                idx = trigger_transcript.lower().index(phrase) + len(phrase)
+                command_after_wake = trigger_transcript[idx:].strip(" ,.")
+                break
+
+        if command_after_wake and len(command_after_wake) > 3:
+            logger.info(f"[WAKE WORD] Command included: '{command_after_wake}'")
+            await self.session.generate_reply(
+                user_input=command_after_wake,
+            )
+        else:
+            await self.session.generate_reply(
+                instructions="The user just said 'Hey Nova' during a workout. Respond very briefly (2-5 words max) like 'Yeah?', 'What's up?', or 'I'm here!' — then wait for their question."
+            )
+
+        # Start timeout to revert back to wake word mode
+        if self._wake_word_timeout_task:
+            self._wake_word_timeout_task.cancel()
+        self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
+
+    async def _deactivate_listening_mode(self):
+        """Revert from active listening back to wake word detection mode."""
+        logger.info("[WAKE WORD] Deactivating listening mode → back to wake word detection")
+        self._wake_word_listening = False
+        if self._wake_word_timeout_task:
+            self._wake_word_timeout_task.cancel()
+            self._wake_word_timeout_task = None
+        self._set_workout_turn_detection()
+        logger.info("[WAKE WORD] Reverted to wake word mode")
+
+    async def _wake_word_timeout(self):
+        """After inactivity, revert back to workout (wake word) mode."""
+        try:
+            await asyncio.sleep(self._wake_word_timeout_seconds)
+            if self._wake_word_active and self._wake_word_listening:
+                logger.info("[WAKE WORD] Timeout — reverting to wake word mode")
+                await self._deactivate_listening_mode()
+        except asyncio.CancelledError:
+            pass
+
+    def _on_agent_state_changed_for_wake_word(self, ev):
+        """Auto-revert after wake-word-triggered responses complete."""
+        if not self._wake_word_active or not self._wake_word_listening:
+            return
+
+        # After agent finishes speaking, reset the timeout for follow-up conversation
+        if ev.new_state in ("listening", "idle") and ev.old_state == "speaking":
+            if self._wake_word_timeout_task:
+                self._wake_word_timeout_task.cancel()
+            self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
+
+    async def _start_wake_word_system(self):
+        """Activate wake word detection for workout mode."""
+        logger.info("[WAKE WORD] === Starting wake word system ===")
+        self._wake_word_active = True
+        self._wake_word_listening = False
+
+        try:
+            self.session.on("user_input_transcribed", self._on_user_transcription_for_wake_word)
+            logger.info("[WAKE WORD] Registered user_input_transcribed handler")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to register user_input_transcribed: {e}", exc_info=True)
+
+        try:
+            self.session.on("agent_state_changed", self._on_agent_state_changed_for_wake_word)
+            logger.info("[WAKE WORD] Registered agent_state_changed handler")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to register agent_state_changed: {e}", exc_info=True)
+
+        try:
+            self.session.on("speech_created", self._on_speech_created_for_wake_word)
+            logger.info("[WAKE WORD] Registered speech_created handler")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to register speech_created: {e}", exc_info=True)
+
+        # Disable preemptive_generation — it can trigger generate_reply()
+        # automatically on user speech, bypassing create_response=False
+        try:
+            self.session.options.preemptive_generation = False
+            logger.info("[WAKE WORD] Disabled preemptive_generation on AgentSession")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Failed to disable preemptive_generation: {e}")
+
+        self._set_workout_turn_detection()
+        logger.info("[WAKE WORD] === Wake word system ACTIVE ===")
+
+    async def _stop_wake_word_system(self):
+        """Deactivate wake word detection when leaving workout mode."""
+        self._wake_word_active = False
+        self._wake_word_listening = False
+
+        if self._wake_word_timeout_task:
+            self._wake_word_timeout_task.cancel()
+            self._wake_word_timeout_task = None
+
+        try:
+            self.session.off("user_input_transcribed", self._on_user_transcription_for_wake_word)
+            self.session.off("agent_state_changed", self._on_agent_state_changed_for_wake_word)
+            self.session.off("speech_created", self._on_speech_created_for_wake_word)
+        except Exception:
+            pass
+
+        # Re-enable preemptive_generation for conversational mode
+        try:
+            self.session.options.preemptive_generation = True
+            logger.info("[WAKE WORD] Re-enabled preemptive_generation")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Failed to re-enable preemptive_generation: {e}")
+
+        self._set_conversational_turn_detection()
+        logger.info("[WAKE WORD] System deactivated")
 
     # ===== CONTEXT MANAGEMENT =====
 
@@ -582,267 +810,12 @@ class NovaVoiceAgent(Agent):
         except Exception as e:
             logger.info(f"[SUMMARY] Error checking for summarization: {e}")
 
-    # ===== COACHING AUDIO CUE SYSTEM =====
+    # ===== COACHING SERVICE CALLBACK =====
 
-    async def _start_coaching_listener(self):
-        """Connect to the coaching IPC server and listen for biomechanics messages."""
-        if self._coaching_listener_running:
-            logger.info("[COACHING] Listener already running")
-            return
-
-        from core.ipc_communication import IPCClient
-
-        self._event_loop = asyncio.get_event_loop()
-        self._coaching_ipc = IPCClient(socket_path="/tmp/nowva_coaching.sock")
-
-        def _listen_thread():
-            """Blocking IPC listener running in a daemon thread."""
-            try:
-                if not self._coaching_ipc.connect(timeout=15):
-                    logger.warning("[COACHING] Failed to connect to coaching IPC server")
-                    return
-                logger.info("[COACHING] Connected to coaching IPC server")
-                self._coaching_listener_running = True
-
-                def on_message(message: dict):
-                    if self._event_loop and self._event_loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            self._handle_coaching_message(message),
-                            self._event_loop,
-                        )
-
-                self._coaching_ipc.listen(message_callback=on_message)
-            except Exception as e:
-                logger.error(f"[COACHING] Listener error: {e}")
-            finally:
-                self._coaching_listener_running = False
-
-        thread = threading.Thread(target=_listen_thread, daemon=True)
-        thread.start()
-        logger.info("[COACHING] Listener thread started")
-
-    def _stop_coaching_listener(self):
-        """Disconnect from the coaching IPC server."""
-        if self._coaching_ipc:
-            self._coaching_ipc.disconnect()
-            self._coaching_ipc = None
-        self._coaching_listener_running = False
-        logger.info("[COACHING] Listener stopped")
-
-    async def _handle_coaching_message(self, message: dict):
-        """Dispatch incoming coaching message through the orchestrator."""
-        msg_type = message.get("type")
-
-        try:
-            if msg_type == "cache_cues":
-                await self._on_cache_cues(message)
-            elif msg_type == "fault":
-                if self._coaching_orchestrator:
-                    await self._coaching_orchestrator.on_fault(
-                        cue_key=message.get("cue"),
-                        fault_type=message.get("fault_type", ""),
-                        severity=message.get("severity", ""),
-                        message=message.get("message", ""),
-                    )
-            elif msg_type == "rep_complete":
-                rep = message.get("rep_number")
-                depth = message.get("depth_category", "")
-                logger.info(f"[COACHING] Rep {rep} complete — {depth}")
-                if self._coaching_orchestrator:
-                    await self._coaching_orchestrator.on_rep_complete(
-                        rep_number=rep or 0,
-                        depth=depth,
-                        is_clean=message.get("is_clean", False),
-                        faults=message.get("faults_in_rep", []),
-                    )
-            elif msg_type == "frame_data":
-                if self._coaching_orchestrator:
-                    self._coaching_orchestrator.record_angle_sample(
-                        message.get("joint_angles", {})
-                    )
-            elif msg_type == "set_complete":
-                # Ignored — orchestrator handles set completion deterministically
-                # via rep count (avoids duplicate recaps from SessionTracker timeout)
-                pass
-            elif msg_type == "rest_complete":
-                logger.info("[COACHING] Rest timer expired — prompting user")
-                if self._coaching_orchestrator:
-                    self._coaching_orchestrator.on_rest_complete()
-                instructions = (
-                    "[REST COMPLETE] The rest timer just finished. "
-                    "Tell the user it's time for the next set. Be energetic and brief "
-                    "(1-2 sentences). Example: 'Let's go! Time for set 2!'"
-                )
-                await self.session.generate_reply(instructions=instructions)
-            elif msg_type == "play_cue":
-                pass  # Orchestrator handles cue dispatch from rep_complete/fault
-        except Exception as e:
-            logger.error(f"[COACHING] Error handling {msg_type}: {e}")
-
-    async def _on_cache_cues(self, message: dict):
-        """Pre-generate TTS audio for all cues in the message."""
-        from services.audio_cue_service import AudioCueService
-
-        if self.audio_cue_service is None:
-            self.audio_cue_service = AudioCueService()
-
-        cues = message.get("cues", {})
-        exercise = message.get("exercise_name", "unknown")
-        logger.info(f"[COACHING] Pre-caching {len(cues)} cues for {exercise}")
-
-        try:
-            await self.audio_cue_service.cache_cues(cues)
-            # Initialize orchestrator positive cue keys now that cache is ready
-            if self._coaching_orchestrator:
-                from biomechanics.coaching.cue_cache import POSITIVE_CUE_KEYS
-                available = [k for k in cues if k in POSITIVE_CUE_KEYS]
-                self._coaching_orchestrator._positive_cue_keys = available
-        except Exception as e:
-            logger.error(f"[COACHING] TTS cache generation failed: {e}")
-
-    # ------------------------------------------------------------------
-    # Coaching orchestrator helpers
-    # ------------------------------------------------------------------
-
-    async def _init_coaching_orchestrator(self):
-        """Initialize the coaching orchestrator with callbacks."""
-        from services.coaching_orchestrator import CoachingOrchestrator
-
-        self._coaching_orchestrator = CoachingOrchestrator(
-            play_cached_audio_fn=self._play_cached_cue_audio,
-            generate_llm_reply_fn=self._coaching_llm_reply,
-            duck_llm_fn=self._duck_llm_audio,
-            unduck_llm_fn=self._unduck_llm_audio,
-            get_cue_audio_fn=self._get_cached_audio,
-            advance_set_fn=self._advance_workout_set,
-        )
-
-        target_reps = self._get_current_target_reps()
-        self._coaching_orchestrator.reset_set(target_reps=target_reps)
-        self._coaching_orchestrator.start()
-
-    def _get_current_target_reps(self) -> Optional[int]:
-        """Get target reps for the current set from WorkoutSession."""
-        session_data = self.state.get("workout.current_session")
-        if session_data:
-            from core.workout_session import WorkoutSession
-            try:
-                session = WorkoutSession.from_dict(session_data)
-                current_set = session.get_current_set()
-                if current_set:
-                    return current_set.target_reps
-            except Exception:
-                pass
-        return None
-
-    async def _advance_workout_set(self) -> Optional[int]:
-        """Advance WorkoutSession to the next set. Returns new target_reps or None."""
-        from core.workout_session import WorkoutSession
-
-        session_data = self.state.get("workout.current_session")
-        if not session_data:
-            logger.warning("[COACHING] No active session to advance")
-            return None
-
-        try:
-            session = WorkoutSession.from_dict(session_data)
-
-            # Get rest_seconds from the COMPLETED set before advancing
-            completed_set = session.get_current_set()
-            rest_seconds = completed_set.rest_seconds if completed_set else 30
-
-            rep_count = (
-                self._coaching_orchestrator._set_rep_count
-                if self._coaching_orchestrator
-                else 0
-            )
-            session.mark_set_complete(performed_reps=rep_count)
-
-            has_next = session.advance_to_next_set()
-
-            self.state.set("workout.current_session", session.to_dict())
-            self.state.save_state()
-
-            if has_next:
-                next_set = session.get_current_set()
-                new_target = next_set.target_reps if next_set else None
-                logger.info(f"[COACHING] Advanced to next set — target_reps={new_target}")
-
-                # Send rest_start to pose process (via coaching IPC → main.py → pose)
-                if self._coaching_ipc and rest_seconds > 0:
-                    try:
-                        self._coaching_ipc.send_message({
-                            "type": "rest_start",
-                            "rest_seconds": rest_seconds,
-                        })
-                        logger.info(f"[COACHING] Sent rest_start ({rest_seconds}s)")
-                    except Exception as e:
-                        logger.error(f"[COACHING] Failed to send rest_start: {e}")
-
-                return new_target
-            else:
-                logger.info("[COACHING] Workout complete — no more sets")
-                return None
-
-        except Exception:
-            logger.exception("[COACHING] Failed to advance workout set")
-            return None
-
-    async def _play_cached_cue_audio(self, cue_key: str):
-        """Callback: play a cached cue on the secondary audio track."""
-        if self.audio_cue_service:
-            audio_bytes = self.audio_cue_service.get_cue_audio(cue_key)
-            if audio_bytes:
-                await self._publish_cached_audio(audio_bytes)
-                logger.info(f"[COACHING] Played cached cue: {cue_key}")
-
-    async def _coaching_llm_reply(self, instructions: str):
-        """Callback: generate an LLM reply for coaching context."""
-        await self.session.generate_reply(instructions=instructions)
-
-    async def _duck_llm_audio(self):
-        """Callback: pause the LLM audio output (duck) while a cached cue plays."""
-        try:
-            self.session.output.audio.pause()
-        except Exception as e:
-            logger.debug(f"[COACHING] Duck failed (non-critical): {e}")
-
-    async def _unduck_llm_audio(self):
-        """Callback: resume the LLM audio output after cached cue finishes."""
-        try:
-            self.session.output.audio.resume()
-        except Exception as e:
-            logger.debug(f"[COACHING] Unduck failed (non-critical): {e}")
-
-    def _get_cached_audio(self, cue_key: str) -> Optional[bytes]:
-        """Callback: check if cached audio exists for a cue key."""
-        if self.audio_cue_service:
-            return self.audio_cue_service.get_cue_audio(cue_key)
-        return None
-
-    async def _publish_cached_audio(self, pcm_bytes: bytes):
-        """
-        Play pre-cached PCM audio through system speakers via sounddevice.
-
-        Uses a separate sounddevice output stream so cached cues are audible
-        in both console mode (ChatCLI) and production (real LiveKit room).
-        Audio format from OpenAI TTS (pcm): 24kHz, 16-bit signed, mono.
-        """
-        import asyncio
-        import numpy as np
-        import sounddevice as sd
-
-        audio_array = np.frombuffer(pcm_bytes, dtype=np.int16)
-        done_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
-
-        def _play_blocking():
-            sd.play(audio_array, samplerate=24000, blocksize=2400)
-            sd.wait()
-            loop.call_soon_threadsafe(done_event.set)
-
-        loop.run_in_executor(None, _play_blocking)
-        await done_event.wait()
+    async def _on_coaching_set_complete(self, set_summary: dict):
+        """Receive set summary data from coaching service."""
+        logger.info(f"[COACHING] Set complete: {set_summary}")
+        # Future: store for analytics, progress tracking
 
     # ===== ONBOARDING TOOLS =====
     # NOTE: Function call logging has been added to representative functions (capture_first_name,
@@ -1117,8 +1090,14 @@ class NovaVoiceAgent(Agent):
             logger.info("[STATE] Switched to workout mode with loaded workout - main.py will detect and start pose estimation")
 
             # Start coaching IPC listener and orchestrator for real-time biomechanics cues
-            asyncio.create_task(self._start_coaching_listener())
-            await self._init_coaching_orchestrator()
+            from services.coaching_service import CoachingService
+            self._coaching_service = CoachingService(
+                session=self.session,
+                state=self.state,
+                on_set_complete=self._on_coaching_set_complete,
+            )
+            await self._coaching_service.start()
+            await self._start_wake_word_system()
 
             # Get first exercise info
             first_exercise_desc = session.get_current_exercise_description()
@@ -1304,9 +1283,15 @@ class NovaVoiceAgent(Agent):
         await self.update_instructions(new_instructions)
         logger.info("[STATE] Switched to workout mode with quick exercise - main.py will detect and start pose estimation")
 
-        # Start coaching IPC listener and orchestrator for real-time biomechanics cues
-        asyncio.create_task(self._start_coaching_listener())
-        await self._init_coaching_orchestrator()
+        # Start coaching service for real-time biomechanics cues
+        from services.coaching_service import CoachingService
+        self._coaching_service = CoachingService(
+            session=self.session,
+            state=self.state,
+            on_set_complete=self._on_coaching_set_complete,
+        )
+        await self._coaching_service.start()
+        await self._start_wake_word_system()
 
         # Get first exercise description
         first_desc = session.get_current_exercise_description()
@@ -4004,13 +3989,13 @@ Generate programs that are challenging but achievable, progressive, and scientif
         self.state.set("quick_exercise.exercise_name", None)
         self.state.set("quick_exercise.gathering_params", False)
 
-        # Stop coaching orchestrator, IPC listener, and clean up audio track
-        if self._coaching_orchestrator:
-            self._coaching_orchestrator.stop()
-            self._coaching_orchestrator = None
-        self._stop_coaching_listener()
-        self._audio_track_published = False
-        self._audio_source = None
+        # Deactivate wake word system and restore normal turn detection
+        await self._stop_wake_word_system()
+
+        # Stop coaching service
+        if self._coaching_service:
+            await self._coaching_service.stop()
+            self._coaching_service = None
 
         # Switch back to main menu mode (main.py monitors state file)
         self.state.switch_mode("main_menu")
@@ -4044,6 +4029,11 @@ Generate programs that are challenging but achievable, progressive, and scientif
             rpe: Rate of perceived exertion 1-10 (optional)
         """
         logger.info(f"[WORKOUT] User completed set: {reps} reps, weight={weight}, rpe={rpe}")
+
+        # Guard: if coaching service already auto-completed this set, skip the double-advance
+        if self._coaching_service and self._coaching_service.is_resting:
+            logger.info("[WORKOUT] Set already auto-completed by orchestrator — skipping duplicate advance")
+            return None, "The set was already tracked automatically. Let the user know their set is recorded and to rest up for the next one."
 
         from core.workout_session import WorkoutSession
 

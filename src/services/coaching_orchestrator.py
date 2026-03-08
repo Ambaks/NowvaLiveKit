@@ -125,16 +125,21 @@ class CoachingOrchestrator:
 
         # Fault cue rate limiting (orchestrator-level, per cue key)
         self._last_fault_cue_time: float = 0.0
-        self._min_fault_cue_gap: float = 4.0  # seconds between fault cues
+        self._min_fault_cue_gap: float = 8.0  # seconds between fault cues
 
         # Rest state — suppress rep/fault processing during rest
         self._resting: bool = False
+        self._total_sets: Optional[int] = None
 
         # Set report data collection
         self._set_cue_log: List[CueLogEntry] = []
         self._set_angle_samples: List[Dict[str, Any]] = []
         self._set_rep_events: List[Dict[str, Any]] = []
         self._set_start_wall_time: float = time.time()
+
+        # Deferred report generation — accumulate per-set snapshots,
+        # generate all charts at session end (stop())
+        self._pending_reports: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -147,19 +152,23 @@ class CoachingOrchestrator:
         logger.info("[ORCHESTRATOR] Started")
 
     def stop(self):
-        """Stop the queue processor."""
+        """Stop the queue processor and generate any pending set reports."""
         self._processing = False
         if self._processor_task:
             self._processor_task.cancel()
             self._processor_task = None
+        self._generate_pending_reports()
         logger.info("[ORCHESTRATOR] Stopped")
 
     def reset_set(
         self,
         target_reps: Optional[int] = None,
         positive_cue_keys: Optional[List[str]] = None,
+        total_sets: Optional[int] = None,
     ):
         """Reset per-set tracking state for a new set."""
+        if total_sets is not None:
+            self._total_sets = total_sets
         self._set_rep_count = 0
         self._set_target_reps = target_reps
         self._clean_streak = 0
@@ -228,7 +237,11 @@ class CoachingOrchestrator:
                 cue_key=cue_key,
                 data={"fault_type": fault_type, "severity": severity},
             ))
-            logger.debug(f"[ORCHESTRATOR] Enqueued fault cue: {cue_key} ({severity})")
+            logger.info(f"[ORCHESTRATOR] ⬆ Enqueued FAULT cue: {cue_key} (type={fault_type}, severity={severity})")
+        elif cue_key:
+            logger.info(f"[ORCHESTRATOR] Fault cue '{cue_key}' has no cached audio — skipped")
+        else:
+            logger.info(f"[ORCHESTRATOR] Fault has no cue_key — skipped (type={fault_type})")
 
     async def on_rep_complete(
         self,
@@ -265,33 +278,13 @@ class CoachingOrchestrator:
                 event_type="cached_cue",
                 cue_key=rep_cue_key,
             ))
+            logger.info(f"[ORCHESTRATOR] ⬆ Enqueued REP COUNT cue: {rep_cue_key}")
+        else:
+            logger.info(f"[ORCHESTRATOR] No cached audio for rep cue: {rep_cue_key}")
 
-        # Positive reinforcement for clean reps
-        if is_clean and self._positive_cue_keys:
-            positive_key = random.choice(self._positive_cue_keys)
-            if self._get_cue_audio(positive_key):
-                await self._queue.put(CoachingEvent(
-                    priority=CuePriority.POSITIVE_CUE,
-                    timestamp=time.monotonic(),
-                    event_type="cached_cue",
-                    cue_key=positive_key,
-                ))
-
-        # Evaluate LLM motivation at "top of rep" (uses per-set rep number)
-        if self._should_trigger_motivation(self._set_rep_count):
-            context = self._build_motivation_context(self._set_rep_count, depth, is_clean)
-            await self._queue.put(CoachingEvent(
-                priority=CuePriority.LLM_MOTIVATION,
-                timestamp=time.monotonic(),
-                event_type="llm_motivation",
-                data=context,
-            ))
-            self._last_motivation_rep = self._set_rep_count
-            logger.info(f"[ORCHESTRATOR] Enqueued motivation at rep {self._set_rep_count}")
-
-        logger.debug(
-            f"[ORCHESTRATOR] Rep {self._set_rep_count} complete — "
-            f"clean={is_clean}, streak={self._clean_streak}"
+        logger.info(
+            f"[ORCHESTRATOR] Rep {self._set_rep_count}/{self._set_target_reps or '?'} complete — "
+            f"clean={is_clean}, streak={self._clean_streak}, set_clean={self._set_clean_count}"
         )
 
         # Check if set is complete based on target rep count
@@ -323,6 +316,31 @@ class CoachingOrchestrator:
                     logger.info("[ORCHESTRATOR] Entering rest mode")
                 except Exception as e:
                     logger.error(f"[ORCHESTRATOR] advance_set_fn failed: {e}")
+            return  # Set complete — skip motivation/positive cues
+
+        # Positive reinforcement for clean reps
+        if is_clean and self._positive_cue_keys:
+            positive_key = random.choice(self._positive_cue_keys)
+            if self._get_cue_audio(positive_key):
+                await self._queue.put(CoachingEvent(
+                    priority=CuePriority.POSITIVE_CUE,
+                    timestamp=time.monotonic(),
+                    event_type="cached_cue",
+                    cue_key=positive_key,
+                ))
+                logger.info(f"[ORCHESTRATOR] ⬆ Enqueued POSITIVE cue: {positive_key}")
+
+        # Evaluate LLM motivation at "top of rep" (uses per-set rep number)
+        if self._should_trigger_motivation(self._set_rep_count):
+            context = self._build_motivation_context(self._set_rep_count, depth, is_clean)
+            await self._queue.put(CoachingEvent(
+                priority=CuePriority.LLM_MOTIVATION,
+                timestamp=time.monotonic(),
+                event_type="llm_motivation",
+                data=context,
+            ))
+            self._last_motivation_rep = self._set_rep_count
+            logger.info(f"[ORCHESTRATOR] Enqueued motivation at rep {self._set_rep_count}")
 
     async def on_set_complete(self, set_data: dict):
         """Enqueue LLM set recap (lowest priority).
@@ -409,38 +427,49 @@ class CoachingOrchestrator:
 
     async def _dispatch(self, event: CoachingEvent):
         """Dispatch a single event based on its type and priority."""
+        logger.info(
+            f"[ORCHESTRATOR] ▶ Dispatching: type={event.event_type} priority={event.priority} "
+            f"cue_key={event.cue_key} age={time.monotonic() - event.timestamp:.1f}s"
+        )
+
         if event.event_type == "cached_cue":
             await self._dispatch_cached_cue(event)
 
         elif event.event_type == "llm_motivation":
             # Drop stale motivation events (>8s old)
             age = time.monotonic() - event.timestamp
-            if age > 8.0:
-                logger.debug("[ORCHESTRATOR] Dropping stale motivation event (%.1fs old)", age)
+            if age > 1.0:
+                logger.info("[ORCHESTRATOR] Dropping stale motivation event (%.1fs old)", age)
                 return
             # Drain any pending cached cues first, then speak motivation
             await self._drain_cached_cues()
+            logger.info("[ORCHESTRATOR] → Firing LLM motivation")
             await self._speak_llm_motivation(event.data)
+            logger.info("[ORCHESTRATOR] ✓ LLM motivation complete")
 
         elif event.event_type == "llm_set_recap":
             # Drain any remaining cached cues first
             await self._drain_cached_cues()
+            logger.info("[ORCHESTRATOR] → Firing LLM set recap")
             await self._speak_llm_set_recap(event.data)
+            logger.info("[ORCHESTRATOR] ✓ LLM set recap complete")
 
     async def _dispatch_cached_cue(self, event: CoachingEvent):
         """Play a cached cue with LLM audio ducking."""
         # Drop stale cached cues — if a cue sat in the queue too long,
         # the coaching moment has passed
         age = time.monotonic() - event.timestamp
-        if age > 5.0:
-            logger.debug("[ORCHESTRATOR] Dropping stale cached cue: %s (%.1fs old)", event.cue_key, age)
+        if age > 0.5:
+            logger.info("[ORCHESTRATOR] Dropping stale cached cue: %s (%.1fs old)", event.cue_key, age)
             return
 
         try:
+            logger.info(f"[ORCHESTRATOR] → Playing cached cue: {event.cue_key} (ducking LLM)")
             await self._duck_llm()
             await self._play_cached(event.cue_key)
             # Log successfully played cue for set report
             self._log_dispatched_cue(event)
+            logger.info(f"[ORCHESTRATOR] ✓ Cached cue played: {event.cue_key}")
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] Cached cue playback failed ({event.cue_key}): {e}")
         finally:
@@ -507,6 +536,15 @@ class CoachingOrchestrator:
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] Set report generation failed: {e}")
 
+    def _generate_pending_reports(self) -> None:
+        """Generate all deferred set reports (called at session end)."""
+        if not self._pending_reports:
+            return
+        logger.info(f"[ORCHESTRATOR] Generating {len(self._pending_reports)} set report(s)...")
+        for entry in self._pending_reports:
+            self._generate_set_report_from_snapshot(entry["set_number"], entry["report"])
+        self._pending_reports.clear()
+
     # ------------------------------------------------------------------
     # LLM speech helpers
     # ------------------------------------------------------------------
@@ -529,13 +567,12 @@ class CoachingOrchestrator:
         context_str = " ".join(parts)
 
         instructions = (
-            f"[COACHING CONTEXT] {context_str} "
-            f"Give a SHORT (5-10 words max) motivational push. "
-            f"Examples: 'Push through, two more!', 'You're on fire, keep it up!', "
-            f"'Strong reps, finish strong!' Do NOT repeat form cues — the audio "
-            f"system already handles those."
+            f"{context_str} "
+            f"Give a SHORT (2-5 words MAX) motivational push. "
+            f"Do NOT give form cues."
         )
 
+        logger.info(f"[ORCHESTRATOR] LLM motivation instructions: {instructions[:100]}...")
         self._llm_speaking = True
         try:
             await self._generate_llm(instructions)
@@ -545,8 +582,9 @@ class CoachingOrchestrator:
                 label="Motivation",
                 category="motivation",
             ))
+            logger.info("[ORCHESTRATOR] ✓ LLM motivation spoken")
         except Exception as e:
-            logger.error(f"[ORCHESTRATOR] LLM motivation failed: {e}")
+            logger.error(f"[ORCHESTRATOR] LLM motivation failed: {e}", exc_info=True)
         finally:
             self._llm_speaking = False
 
@@ -559,7 +597,9 @@ class CoachingOrchestrator:
         depth_consistency = data.get("depth_consistency", 0)
         fault_summary = data.get("fault_summary", {})
 
-        parts = [f"Set {set_num} complete: {total_reps} reps."]
+        next_set = set_num + 1
+        total_sets_str = f" of {self._total_sets}" if self._total_sets else ""
+        parts = [f"Set {set_num}{total_sets_str} just finished: {total_reps} reps. Next up is set {next_set}{total_sets_str}."]
         parts.append(f"{clean_reps}/{total_reps} clean reps.")
         if avg_depth:
             parts.append(f"Average depth: {avg_depth}°.")
@@ -576,24 +616,26 @@ class CoachingOrchestrator:
         context_str = " ".join(parts)
 
         instructions = (
-            f"[SET RECAP DATA] {context_str} "
-            f"Give comprehensive feedback (2-4 sentences). "
-            f"Highlight what went well. If there were recurring faults, "
+            f"{context_str} "
+            f"Give honest feedback (2-4 sentences). "
+            f"Highlight what went well. If recurring faults, "
             f"give ONE specific coaching tip for the next set. "
-            f"Be encouraging and specific — reference actual numbers."
+            f"Be encouraging — reference the numbers."
         )
 
+        logger.info(f"[ORCHESTRATOR] LLM set recap instructions: {instructions[:120]}...")
         self._llm_speaking = True
         try:
             await self._generate_llm(instructions)
+            logger.info("[ORCHESTRATOR] ✓ LLM set recap spoken")
         except Exception as e:
-            logger.error(f"[ORCHESTRATOR] LLM set recap failed: {e}")
+            logger.error(f"[ORCHESTRATOR] LLM set recap failed: {e}", exc_info=True)
         finally:
             self._llm_speaking = False
-            # Generate set report from snapshotted data
+            # Stash report data for deferred generation at session end
             report = data.get("_report")
             if report:
-                self._generate_set_report_from_snapshot(set_num, report)
+                self._pending_reports.append({"set_number": set_num, "report": report})
             # Only reset if not already reset by rep-count trigger
             # (rep-count trigger resets immediately in on_rep_complete)
             if data.get("trigger") != "rep_count":

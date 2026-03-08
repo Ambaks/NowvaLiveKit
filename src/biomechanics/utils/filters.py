@@ -230,6 +230,38 @@ class JointAngleFilter:
     # Filters for each angle (created lazily)
     _filters: Dict[str, OneEuroFilter] = field(default_factory=dict)
 
+    # Phase -> (min_cutoff, beta) mapping
+    PHASE_PARAMS = {
+        "idle":       (0.3, 0.003),   # Heavy smoothing — kill standing jitter
+        "descending": (1.0, 0.007),   # Standard — responsive to fast descent
+        "bottom":     (0.8, 0.005),   # Moderate — stable at bottom
+        "ascending":  (1.0, 0.007),   # Standard — responsive to ascent
+    }
+
+    DEFAULT_PARAMS = (1.0, 0.007)
+
+    def update_phase(self, phase: str) -> None:
+        """
+        Adjust filter parameters based on current rep phase.
+
+        Called each frame from the pipeline after rep counter updates.
+        Changes apply to the NEXT filter call, not retroactively.
+
+        Args:
+            phase: One of "idle", "descending", "bottom", "ascending"
+        """
+        min_cutoff, beta = self.PHASE_PARAMS.get(phase, self.DEFAULT_PARAMS)
+
+        # Only update if parameters actually changed
+        if min_cutoff != self.min_cutoff or beta != self.beta:
+            self.min_cutoff = min_cutoff
+            self.beta = beta
+
+            # Update existing filter instances
+            for filt in self._filters.values():
+                filt.min_cutoff = min_cutoff
+                filt.beta = beta
+
     def _get_filter(self, name: str) -> OneEuroFilter:
         """Get or create filter for a joint angle."""
         if name not in self._filters:

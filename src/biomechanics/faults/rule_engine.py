@@ -89,11 +89,12 @@ class RuleEngine:
             HeelRiseRule(
                 threshold_degrees=faults_config.heel_rise.threshold_cm * 5,  # Convert cm to degrees approx
             ),
-            ForwardLeanRule(
-                mild_threshold=faults_config.forward_lean.mild,
-                moderate_threshold=faults_config.forward_lean.moderate,
-                severe_threshold=faults_config.forward_lean.severe,
-            ),
+            # ForwardLeanRule disabled — too many false positives with single camera
+            # ForwardLeanRule(
+            #     mild_threshold=faults_config.forward_lean.mild,
+            #     moderate_threshold=faults_config.forward_lean.moderate,
+            #     severe_threshold=faults_config.forward_lean.severe,
+            # ),
             KneeValgusRule(
                 mild_threshold=faults_config.knee_valgus.mild,
                 moderate_threshold=faults_config.knee_valgus.moderate,
@@ -217,16 +218,12 @@ class RuleEngine:
         faults_config = self.config.faults
 
         for rule in self.rules:
-            if isinstance(rule, ForwardLeanRule):
-                rule.mild_threshold = max(faults_config.forward_lean.mild, self._peak_trunk_flexion + 10.0)
-                rule.moderate_threshold = max(faults_config.forward_lean.moderate, self._peak_trunk_flexion + 20.0)
-                rule.severe_threshold = max(faults_config.forward_lean.severe, self._peak_trunk_flexion + 30.0)
-                logger.info(
-                    "[RULE ENGINE] Forward lean baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
-                    self._peak_trunk_flexion, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
-                )
+            # ForwardLeanRule disabled — skip calibration
+            # if isinstance(rule, ForwardLeanRule):
+            #     rule.mild_threshold = max(faults_config.forward_lean.mild, self._peak_trunk_flexion + 10.0)
+            #     ...
 
-            elif isinstance(rule, KneeValgusRule):
+            if isinstance(rule, KneeValgusRule):
                 rule.mild_threshold = max(faults_config.knee_valgus.mild, self._peak_hip_adduction + 5.0)
                 rule.moderate_threshold = max(faults_config.knee_valgus.moderate, self._peak_hip_adduction + 10.0)
                 rule.severe_threshold = max(faults_config.knee_valgus.severe, self._peak_hip_adduction + 15.0)

@@ -43,7 +43,7 @@ class ForwardLeanRule(FaultRule):
         self.moderate_threshold = moderate_threshold
         self.severe_threshold = severe_threshold
 
-        self._last_fault_frame: int = -45  # Longer cooldown for forward lean
+        self._last_fault_frame: int = -150  # ~5s at 30fps — avoid spamming
 
     @property
     def fault_type(self) -> FaultType:
@@ -66,7 +66,7 @@ class ForwardLeanRule(FaultRule):
             return None
 
         # Cooldown between fault reports
-        if angles.frame_index - self._last_fault_frame < 45:
+        if angles.frame_index - self._last_fault_frame < 150:
             return None
 
         trunk_flexion = abs(angles.trunk_flexion)

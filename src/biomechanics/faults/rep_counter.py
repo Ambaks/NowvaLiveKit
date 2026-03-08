@@ -322,6 +322,36 @@ class RepCounter:
         rep_data, _ = self.update(angles, derivatives=None, faults=faults)
         return rep_data
 
+    def snapshot_rep_metrics(self) -> dict:
+        """Return current in-progress rep metrics without mutating state.
+
+        Used by the pipeline to enrich BiLSTM RepData with angle-based
+        measurements that only the rule-based counter tracks.
+        """
+        avg_knee = (
+            self._knee_asymmetry_sum / self._angle_samples
+            if self._angle_samples > 0 else 0.0
+        )
+        avg_hip = (
+            self._hip_asymmetry_sum / self._angle_samples
+            if self._angle_samples > 0 else 0.0
+        )
+        now = time.time()
+        return {
+            "max_depth_angle": self._max_depth_angle,
+            "min_depth_angle": self._min_depth_angle,
+            "descent_time": (self._bottom_time - self._rep_start_time) if self._bottom_time > 0 else 0.0,
+            "ascent_time": (now - self._bottom_time) if self._bottom_time > 0 else 0.0,
+            "faults": self._current_faults.copy(),
+            "avg_knee_asymmetry": avg_knee,
+            "avg_hip_asymmetry": avg_hip,
+            "in_rep": self.in_rep,
+        }
+
+    def clear_current_faults(self) -> None:
+        """Clear accumulated faults after they've been consumed by BiLSTM."""
+        self._current_faults.clear()
+
     def _create_rep_data(self, angles: JointAngles) -> RepData:
         """Create RepData for a completed rep."""
         end_time = angles.timestamp if angles.timestamp is not None else time.time()
