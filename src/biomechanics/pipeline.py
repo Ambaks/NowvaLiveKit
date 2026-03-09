@@ -25,6 +25,7 @@ from biomechanics.utils.confidence_blend import ConfidenceBlender
 from biomechanics.utils.velocity_clamp import VelocityClamp
 from biomechanics.utils.bone_constraints import BoneLengthConstraints
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
+from biomechanics.utils.standing_gate import StandingPoseGate
 
 
 class BiomechanicsPipeline:
@@ -78,11 +79,24 @@ class BiomechanicsPipeline:
         # Derivative computation
         self._derivative_tracker = DerivativeTracker(smoothing_alpha=0.3)
 
+        # Standing pose gate — runs unconditionally to validate user is
+        # in frame and standing before any calibration starts.
+        sg = self.config.standing_gate
+        self._standing_gate = StandingPoseGate(
+            min_confidence=sg.min_confidence,
+            max_knee_flexion_deg=sg.max_knee_flexion_deg,
+            max_trunk_flexion_deg=sg.max_trunk_flexion_deg,
+            min_torso_length_m=sg.min_torso_length_m,
+            max_torso_length_m=sg.max_torso_length_m,
+            required_consecutive_frames=sg.required_consecutive_frames,
+        )
+
         # Pre-IK skeleton filtering (only initialised when enabled)
         self._confidence_blender = None
         self._velocity_clamp = None
         self._bone_constraints = None
         self._predictive_estimator = None
+        self._proportions_applied = False
 
         if self._preik_enabled:
             self._confidence_blender = ConfidenceBlender(
@@ -96,6 +110,7 @@ class BiomechanicsPipeline:
             self._bone_constraints = BoneLengthConstraints(
                 calibration_frames=self.config.bone_constraints.calibration_frames,
                 tolerance=self.config.bone_constraints.tolerance,
+                standing_gate=self._standing_gate,
             )
             self._predictive_estimator = PredictiveStateEstimator(
                 horizon_seconds=self.config.predictive_state.horizon_seconds,
@@ -200,6 +215,9 @@ class BiomechanicsPipeline:
             bilstm_class_probs = self._bilstm.current_class_probabilities.tolist()
             latency_ms["bilstm"] = (time.perf_counter() - t0) * 1000.0
 
+        # --- Standing pose gate (runs every frame, unconditional) ---
+        self._standing_gate.check(skeleton_3d)
+
         # --- Pre-IK filtering layers (optional) ---
         if self._preik_enabled:
             t0 = time.perf_counter()
@@ -207,6 +225,17 @@ class BiomechanicsPipeline:
             skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
+
+            # Apply body-proportion scaling once after bone calibration
+            if (
+                not self._proportions_applied
+                and self._bone_constraints.is_calibrated
+                and self._bone_constraints.body_proportions is not None
+            ):
+                self._rule_engine.apply_body_proportion_scaling(
+                    self._bone_constraints.body_proportions,
+                )
+                self._proportions_applied = True
 
         # --- IK solve ---
         t0 = time.perf_counter()

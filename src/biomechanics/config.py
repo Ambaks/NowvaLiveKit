@@ -143,6 +143,16 @@ class PredictiveStateConfig(BaseModel):
     max_extrapolation_deg: float = 15.0
 
 
+class StandingGateConfig(BaseModel):
+    """Standing pose gate configuration."""
+    min_confidence: float = 0.5
+    max_knee_flexion_deg: float = 20.0
+    max_trunk_flexion_deg: float = 25.0
+    min_torso_length_m: float = 0.25
+    max_torso_length_m: float = 0.80
+    required_consecutive_frames: int = 5
+
+
 # =============================================================================
 # FULL CONFIGURATION
 # =============================================================================
@@ -163,6 +173,7 @@ class BiomechanicsConfig(BaseModel):
     bone_constraints: BoneConstraintsConfig = Field(default_factory=BoneConstraintsConfig)
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
     predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
+    standing_gate: StandingGateConfig = Field(default_factory=StandingGateConfig)
 
     # Convenience properties
     @property
@@ -280,6 +291,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "predictive_state" in raw_config:
         config_dict["predictive_state"] = PredictiveStateConfig(**raw_config["predictive_state"])
+
+    if "standing_gate" in raw_config:
+        config_dict["standing_gate"] = StandingGateConfig(**raw_config["standing_gate"])
 
     return BiomechanicsConfig(**config_dict)
 

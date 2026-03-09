@@ -21,7 +21,7 @@ from core.ipc_communication import IPCServer
 from core.session_logger import SessionLogger
 from db import init_db, get_db
 from db.models import User
-from agents.console_launcher import run_console_voice_onboarding
+from agents.console_launcher import run_console_voice_onboarding, terminate_process_group
 from auth.user_management import create_user_account
 from dotenv import load_dotenv
 
@@ -266,8 +266,7 @@ class NowvaApp:
         print("\nStarting FastAPI backend...")
         self._start_fastapi_server()
 
-        # Initialize database
-        print("\nInitializing database...")
+        # Initialize database (skips if tables already exist)
         init_db()
 
         voice_agent_process = None
@@ -520,8 +519,7 @@ class NowvaApp:
 
         if voice_agent_process:
             print("Stopping voice agent...")
-            voice_agent_process.terminate()
-            voice_agent_process.wait()
+            terminate_process_group(voice_agent_process)
 
         if pose_running and self.pose_process:
             print("Stopping pose estimation...")

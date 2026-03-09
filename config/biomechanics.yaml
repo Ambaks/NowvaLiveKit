@@ -59,6 +59,14 @@ bone_constraints:
   calibration_frames: 30
   tolerance: 0.15
 
+standing_gate:
+  min_confidence: 0.5
+  max_knee_flexion_deg: 20.0
+  max_trunk_flexion_deg: 25.0
+  min_torso_length_m: 0.25
+  max_torso_length_m: 0.80
+  required_consecutive_frames: 5
+
 confidence_blend:
   min_confidence: 0.1
   max_confidence: 0.9

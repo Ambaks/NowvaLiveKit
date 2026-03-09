@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
 from .models import Base
@@ -100,13 +100,16 @@ def get_db_session():
 
 def init_db():
     """
-    Initialize the database by creating all tables.
-    Call this function once when setting up your application.
-
-    Usage:
-        from portable_db_module import init_db
-        init_db()
+    Initialize the database by creating all tables if they don't already exist.
+    Skips creation entirely when all tables are present.
     """
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    required_tables = set(Base.metadata.tables.keys())
+
+    if required_tables.issubset(existing_tables):
+        return
+
     Base.metadata.create_all(bind=engine)
     print("Database tables created successfully!")
 

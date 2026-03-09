@@ -12,10 +12,42 @@ Bone pairs follow the COCO 17 keypoint ordering and are defined
 as (proximal_index, distal_index) — the distal point gets corrected.
 """
 
+import logging
+from dataclasses import dataclass
+
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from biomechanics.utils.types import Skeleton3D, CocoKeypoints as CK
+
+if TYPE_CHECKING:
+    from biomechanics.utils.standing_gate import StandingPoseGate
+
+logger = logging.getLogger(__name__)
+
+# Population-average reference values for proportion scaling.
+REFERENCE_HIP_TO_FEMUR_RATIO = 0.556  # ~0.25 m hip width / ~0.45 m femur
+REFERENCE_TIBIA_LENGTH_M = 0.45
+
+
+@dataclass
+class BodyProportions:
+    """Body proportion ratios derived from calibrated bone lengths.
+
+    Used to scale fault-detection thresholds to the user's anatomy.
+    """
+    hip_width: float            # metres
+    femur_length_avg: float     # average of L/R, metres
+    tibia_length_avg: float     # average of L/R, metres
+    torso_length_avg: float     # average of L/R shoulder-hip, metres
+
+    # Derived ratios
+    hip_to_femur_ratio: float
+    tibia_to_reference_ratio: float
+
+    # Pre-computed, clamped scale factors for rules
+    valgus_scale: float         # multiply valgus thresholds by this
+    heel_rise_scale: float      # multiply heel-rise threshold by this
 
 
 # Ordered from proximal to distal so corrections cascade properly.
@@ -61,9 +93,11 @@ class BoneLengthConstraints:
         self,
         calibration_frames: int = 30,
         tolerance: float = 0.15,
+        standing_gate: Optional["StandingPoseGate"] = None,
     ):
         self.calibration_frames = calibration_frames
         self.tolerance = tolerance
+        self._standing_gate = standing_gate
 
         self._calibrated = False
         self._frame_count = 0
@@ -75,6 +109,9 @@ class BoneLengthConstraints:
 
         # After calibration: bone_pair_key -> median length
         self._calibrated_lengths: Dict[Tuple[int, int], float] = {}
+
+        # Computed after calibration from bone lengths
+        self._body_proportions: Optional[BodyProportions] = None
 
     @property
     def is_calibrated(self) -> bool:
@@ -97,6 +134,11 @@ class BoneLengthConstraints:
         confidences = np.array([kp.confidence for kp in skeleton.keypoints])
 
         if not self._calibrated:
+            # Wait for standing pose gate before recording calibration data
+            if self._standing_gate is not None and not self._standing_gate.is_ready:
+                self._standing_gate.check(skeleton)
+                return skeleton
+
             self._record_calibration(points)
             self._frame_count += 1
 
@@ -152,7 +194,7 @@ class BoneLengthConstraints:
                 self._length_observations[(proximal_idx, distal_idx)].append(length)
 
     def _finalize_calibration(self) -> None:
-        """Compute median bone lengths and lock calibration."""
+        """Compute median bone lengths, lock calibration, derive proportions."""
         for pair, lengths in self._length_observations.items():
             if lengths:
                 self._calibrated_lengths[pair] = float(np.median(lengths))
@@ -162,9 +204,64 @@ class BoneLengthConstraints:
         # Free observation memory
         self._length_observations.clear()
 
+        # Derive body proportions from calibrated bone lengths
+        self._compute_body_proportions()
+
+    def _compute_body_proportions(self) -> None:
+        """Derive body-proportion ratios from calibrated bone lengths."""
+        hip_width = self._calibrated_lengths.get((CK.LEFT_HIP, CK.RIGHT_HIP), 0.25)
+
+        femur_l = self._calibrated_lengths.get((CK.LEFT_HIP, CK.LEFT_KNEE), 0.45)
+        femur_r = self._calibrated_lengths.get((CK.RIGHT_HIP, CK.RIGHT_KNEE), 0.45)
+        femur_avg = (femur_l + femur_r) / 2.0
+
+        tibia_l = self._calibrated_lengths.get((CK.LEFT_KNEE, CK.LEFT_ANKLE), 0.45)
+        tibia_r = self._calibrated_lengths.get((CK.RIGHT_KNEE, CK.RIGHT_ANKLE), 0.45)
+        tibia_avg = (tibia_l + tibia_r) / 2.0
+
+        torso_l = self._calibrated_lengths.get((CK.LEFT_SHOULDER, CK.LEFT_HIP), 0.50)
+        torso_r = self._calibrated_lengths.get((CK.RIGHT_SHOULDER, CK.RIGHT_HIP), 0.50)
+        torso_avg = (torso_l + torso_r) / 2.0
+
+        hip_to_femur = hip_width / max(femur_avg, 0.01)
+        tibia_ratio = tibia_avg / REFERENCE_TIBIA_LENGTH_M
+
+        # Wider hips → higher valgus thresholds (more lenient)
+        valgus_scale = float(np.clip(
+            hip_to_femur / REFERENCE_HIP_TO_FEMUR_RATIO, 0.7, 1.3,
+        ))
+
+        # Longer tibia → higher heel-rise threshold (more lenient)
+        heel_rise_scale = float(np.clip(tibia_ratio, 0.8, 1.2))
+
+        self._body_proportions = BodyProportions(
+            hip_width=hip_width,
+            femur_length_avg=femur_avg,
+            tibia_length_avg=tibia_avg,
+            torso_length_avg=torso_avg,
+            hip_to_femur_ratio=hip_to_femur,
+            tibia_to_reference_ratio=tibia_ratio,
+            valgus_scale=valgus_scale,
+            heel_rise_scale=heel_rise_scale,
+        )
+
+        logger.info(
+            "[BONE CONSTRAINTS] Body proportions: hip_w=%.3fm, femur=%.3fm, "
+            "tibia=%.3fm, valgus_scale=%.2f, heel_rise_scale=%.2f",
+            hip_width, femur_avg, tibia_avg, valgus_scale, heel_rise_scale,
+        )
+
+    @property
+    def body_proportions(self) -> Optional[BodyProportions]:
+        """Body proportions derived after calibration. None if not yet calibrated."""
+        return self._body_proportions
+
     def reset(self):
         """Reset calibration state."""
         self._calibrated = False
         self._frame_count = 0
         self._calibrated_lengths.clear()
+        self._body_proportions = None
         self._length_observations = {pair: [] for pair in BONE_PAIRS}
+        if self._standing_gate is not None:
+            self._standing_gate.reset()

@@ -5,6 +5,7 @@ Voice-based onboarding that runs directly in the terminal (no browser)
 
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -17,6 +18,23 @@ load_dotenv()
 
 from livekit.agents import AgentSession, Agent, llm
 from livekit.plugins import openai
+
+
+def terminate_process_group(process):
+    """Kill a process and all its children by sending SIGTERM to the process group."""
+    try:
+        pgid = os.getpgid(process.pid)
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            pgid = os.getpgid(process.pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
 
 
 async def run_console_voice_agent(user_id: Optional[str] = None):
@@ -40,14 +58,15 @@ async def run_console_voice_agent(user_id: Optional[str] = None):
         # Path to voice agent (same directory now)
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
-        # Run the voice agent in console mode
+        # Run the voice agent in its own process group so we can kill all children
         process = subprocess.Popen(
             [sys.executable, str(voice_agent_path), 'console'],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            preexec_fn=os.setsid
         )
 
         return process
@@ -78,14 +97,15 @@ async def run_console_voice_onboarding() -> Optional[Tuple[str, str]]:
         # Path to voice agent (same directory now)
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
-        # Run the voice agent in console mode
+        # Run the voice agent in its own process group so we can kill all children
         process = subprocess.Popen(
             [sys.executable, str(voice_agent_path), 'console'],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            preexec_fn=os.setsid
         )
 
         # Monitor output for onboarding completion markers
@@ -117,8 +137,7 @@ async def run_console_voice_onboarding() -> Optional[Tuple[str, str]]:
 
         except KeyboardInterrupt:
             print("\n\nOnboarding cancelled by user")
-            process.terminate()
-            process.wait()
+            terminate_process_group(process)
             return None
 
         # Check if we got the data

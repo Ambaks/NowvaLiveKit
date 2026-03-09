@@ -16,6 +16,7 @@ from biomechanics.faults.rules.symmetry import SymmetryRule
 from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
+from biomechanics.utils.bone_constraints import BodyProportions
 from biomechanics.config import BiomechanicsConfig, get_config
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,37 @@ class RuleEngine:
                 severe_threshold=faults_config.knee_valgus.severe,
             ),
         ]
+
+    def apply_body_proportion_scaling(self, proportions: BodyProportions) -> None:
+        """Scale fault thresholds based on the user's body proportions.
+
+        Called once by the pipeline after bone-length calibration completes.
+        Runs *before* the first-rep baseline calibration so the baseline
+        adjustments layer on top of the anatomy-scaled values.
+        """
+        for rule in self.rules:
+            if isinstance(rule, KneeValgusRule):
+                rule.mild_threshold *= proportions.valgus_scale
+                rule.moderate_threshold *= proportions.valgus_scale
+                rule.severe_threshold *= proportions.valgus_scale
+                logger.info(
+                    "[RULE ENGINE] Proportion scaling — knee valgus: "
+                    "hip/femur=%.3f, scale=%.2f → thresholds %.1f/%.1f/%.1f",
+                    proportions.hip_to_femur_ratio,
+                    proportions.valgus_scale,
+                    rule.mild_threshold,
+                    rule.moderate_threshold,
+                    rule.severe_threshold,
+                )
+            elif isinstance(rule, HeelRiseRule):
+                rule.threshold_degrees *= proportions.heel_rise_scale
+                logger.info(
+                    "[RULE ENGINE] Proportion scaling — heel rise: "
+                    "tibia_ratio=%.2f, scale=%.2f → threshold %.1f°",
+                    proportions.tibia_to_reference_ratio,
+                    proportions.heel_rise_scale,
+                    rule.threshold_degrees,
+                )
 
     def reset(self) -> None:
         """Reset engine state (clear history and rule states)."""
