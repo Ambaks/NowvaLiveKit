@@ -12,6 +12,7 @@ from biomechanics.faults.fault_types import (
     FAULT_MESSAGES,
 )
 from biomechanics.faults.rep_counter import RepCounter, RepCounterConfig, RepState
+from biomechanics.faults.hip_position_counter import HipPositionRepCounter
 from biomechanics.faults.rule_engine import RuleEngine
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "RepCounter",
     "RepCounterConfig",
     "RepState",
+    "HipPositionRepCounter",
     "RuleEngine",
 ]

@@ -106,6 +106,35 @@ class RepDetectionConfig(BaseModel):
     min_rep_duration_frames: int = 20
 
 
+class HipPositionCounterConfig(BaseModel):
+    """Hip-position-based rep counter thresholds.
+
+    Uses the same signal as the post-hoc rep segmenter (hip_mid_y - ankle_mid_y)
+    but in a causal 4-state machine suitable for real-time counting.
+    """
+    # Velocity thresholds (cm/s)
+    entry_vel_threshold: float = 3.0        # velocity > this → STANDING→DESCENDING
+    bottom_vel_threshold: float = 5.0       # abs(vel) < this → at bottom
+    ascending_vel_threshold: float = 3.0    # vel < -this → BOTTOM→ASCENDING
+
+    # Position thresholds (cm)
+    min_depth_cm: float = 10.0              # minimum displacement for valid rep (prominence)
+    standing_return_cm: float = 3.0         # must return within this of baseline
+
+    # Minimum frames in each state (prevents noise flipping)
+    min_frames_descending: int = 3
+    min_frames_bottom: int = 2
+    min_frames_ascending: int = 3
+
+    # Rep validation
+    min_rep_duration_frames: int = 15       # ~0.5s at 30fps
+
+    # Smoothing parameters
+    position_min_cutoff: float = 1.5        # One Euro filter min_cutoff for hip position
+    position_beta: float = 0.01             # One Euro filter beta for hip position
+    velocity_ema_alpha: float = 0.3         # EMA alpha for velocity smoothing
+
+
 class CoachingConfig(BaseModel):
     """Coaching integration configuration."""
     min_cue_gap_seconds: float = 2.0
@@ -135,6 +164,13 @@ class ConfidenceBlendConfig(BaseModel):
     """Confidence-weighted blending configuration."""
     min_confidence: float = 0.1
     max_confidence: float = 0.9
+
+
+class PositionFilterConfig(BaseModel):
+    """One Euro Filter for 3D keypoint position smoothing."""
+    min_cutoff: float = 0.8
+    beta: float = 4.0
+    d_cutoff: float = 1.0
 
 
 class PredictiveStateConfig(BaseModel):
@@ -187,9 +223,11 @@ class BiomechanicsConfig(BaseModel):
     velocity_clamp: VelocityClampConfig = Field(default_factory=VelocityClampConfig)
     bone_constraints: BoneConstraintsConfig = Field(default_factory=BoneConstraintsConfig)
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
+    position_filter: PositionFilterConfig = Field(default_factory=PositionFilterConfig)
     predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
     standing_gate: StandingGateConfig = Field(default_factory=StandingGateConfig)
     readiness_gate: ReadinessGateConfig = Field(default_factory=ReadinessGateConfig)
+    hip_counter: HipPositionCounterConfig = Field(default_factory=HipPositionCounterConfig)
 
     # Convenience properties
     @property
@@ -305,6 +343,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
     if "confidence_blend" in raw_config:
         config_dict["confidence_blend"] = ConfidenceBlendConfig(**raw_config["confidence_blend"])
 
+    if "position_filter" in raw_config:
+        config_dict["position_filter"] = PositionFilterConfig(**raw_config["position_filter"])
+
     if "predictive_state" in raw_config:
         config_dict["predictive_state"] = PredictiveStateConfig(**raw_config["predictive_state"])
 
@@ -313,6 +354,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "readiness_gate" in raw_config:
         config_dict["readiness_gate"] = ReadinessGateConfig(**raw_config["readiness_gate"])
+
+    if "hip_counter" in raw_config:
+        config_dict["hip_counter"] = HipPositionCounterConfig(**raw_config["hip_counter"])
 
     return BiomechanicsConfig(**config_dict)
 

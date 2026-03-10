@@ -257,6 +257,7 @@ class CoachingService:
             unduck_llm_fn=self._unduck_llm_audio,
             get_cue_audio_fn=self._get_cached_audio,
             advance_set_fn=self._advance_workout_set,
+            on_workout_complete_fn=self._on_workout_complete,
         )
 
         target_reps = self._get_current_target_reps()
@@ -371,6 +372,14 @@ class CoachingService:
             else:
                 logger.info("[COACHING SERVICE] Workout complete — no more sets")
 
+                # Signal pipeline to stop counting reps
+                if self._coaching_ipc:
+                    try:
+                        self._coaching_ipc.send_message({"type": "workout_complete"})
+                        logger.info("[COACHING SERVICE] Sent workout_complete to pipeline")
+                    except Exception as e:
+                        logger.error(f"[COACHING SERVICE] Failed to send workout_complete: {e}")
+
                 if self._on_set_complete_callback:
                     set_summary = {
                         "set_number": self._coaching_orchestrator._set_number if self._coaching_orchestrator else 0,
@@ -386,6 +395,15 @@ class CoachingService:
         except Exception:
             logger.exception("[COACHING SERVICE] Failed to advance workout set")
             return None
+
+    async def _on_workout_complete(self):
+        """Called by orchestrator after exercise recap is spoken."""
+        logger.info("[COACHING SERVICE] Workout complete — notifying voice agent")
+        if self._on_set_complete_callback:
+            await self._on_set_complete_callback({
+                "workout_complete": True,
+                "set_number": self._coaching_orchestrator._set_number if self._coaching_orchestrator else 0,
+            })
 
     # ------------------------------------------------------------------
     # Audio Playback

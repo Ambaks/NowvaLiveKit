@@ -19,7 +19,7 @@ from biomechanics.utils.types import (
     Skeleton2D,
     FaultSeverity,
 )
-from biomechanics.faults import RepCounter
+from biomechanics.faults import HipPositionRepCounter
 
 
 # Colors (BGR)
@@ -73,7 +73,7 @@ class DebugDashboard:
         self,
         camera_frame: np.ndarray,
         pf: PipelineFrame,
-        rep_counter: RepCounter,
+        rep_counter: HipPositionRepCounter,
     ) -> np.ndarray:
         """
         Compose the full dashboard image.
@@ -81,7 +81,7 @@ class DebugDashboard:
         Args:
             camera_frame: Raw BGR frame from webcam.
             pf: Current PipelineFrame result.
-            rep_counter: RepCounter instance for phase/count info.
+            rep_counter: HipPositionRepCounter instance for phase/count info.
 
         Returns:
             Composited BGR image ready for cv2.imshow.
@@ -141,7 +141,7 @@ class DebugDashboard:
                 cv2.circle(frame, (int(kp.x), int(kp.y)), 5, color, -1)
 
     @staticmethod
-    def _draw_text_panel(panel: np.ndarray, pf: PipelineFrame, rc: RepCounter):
+    def _draw_text_panel(panel: np.ndarray, pf: PipelineFrame, rc: HipPositionRepCounter):
         y = 30
         lh = 24  # line height
 

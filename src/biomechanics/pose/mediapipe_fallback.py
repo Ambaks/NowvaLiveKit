@@ -145,7 +145,14 @@ class MediaPipePoseEstimator(PoseEstimator):
             model_path = get_model_path(self.model_complexity)
 
             # Configure pose landmarker options
-            base_options = mp_tasks.BaseOptions(model_asset_path=str(model_path))
+            # Use CPU delegate to avoid Metal SIGTRAP crashes on Apple Silicon
+            delegate = mp_tasks.BaseOptions.Delegate.CPU
+            if os.getenv("MEDIAPIPE_USE_GPU", "").lower() == "true":
+                delegate = mp_tasks.BaseOptions.Delegate.GPU
+            base_options = mp_tasks.BaseOptions(
+                model_asset_path=str(model_path),
+                delegate=delegate,
+            )
 
             options = mp_vision.PoseLandmarkerOptions(
                 base_options=base_options,

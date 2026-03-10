@@ -32,7 +32,7 @@ class AnalyticalIKSolver(IKSolver):
     well for common exercises like squats, lunges, and deadlifts.
 
     Coordinate system assumptions (MediaPipe world coordinates):
-    - Y-axis points upward (vertical)
+    - Y-axis points downward (gravity direction)
     - X-axis points to the subject's left
     - Z-axis points forward (toward camera)
     """
@@ -165,8 +165,8 @@ class AnalyticalIKSolver(IKSolver):
         # Compute angle between trunk and thigh
         # Then adjust so 0 = standing (thigh down, trunk up)
 
-        # Use the vertical as reference
-        vertical = np.array([0, 1, 0])
+        # Use the vertical as reference (Y-down in MediaPipe world coords)
+        vertical = np.array([0, -1, 0])
 
         # Thigh angle from vertical (0 when standing)
         thigh_from_vertical = angle_between_vectors(-thigh_vec, vertical)
@@ -276,8 +276,9 @@ class AnalyticalIKSolver(IKSolver):
         # Shank vector (knee to ankle)
         shank_vec = ankle - knee
 
-        # Vertical reference
-        vertical = np.array([0, -1, 0])  # Pointing down
+        # Vertical reference (Y-down in MediaPipe world coords, so
+        # "pointing down" = [0, 1, 0])
+        vertical = np.array([0, 1, 0])  # Pointing down
 
         # Angle of shank from vertical
         shank_angle = angle_between_vectors(shank_vec, vertical)
@@ -314,8 +315,9 @@ class AnalyticalIKSolver(IKSolver):
         # Trunk vector
         trunk_vec = shoulder_mid - hip_mid
 
-        # Vertical reference
-        vertical = np.array([0, 1, 0])
+        # Vertical reference (Y-down in MediaPipe world coordinates,
+        # so "upward" is [0, -1, 0])
+        vertical = np.array([0, -1, 0])
 
         # Angle from vertical
         angle = angle_between_vectors(trunk_vec, vertical)
@@ -346,8 +348,8 @@ class AnalyticalIKSolver(IKSolver):
         trunk_vec = shoulder_mid - hip_mid
         trunk_frontal = np.array([trunk_vec[0], trunk_vec[1], 0])
 
-        # Vertical in frontal plane
-        vertical = np.array([0, 1, 0])
+        # Vertical in frontal plane (Y-down in MediaPipe world coords)
+        vertical = np.array([0, -1, 0])
 
         angle = angle_between_vectors(trunk_frontal, vertical)
 
@@ -417,7 +419,8 @@ class AnalyticalIKSolver(IKSolver):
         # Project to sagittal plane (YZ)
         trunk_sagittal = np.array([0, trunk_vec[1], trunk_vec[2]])
 
-        vertical = np.array([0, 1, 0])
+        # Y-down in MediaPipe world coords
+        vertical = np.array([0, -1, 0])
 
         if np.linalg.norm(trunk_sagittal) < 1e-6:
             return 0.0

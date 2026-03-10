@@ -26,6 +26,8 @@ from biomechanics.coaching.session_tracker import SessionTracker
 from biomechanics.config import load_pipeline_config
 from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
+from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
+from biomechanics.viz.html_dashboard import generate_session_dashboard
 
 
 # Ensure gate diagnostics are visible on stderr
@@ -87,6 +89,7 @@ def run_biomechanics_pipeline(
     # Rest timer state
     resting = False
     rest_end_time = 0.0
+    workout_finished = False
 
     def _check_incoming_message():
         """Non-blocking check for messages from main.py."""
@@ -179,6 +182,12 @@ def run_biomechanics_pipeline(
     plot_vel_r = []
     plot_rep_events = []
 
+    # --- Per-set rich data collection ---
+    set_collector = SetDataCollector()
+    set_plot_data = []
+    completed_sets = 0
+    out_dir = make_output_dir()
+
     try:
         while True:
             # Check for incoming messages (rest_start, etc.)
@@ -189,7 +198,25 @@ def run_biomechanics_pipeline(
                     rest_end_time = time.time() + rest_seconds
                     resting = True
                     pipeline.reset_readiness_gate()
+
+                    # Finalize the just-completed set
+                    if session_tracker.set_active:
+                        session_tracker.force_end_set()
+                        if session_tracker.last_set_summary:
+                            print(f"[SET] {_format_set_summary(session_tracker.last_set_summary)}")
+                    completed_sets += 1
+                    if set_collector.has_enough_data():
+                        print(f"\n  Generating set {completed_sets} plots...")
+                        plot_result = finalize_set(set_collector, completed_sets, out_dir)
+                        if plot_result is not None:
+                            set_plot_data.append(plot_result)
+                    else:
+                        set_collector.reset()
+
                     print(f"[REST] Starting {rest_seconds}s rest timer")
+                elif incoming.get("type") == "workout_complete":
+                    workout_finished = True
+                    print("[PIPELINE] Workout complete — stopping rep counting")
 
             result = pipeline.process_frame()
 
@@ -213,7 +240,11 @@ def run_biomechanics_pipeline(
                 if result.rep_data is not None:
                     plot_rep_events.append((t, result.rep_data.rep_number))
 
-            if not resting:
+            # Collect per-set rich data
+            if pipeline.is_ready and result.skeleton_3d is not None and not resting and not workout_finished:
+                set_collector.record_frame(result, result.skeleton_3d)
+
+            if not resting and not workout_finished:
                 # Normal mode: send biomechanics data
                 bridge.send_frame_data(result)
 
@@ -227,6 +258,16 @@ def run_biomechanics_pipeline(
                     pipeline.reset_readiness_gate()
                     if session_tracker.last_set_summary:
                         print(f"[SET] {_format_set_summary(session_tracker.last_set_summary)}")
+
+                    # Finalize the timed-out set
+                    completed_sets += 1
+                    if set_collector.has_enough_data():
+                        print(f"\n  Generating set {completed_sets} plots...")
+                        plot_result = finalize_set(set_collector, completed_sets, out_dir)
+                        if plot_result is not None:
+                            set_plot_data.append(plot_result)
+                    else:
+                        set_collector.reset()
 
             # Display video feed
             frame = pipeline.last_frame
@@ -281,11 +322,30 @@ def run_biomechanics_pipeline(
         ipc_client.disconnect()
         print("Biomechanics pipeline stopped")
 
-        # End any active set and print its summary
-        if session_tracker.set_active:
-            session_tracker.force_end_set()
-            if session_tracker.last_set_summary:
-                print(f"[SET] {_format_set_summary(session_tracker.last_set_summary)}")
+        # Finalize any in-progress set
+        if set_collector.has_enough_data() and not resting:
+            if session_tracker.set_active:
+                session_tracker.force_end_set()
+                if session_tracker.last_set_summary:
+                    print(f"[SET] {_format_set_summary(session_tracker.last_set_summary)}")
+            completed_sets += 1
+            print(f"\n  Generating set {completed_sets} plots...")
+            plot_result = finalize_set(set_collector, completed_sets, out_dir)
+            if plot_result is not None:
+                set_plot_data.append(plot_result)
+        else:
+            # End any active set and print its summary
+            if session_tracker.set_active:
+                session_tracker.force_end_set()
+                if session_tracker.last_set_summary:
+                    print(f"[SET] {_format_set_summary(session_tracker.last_set_summary)}")
+
+        # Generate session dashboard
+        if set_plot_data:
+            generate_session_dashboard(
+                set_plot_data, {"exercise": exercise_name},
+                out_dir, auto_open=False,
+            )
 
         # Generate post-session plots
         if len(plot_timestamps) > 10:
@@ -298,7 +358,6 @@ def run_biomechanics_pipeline(
                 "hip_velocity_r": np.array(plot_vel_r),
                 "rep_events": plot_rep_events,
             }
-            out_dir = make_output_dir()
             print(f"Plots will be saved to: {out_dir}\n")
             plot_hip_position(plot_data, out_dir)
             plot_hip_velocity(plot_data, out_dir)

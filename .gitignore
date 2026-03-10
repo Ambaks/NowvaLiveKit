@@ -126,6 +126,9 @@ data/
 user_data/
 downloads/
 
+# Output files
+/output/
+
 # Generated program files
 src/programs/*.md
 programs/*.md

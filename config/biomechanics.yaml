@@ -31,9 +31,9 @@ faults:
   heel_rise:
     threshold_cm: 3.0
   forward_lean:
-    mild: 45.0
-    moderate: 55.0
-    severe: 65.0
+    mild: 55.0
+    moderate: 65.0
+    severe: 75.0
   knee_valgus:
     mild: 8.0
     moderate: 13.0
@@ -83,3 +83,17 @@ bilstm:
   min_depth_class: 3              # 0=standing, 1=quarter, 2=half, 3=parallel, 4=deep
   min_rep_frames: 12
   ema_alpha: 0.2
+
+hip_counter:
+  entry_vel_threshold: 3.0        # cm/s — triggers STANDING→DESCENDING
+  bottom_vel_threshold: 5.0       # cm/s — abs(vel) below this = at bottom
+  ascending_vel_threshold: 3.0    # cm/s — vel < -this = BOTTOM→ASCENDING
+  min_depth_cm: 10.0              # minimum displacement for valid rep (like prominence)
+  standing_return_cm: 3.0         # must return within this of baseline to complete rep
+  min_frames_descending: 3
+  min_frames_bottom: 2
+  min_frames_ascending: 3
+  min_rep_duration_frames: 15
+  position_min_cutoff: 1.5        # One Euro filter smoothing
+  position_beta: 0.01
+  velocity_ema_alpha: 0.3

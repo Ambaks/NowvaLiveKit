@@ -815,7 +815,75 @@ class NovaVoiceAgent(Agent):
     async def _on_coaching_set_complete(self, set_summary: dict):
         """Receive set summary data from coaching service."""
         logger.info(f"[COACHING] Set complete: {set_summary}")
-        # Future: store for analytics, progress tracking
+
+        if set_summary.get("workout_complete"):
+            logger.info("[COACHING] Workout complete — running cleanup")
+            await self._cleanup_workout()
+            return
+
+    async def _cleanup_workout(self):
+        """Shared cleanup for ending a workout (DB logging, state clearing, mode switch).
+
+        Used by both the end_workout tool (user-initiated) and
+        auto-complete after exercise recap.
+        """
+        from db.schedule_utils import mark_workout_completed
+        from db.progress_utils import log_completed_set
+        from core.workout_session import WorkoutSession
+
+        session_data = self.state.get("workout.current_session")
+        if session_data:
+            try:
+                session = WorkoutSession.from_dict(session_data)
+                session.end_session()
+
+                if not session.is_quick_exercise:
+                    db = SessionLocal()
+                    try:
+                        for set_data in session.get_completed_sets_for_logging():
+                            if set_data["performed_reps"] > 0:
+                                log_completed_set(
+                                    db=db,
+                                    user_id=session.user_id,
+                                    set_id=set_data["set_id"],
+                                    performed_reps=set_data["performed_reps"],
+                                    performed_weight=set_data.get("performed_weight"),
+                                    rpe=set_data.get("rpe"),
+                                    measured_velocity=set_data.get("measured_velocity")
+                                )
+                                logger.info(f"[WORKOUT] Logged set {set_data['set_id']}")
+
+                        mark_workout_completed(db, session.schedule_id)
+                        logger.info(f"[WORKOUT] Marked schedule {session.schedule_id} as completed")
+                    except Exception:
+                        logger.exception("[WORKOUT ERROR] Failed to save workout data")
+                    finally:
+                        db.close()
+                else:
+                    logger.info("[QUICK EXERCISE] Skipping DB logging for ad-hoc session")
+
+            except Exception:
+                logger.exception("[WORKOUT ERROR] Failed to process session")
+
+        # Clear workout session and quick exercise state
+        self.state.set("workout.current_session", None)
+        self.state.set("workout.exercise_name", None)
+        self.state.set("quick_exercise.exercise_name", None)
+        self.state.set("quick_exercise.gathering_params", False)
+
+        await self._stop_wake_word_system()
+
+        if self._coaching_service:
+            await self._coaching_service.stop()
+            self._coaching_service = None
+
+        self.state.switch_mode("main_menu")
+        self.state.set("workout.active", False)
+        self.state.save_state()
+
+        new_instructions = self._get_main_menu_instructions()
+        await self.update_instructions(new_instructions)
+        logger.info("[STATE] Workout cleanup complete — switched to main_menu")
 
     # ===== ONBOARDING TOOLS =====
     # NOTE: Function call logging has been added to representative functions (capture_first_name,
@@ -3934,81 +4002,8 @@ Generate programs that are challenging but achievable, progressive, and scientif
         User might say: "stop workout", "I'm done", "end session", "finish"
         """
         logger.info("[WORKOUT] User requested to end workout")
-
-        from db.schedule_utils import mark_workout_completed
-        from db.progress_utils import log_completed_set
-        from core.workout_session import WorkoutSession
-
-        # Get current session from state
-        session_data = self.state.get("workout.current_session")
-
-        if session_data:
-            try:
-                # Deserialize session
-                session = WorkoutSession.from_dict(session_data)
-                session.end_session()
-
-                # Only log to database for scheduled workouts (not quick exercises)
-                if not session.is_quick_exercise:
-                    db = SessionLocal()
-                    try:
-                        for set_data in session.get_completed_sets_for_logging():
-                            # Only log if reps were actually performed
-                            if set_data["performed_reps"] > 0:
-                                log_completed_set(
-                                    db=db,
-                                    user_id=session.user_id,
-                                    set_id=set_data["set_id"],
-                                    performed_reps=set_data["performed_reps"],
-                                    performed_weight=set_data.get("performed_weight"),
-                                    rpe=set_data.get("rpe"),
-                                    measured_velocity=set_data.get("measured_velocity")
-                                )
-                                logger.info(f"[WORKOUT] Logged set {set_data['set_id']}")
-
-                        # Mark workout as completed in schedule
-                        mark_workout_completed(db, session.schedule_id)
-                        logger.info(f"[WORKOUT] Marked schedule {session.schedule_id} as completed")
-
-                    except Exception as e:
-                        logger.exception("[WORKOUT ERROR] Failed to save workout data")
-                    finally:
-                        db.close()
-                else:
-                    logger.info("[QUICK EXERCISE] Skipping DB logging for ad-hoc session")
-
-                # Get progress summary
-                summary = session.get_progress_summary()
-
-            except Exception as e:
-                logger.exception("[WORKOUT ERROR] Failed to process session")
-
-        # Clear workout session and quick exercise state
-        self.state.set("workout.current_session", None)
-        self.state.set("workout.exercise_name", None)
-        self.state.set("quick_exercise.exercise_name", None)
-        self.state.set("quick_exercise.gathering_params", False)
-
-        # Deactivate wake word system and restore normal turn detection
-        await self._stop_wake_word_system()
-
-        # Stop coaching service
-        if self._coaching_service:
-            await self._coaching_service.stop()
-            self._coaching_service = None
-
-        # Switch back to main menu mode (main.py monitors state file)
-        self.state.switch_mode("main_menu")
-        self.state.set("workout.active", False)
-        self.state.save_state()
-
-        # Update agent instructions to main_menu mode
-        new_instructions = self._get_main_menu_instructions()
-        await self.update_instructions(new_instructions)
-        logger.info("[STATE] Switched to main_menu mode and updated instructions - main.py will detect and stop pose estimation")
-
+        await self._cleanup_workout()
         name = self.user_name
-
         return None, f"The user wants to end the workout. Say something like: 'Great work today, {name}! You crushed it. All your progress has been saved. Returning to the main menu.' Keep it celebratory and proud."
 
     @function_tool

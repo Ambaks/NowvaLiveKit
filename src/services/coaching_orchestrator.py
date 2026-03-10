@@ -51,6 +51,7 @@ class CuePriority(enum.IntEnum):
     POSITIVE_CUE = 3
     LLM_MOTIVATION = 10
     LLM_SET_RECAP = 20
+    LLM_EXERCISE_RECAP = 25
 
 
 # =============================================================================
@@ -62,7 +63,7 @@ class CoachingEvent:
     """A coaching event to be dispatched by the orchestrator."""
     priority: int
     timestamp: float = field(compare=False)
-    event_type: str = field(compare=False)  # "cached_cue" | "llm_motivation" | "llm_set_recap"
+    event_type: str = field(compare=False)  # "cached_cue" | "llm_motivation" | "llm_set_recap" | "llm_exercise_recap"
     cue_key: Optional[str] = field(compare=False, default=None)
     data: Dict[str, Any] = field(compare=False, default_factory=dict)
 
@@ -99,6 +100,7 @@ class CoachingOrchestrator:
         unduck_llm_fn: Callable,
         get_cue_audio_fn: Callable,
         advance_set_fn: Optional[Callable] = None,
+        on_workout_complete_fn: Optional[Callable] = None,
     ):
         self._play_cached = play_cached_audio_fn
         self._generate_llm = generate_llm_reply_fn
@@ -106,6 +108,7 @@ class CoachingOrchestrator:
         self._unduck_llm = unduck_llm_fn
         self._get_cue_audio = get_cue_audio_fn
         self._advance_set = advance_set_fn
+        self._on_workout_complete = on_workout_complete_fn
 
         self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._llm_speaking: bool = False
@@ -140,6 +143,9 @@ class CoachingOrchestrator:
         # Deferred report generation — accumulate per-set snapshots,
         # generate all charts at session end (stop())
         self._pending_reports: List[Dict[str, Any]] = []
+
+        # Accumulated per-set summaries for exercise recap
+        self._all_set_summaries: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -302,20 +308,42 @@ class CoachingOrchestrator:
                 "fault_summary": {},
                 "trigger": "rep_count",
             }
-            await self.on_set_complete(set_data)
 
-            if self._advance_set:
-                try:
-                    new_target_reps = await self._advance_set()
-                    self.reset_set(
-                        target_reps=new_target_reps,
-                        positive_cue_keys=self._positive_cue_keys,
-                    )
-                    # Enter rest mode — will be cleared by on_rest_complete()
-                    self._resting = True
-                    logger.info("[ORCHESTRATOR] Entering rest mode")
-                except Exception as e:
-                    logger.error(f"[ORCHESTRATOR] advance_set_fn failed: {e}")
+            is_last_set = (
+                self._total_sets is not None
+                and self._set_number >= self._total_sets
+            )
+
+            if is_last_set:
+                # Last set — snapshot report data and advance session
+                set_data["_report"] = {
+                    "angle_samples": list(self._set_angle_samples),
+                    "cue_log": list(self._set_cue_log),
+                    "rep_events": list(self._set_rep_events),
+                    "start_time": self._set_start_wall_time,
+                }
+                if self._advance_set:
+                    try:
+                        await self._advance_set()
+                    except Exception as e:
+                        logger.error(f"[ORCHESTRATOR] advance_set_fn failed: {e}")
+                # Queue exercise recap instead of set recap
+                await self._queue_exercise_recap(set_data)
+            else:
+                # Mid-workout set complete — normal flow
+                await self.on_set_complete(set_data)
+                if self._advance_set:
+                    try:
+                        new_target_reps = await self._advance_set()
+                        self.reset_set(
+                            target_reps=new_target_reps,
+                            positive_cue_keys=self._positive_cue_keys,
+                        )
+                        # Enter rest mode — will be cleared by on_rest_complete()
+                        self._resting = True
+                        logger.info("[ORCHESTRATOR] Entering rest mode")
+                    except Exception as e:
+                        logger.error(f"[ORCHESTRATOR] advance_set_fn failed: {e}")
             return  # Set complete — skip motivation/positive cues
 
         # Positive reinforcement for clean reps
@@ -362,6 +390,37 @@ class CoachingOrchestrator:
             data=set_data,
         ))
         logger.info(f"[ORCHESTRATOR] Set {set_data.get('set_number', '?')} complete — queued recap")
+
+    async def _queue_exercise_recap(self, final_set_data: dict):
+        """Queue the exercise recap after the last set completes."""
+        # Add the final set's summary to the accumulated list
+        self._all_set_summaries.append({
+            "set_number": final_set_data.get("set_number", 0),
+            "total_reps": final_set_data.get("total_reps", 0),
+            "clean_reps": final_set_data.get("clean_reps", 0),
+            "avg_depth": final_set_data.get("avg_depth", 0),
+            "depth_consistency": final_set_data.get("depth_consistency", 0),
+            "fault_summary": final_set_data.get("fault_summary", {}),
+        })
+
+        # Stash report data for the final set
+        report = final_set_data.get("_report")
+        if report:
+            self._pending_reports.append({
+                "set_number": final_set_data.get("set_number", 0),
+                "report": report,
+            })
+
+        await self._queue.put(CoachingEvent(
+            priority=CuePriority.LLM_EXERCISE_RECAP,
+            timestamp=time.monotonic(),
+            event_type="llm_exercise_recap",
+            data={
+                "all_set_summaries": list(self._all_set_summaries),
+                "total_sets": self._total_sets,
+            },
+        ))
+        logger.info("[ORCHESTRATOR] Last set complete — queued exercise recap")
 
     # ------------------------------------------------------------------
     # Motivation trigger logic
@@ -453,6 +512,12 @@ class CoachingOrchestrator:
             logger.info("[ORCHESTRATOR] → Firing LLM set recap")
             await self._speak_llm_set_recap(event.data)
             logger.info("[ORCHESTRATOR] ✓ LLM set recap complete")
+
+        elif event.event_type == "llm_exercise_recap":
+            await self._drain_cached_cues()
+            logger.info("[ORCHESTRATOR] → Firing LLM exercise recap")
+            await self._speak_llm_exercise_recap(event.data)
+            logger.info("[ORCHESTRATOR] ✓ LLM exercise recap complete")
 
     async def _dispatch_cached_cue(self, event: CoachingEvent):
         """Play a cached cue with LLM audio ducking."""
@@ -639,7 +704,76 @@ class CoachingOrchestrator:
             report = data.get("_report")
             if report:
                 self._pending_reports.append({"set_number": set_num, "report": report})
+            # Accumulate set summary for exercise recap
+            self._all_set_summaries.append({
+                "set_number": set_num,
+                "total_reps": total_reps,
+                "clean_reps": clean_reps,
+                "avg_depth": avg_depth,
+                "depth_consistency": depth_consistency,
+                "fault_summary": fault_summary,
+            })
             # Only reset if not already reset by rep-count trigger
             # (rep-count trigger resets immediately in on_rep_complete)
             if data.get("trigger") != "rep_count":
                 self.reset_set(self._set_target_reps, self._positive_cue_keys)
+
+    async def _speak_llm_exercise_recap(self, data: dict):
+        """Generate and speak comprehensive exercise recap after all sets."""
+        all_summaries = data.get("all_set_summaries", [])
+        total_sets = data.get("total_sets", len(all_summaries))
+
+        # Compute aggregate stats
+        total_reps = sum(s.get("total_reps", 0) for s in all_summaries)
+        total_clean = sum(s.get("clean_reps", 0) for s in all_summaries)
+        clean_pct = round(total_clean / total_reps * 100) if total_reps > 0 else 0
+
+        # Aggregate faults across all sets
+        all_faults: Dict[str, int] = {}
+        for s in all_summaries:
+            for fault_type, stats in s.get("fault_summary", {}).items():
+                all_faults[fault_type] = all_faults.get(fault_type, 0) + stats.get("count", 0)
+
+        # Per-set breakdown
+        per_set_lines = []
+        for s in all_summaries:
+            sn = s.get("set_number", 0)
+            tr = s.get("total_reps", 0)
+            cr = s.get("clean_reps", 0)
+            per_set_lines.append(f"Set {sn}: {tr} reps, {cr} clean")
+
+        parts = [
+            f"Exercise complete! {total_sets} sets finished.",
+            f"Total: {total_reps} reps, {total_clean} clean ({clean_pct}%).",
+        ]
+        if per_set_lines:
+            parts.append(f"Breakdown: {'; '.join(per_set_lines)}.")
+        if all_faults:
+            top_faults = sorted(all_faults.items(), key=lambda x: x[1], reverse=True)[:3]
+            fault_str = ", ".join(f"{ft}: {cnt}x" for ft, cnt in top_faults)
+            parts.append(f"Most common faults: {fault_str}.")
+
+        context_str = " ".join(parts)
+
+        instructions = (
+            f"Your athlete just finished their entire exercise. Give them a comprehensive recap. "
+            f"{context_str} "
+            f"Give honest, encouraging feedback (3-5 sentences). "
+            f"Highlight overall performance, progression across sets, and one key takeaway. "
+            f"End on a high note — they just finished!"
+        )
+
+        logger.info(f"[ORCHESTRATOR] LLM exercise recap instructions: {instructions[:120]}...")
+        self._llm_speaking = True
+        try:
+            await self._generate_llm(instructions)
+            logger.info("[ORCHESTRATOR] ✓ LLM exercise recap spoken")
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] LLM exercise recap failed: {e}", exc_info=True)
+        finally:
+            self._llm_speaking = False
+            if self._on_workout_complete:
+                try:
+                    await self._on_workout_complete()
+                except Exception as e:
+                    logger.error(f"[ORCHESTRATOR] on_workout_complete callback failed: {e}")

@@ -17,13 +17,14 @@ import numpy as np
 from biomechanics.config import BiomechanicsConfig, load_pipeline_config
 from biomechanics.pose.mediapipe_fallback import MediaPipePoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
-from biomechanics.faults import RuleEngine, RepCounter, RepCounterConfig
-from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, DEPTH_CLASS_NAMES
+from biomechanics.faults import RuleEngine, HipPositionRepCounter
+from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, CocoKeypoints, DEPTH_CLASS_NAMES
 from biomechanics.utils.filters import JointAngleFilter
 from biomechanics.utils.derivatives import DerivativeTracker
 from biomechanics.utils.confidence_blend import ConfidenceBlender
 from biomechanics.utils.velocity_clamp import VelocityClamp
 from biomechanics.utils.bone_constraints import BoneLengthConstraints
+from biomechanics.utils.position_filter import KeypointPositionSmoother
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
 from biomechanics.utils.standing_gate import StandingPoseGate
 
@@ -42,7 +43,7 @@ class BiomechanicsPipeline:
         self._frame_index = 0
 
         # Optional pre-IK filtering (off by default, enable via .env)
-        self._preik_enabled = os.getenv("ENABLE_PREIK_FILTERS", "false").lower() == "true"
+        self._preik_enabled = os.getenv("ENABLE_PREIK_FILTERS", "true").lower() == "true"
 
         # Layer 1: Capture
         self._cap = cv2.VideoCapture(self.config.capture.device_id)
@@ -108,6 +109,7 @@ class BiomechanicsPipeline:
         self._confidence_blender = None
         self._velocity_clamp = None
         self._bone_constraints = None
+        self._position_smoother = None
         self._predictive_estimator = None
         self._proportions_applied = False
 
@@ -125,6 +127,11 @@ class BiomechanicsPipeline:
                 tolerance=self.config.bone_constraints.tolerance,
                 standing_gate=self._standing_gate,
             )
+            self._position_smoother = KeypointPositionSmoother(
+                min_cutoff=self.config.position_filter.min_cutoff,
+                beta=self.config.position_filter.beta,
+                d_cutoff=self.config.position_filter.d_cutoff,
+            )
             self._predictive_estimator = PredictiveStateEstimator(
                 horizon_seconds=self.config.predictive_state.horizon_seconds,
                 max_extrapolation_deg=self.config.predictive_state.max_extrapolation_deg,
@@ -133,12 +140,8 @@ class BiomechanicsPipeline:
         # Layer 4: Fault detection
         self._rule_engine = RuleEngine()
 
-        # Layer 5: Rep counting
-        rep_config = RepCounterConfig(
-            entry_knee_angle=self.config.rep_detection.entry_threshold,
-            min_rep_duration_frames=self.config.rep_detection.min_rep_duration_frames,
-        )
-        self._rep_counter = RepCounter(rep_config)
+        # Layer 5: Rep counting (hip-position-based, mirrors post-hoc segmenter)
+        self._rep_counter = HipPositionRepCounter(config=self.config.hip_counter)
 
         # Layer 6 (optional): BiLSTM rep counting
         self._bilstm = None
@@ -162,7 +165,7 @@ class BiomechanicsPipeline:
         self.last_frame: Optional[np.ndarray] = None
 
     @property
-    def rep_counter(self) -> RepCounter:
+    def rep_counter(self) -> HipPositionRepCounter:
         """Expose rep counter for external access (e.g. dashboard)."""
         return self._rep_counter
 
@@ -262,6 +265,7 @@ class BiomechanicsPipeline:
             skeleton_3d = self._confidence_blender.blend(skeleton_3d)
             skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+            skeleton_3d = self._position_smoother.smooth(skeleton_3d)
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
 
             # Apply body-proportion scaling once after bone calibration
@@ -274,6 +278,12 @@ class BiomechanicsPipeline:
                 self._rule_engine.apply_body_proportion_scaling(proportions)
                 self._ik_solver.set_body_proportions(proportions)
                 self._proportions_applied = True
+
+        # --- Compute hip position for rep counting ---
+        kpts = skeleton_3d.to_numpy()  # (17, 3)
+        hip_mid_y = (kpts[CocoKeypoints.LEFT_HIP][1] + kpts[CocoKeypoints.RIGHT_HIP][1]) / 2
+        ankle_mid_y = (kpts[CocoKeypoints.LEFT_ANKLE][1] + kpts[CocoKeypoints.RIGHT_ANKLE][1]) / 2
+        hip_position_cm = (hip_mid_y - ankle_mid_y) * 100.0
 
         # --- IK solve ---
         t0 = time.perf_counter()
@@ -306,8 +316,13 @@ class BiomechanicsPipeline:
         if not self._rule_engine.calibrated and self._rep_counter.in_rep:
             self._rule_engine.record_frame_for_calibration(angles)
 
-        # Rep counter uses ACTUAL angles
-        rep_data, feedback = self._rep_counter.update(angles, derivatives, faults)
+        # Rep counter uses hip position for state, angles for metrics
+        rep_data, feedback = self._rep_counter.update(
+            hip_position_cm=hip_position_cm,
+            timestamp=now,
+            angles=angles,
+            faults=faults,
+        )
 
         # Phase-aware smoothing only when pre-IK filters are active
         if self._preik_enabled:
@@ -325,8 +340,10 @@ class BiomechanicsPipeline:
 
         self._frame_index += 1
 
-        # Use BiLSTM rep data as primary when enabled and available
-        final_rep_data = rep_data
+        # Use BiLSTM rep data as primary when enabled and available.
+        # When BiLSTM is active, suppress rule-based rep events to prevent
+        # double-counting when the two counters fire on different frames.
+        final_rep_data = rep_data if self._bilstm is None else None
         if self._bilstm is not None and bilstm_rep_data is not None:
             # Enrich BiLSTM RepData with rule-based metrics so downstream
             # consumers (IPC bridge, coaching LLM, set reports) get real

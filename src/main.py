@@ -394,6 +394,14 @@ class NowvaApp:
                                         print(f"[REST] Forwarded rest_start to pose process")
                                     except Exception as e:
                                         print(f"[REST] Failed to forward to pose process: {e}")
+                            elif msg_type == "workout_complete":
+                                print("[COACHING IPC] Received workout_complete from voice agent")
+                                if self.ipc_server and self.ipc_server.client_socket:
+                                    try:
+                                        self.ipc_server.send_message(message)
+                                        print("[COACHING IPC] Forwarded workout_complete to pose process")
+                                    except Exception as e:
+                                        print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
 
                         def run_coaching_server():
                             self.coaching_ipc.start(message_callback=coaching_message_handler)
