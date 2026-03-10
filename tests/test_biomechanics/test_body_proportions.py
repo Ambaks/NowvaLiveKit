@@ -8,12 +8,16 @@ from biomechanics.utils.bone_constraints import (
     BodyProportions,
     REFERENCE_HIP_TO_FEMUR_RATIO,
     REFERENCE_TIBIA_LENGTH_M,
+    REFERENCE_FEMUR_TO_TORSO,
 )
 from biomechanics.utils.standing_gate import StandingPoseGate
 from biomechanics.utils.types import Skeleton3D, CocoKeypoints as CK
 from biomechanics.faults.rule_engine import RuleEngine
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.faults.rules.heel_rise import HeelRiseRule
+from biomechanics.faults.rules.forward_lean import ForwardLeanRule
+from biomechanics.faults.fault_types import FaultType
+from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
 
 
 def _make_skeleton(
@@ -205,6 +209,8 @@ class TestRuleEngineProportionScaling:
             tibia_to_reference_ratio=1.0,
             valgus_scale=1.2,
             heel_rise_scale=1.0,
+            forward_lean_scale=1.0,
+            pelvis_tilt_coupling=0.4,
         )
 
         engine.apply_body_proportion_scaling(proportions)
@@ -228,6 +234,8 @@ class TestRuleEngineProportionScaling:
             tibia_to_reference_ratio=1.2,
             valgus_scale=1.0,
             heel_rise_scale=1.2,
+            forward_lean_scale=1.0,
+            pelvis_tilt_coupling=0.4,
         )
 
         engine.apply_body_proportion_scaling(proportions)
@@ -237,3 +245,121 @@ class TestRuleEngineProportionScaling:
         )
         # Default threshold = 3.0 * 5 = 15.0, scaled by 1.2 = 18.0
         assert heel_rule.threshold_degrees == pytest.approx(15.0 * 1.2, abs=0.1)
+
+    def test_forward_lean_thresholds_scaled(self):
+        engine = RuleEngine()
+
+        proportions = BodyProportions(
+            hip_width=0.20,
+            femur_length_avg=0.55,
+            tibia_length_avg=0.45,
+            torso_length_avg=0.50,
+            hip_to_femur_ratio=0.364,
+            tibia_to_reference_ratio=1.0,
+            valgus_scale=1.0,
+            heel_rise_scale=1.0,
+            forward_lean_scale=1.2,
+            pelvis_tilt_coupling=0.4,
+        )
+
+        engine.apply_body_proportion_scaling(proportions)
+
+        fwd_rule = engine.get_rule(FaultType.FORWARD_LEAN)
+        assert fwd_rule.mild_threshold == pytest.approx(45.0 * 1.2, abs=0.1)
+        assert fwd_rule.moderate_threshold == pytest.approx(55.0 * 1.2, abs=0.1)
+        assert fwd_rule.severe_threshold == pytest.approx(65.0 * 1.2, abs=0.1)
+
+
+class TestForwardLeanProportions:
+
+    def test_long_femurs_increase_forward_lean_scale(self):
+        """Long femurs relative to torso should produce forward_lean_scale > 1."""
+        bc = BoneLengthConstraints(calibration_frames=5)
+        pts = _standing_skeleton()
+        # Lengthen femurs: move knees down → femur = 0.60m (torso stays ~0.54m)
+        pts[CK.LEFT_KNEE] = [0.10, 0.40, 0.0]
+        pts[CK.RIGHT_KNEE] = [-0.10, 0.40, 0.0]
+
+        for i in range(5):
+            bc.enforce(_make_skeleton(pts, frame_index=i))
+
+        p = bc.body_proportions
+        # femur_to_torso = 0.60 / ~0.54 ≈ 1.11 > reference 0.90
+        assert p.forward_lean_scale > 1.0
+
+    def test_short_femurs_decrease_forward_lean_scale(self):
+        """Short femurs relative to torso should produce forward_lean_scale < 1."""
+        bc = BoneLengthConstraints(calibration_frames=5)
+        pts = _standing_skeleton()
+        # Shorten femurs: move knees up → femur = 0.30m
+        pts[CK.LEFT_KNEE] = [0.10, 0.70, 0.0]
+        pts[CK.RIGHT_KNEE] = [-0.10, 0.70, 0.0]
+
+        for i in range(5):
+            bc.enforce(_make_skeleton(pts, frame_index=i))
+
+        p = bc.body_proportions
+        # femur_to_torso = 0.30 / ~0.54 ≈ 0.56 < reference 0.90
+        assert p.forward_lean_scale < 1.0
+
+    def test_forward_lean_scale_clamped(self):
+        """Extreme proportions should be clamped to [0.8, 1.3]."""
+        bc = BoneLengthConstraints(calibration_frames=5)
+        pts = _standing_skeleton()
+        # Extremely long femurs
+        pts[CK.LEFT_KNEE] = [0.10, 0.0, 0.0]
+        pts[CK.RIGHT_KNEE] = [-0.10, 0.0, 0.0]
+
+        for i in range(5):
+            bc.enforce(_make_skeleton(pts, frame_index=i))
+
+        assert bc.body_proportions.forward_lean_scale == pytest.approx(1.3)
+
+    def test_pelvis_tilt_coupling_computed(self):
+        """Pelvis tilt coupling should be in reasonable range."""
+        bc = BoneLengthConstraints(calibration_frames=5)
+        pts = _standing_skeleton()
+
+        for i in range(5):
+            bc.enforce(_make_skeleton(pts, frame_index=i))
+
+        p = bc.body_proportions
+        assert 0.30 <= p.pelvis_tilt_coupling <= 0.55
+
+
+class TestIKSolverProportions:
+
+    def test_pelvis_tilt_uses_default_coupling(self):
+        """IK solver should use 0.4 coupling by default."""
+        solver = AnalyticalIKSolver()
+        assert solver._pelvis_tilt_coupling == pytest.approx(0.4)
+
+    def test_pelvis_tilt_uses_custom_coupling(self):
+        """IK solver should use custom coupling after set_body_proportions."""
+        solver = AnalyticalIKSolver()
+
+        proportions = BodyProportions(
+            hip_width=0.30,
+            femur_length_avg=0.45,
+            tibia_length_avg=0.45,
+            torso_length_avg=0.50,
+            hip_to_femur_ratio=0.667,
+            tibia_to_reference_ratio=1.0,
+            valgus_scale=1.0,
+            heel_rise_scale=1.0,
+            forward_lean_scale=1.0,
+            pelvis_tilt_coupling=0.48,
+        )
+
+        solver.set_body_proportions(proportions)
+        assert solver._pelvis_tilt_coupling == pytest.approx(0.48)
+
+
+class TestForwardLeanRuleEnabled:
+
+    def test_forward_lean_rule_in_engine(self):
+        """ForwardLeanRule should now be active in the rule engine."""
+        engine = RuleEngine()
+        fwd_rule = engine.get_rule(FaultType.FORWARD_LEAN)
+        assert fwd_rule is not None
+        assert engine.rule_count == 5

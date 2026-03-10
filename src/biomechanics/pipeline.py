@@ -91,6 +91,19 @@ class BiomechanicsPipeline:
             required_consecutive_frames=sg.required_consecutive_frames,
         )
 
+        # Readiness gate — per-set gate that ensures the user is fully
+        # detected and standing before data collection begins. Resets
+        # between sets so each set starts with clean data.
+        rg = self.config.readiness_gate
+        self._readiness_gate = StandingPoseGate(
+            min_confidence=rg.min_confidence,
+            max_knee_flexion_deg=rg.max_knee_flexion_deg,
+            max_trunk_flexion_deg=rg.max_trunk_flexion_deg,
+            min_torso_length_m=rg.min_torso_length_m,
+            max_torso_length_m=rg.max_torso_length_m,
+            required_consecutive_frames=rg.required_consecutive_frames,
+        )
+
         # Pre-IK skeleton filtering (only initialised when enabled)
         self._confidence_blender = None
         self._velocity_clamp = None
@@ -152,6 +165,19 @@ class BiomechanicsPipeline:
     def rep_counter(self) -> RepCounter:
         """Expose rep counter for external access (e.g. dashboard)."""
         return self._rep_counter
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether the readiness gate has passed and data is being collected."""
+        return self._readiness_gate.is_ready
+
+    def reset_readiness_gate(self) -> None:
+        """Reset the per-set readiness gate.
+
+        Call this when a set ends or a rest period starts so the next
+        set requires the user to be fully detected for 30 frames first.
+        """
+        self._readiness_gate.reset()
 
     def process_frame(self) -> PipelineFrame:
         """
@@ -218,6 +244,18 @@ class BiomechanicsPipeline:
         # --- Standing pose gate (runs every frame, unconditional) ---
         self._standing_gate.check(skeleton_3d)
 
+        # --- Readiness gate (per-set, resets between sets) ---
+        self._readiness_gate.check(skeleton_3d)
+        if not self._readiness_gate.is_ready:
+            self._frame_index += 1
+            return PipelineFrame(
+                frame_index=self._frame_index,
+                timestamp=now,
+                skeleton_2d=skeleton_2d,
+                skeleton_3d=skeleton_3d,
+                latency_ms=latency_ms,
+            )
+
         # --- Pre-IK filtering layers (optional) ---
         if self._preik_enabled:
             t0 = time.perf_counter()
@@ -232,9 +270,9 @@ class BiomechanicsPipeline:
                 and self._bone_constraints.is_calibrated
                 and self._bone_constraints.body_proportions is not None
             ):
-                self._rule_engine.apply_body_proportion_scaling(
-                    self._bone_constraints.body_proportions,
-                )
+                proportions = self._bone_constraints.body_proportions
+                self._rule_engine.apply_body_proportion_scaling(proportions)
+                self._ik_solver.set_body_proportions(proportions)
                 self._proportions_applied = True
 
         # --- IK solve ---

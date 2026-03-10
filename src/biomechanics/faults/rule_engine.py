@@ -90,12 +90,11 @@ class RuleEngine:
             HeelRiseRule(
                 threshold_degrees=faults_config.heel_rise.threshold_cm * 5,  # Convert cm to degrees approx
             ),
-            # ForwardLeanRule disabled — too many false positives with single camera
-            # ForwardLeanRule(
-            #     mild_threshold=faults_config.forward_lean.mild,
-            #     moderate_threshold=faults_config.forward_lean.moderate,
-            #     severe_threshold=faults_config.forward_lean.severe,
-            # ),
+            ForwardLeanRule(
+                mild_threshold=faults_config.forward_lean.mild,
+                moderate_threshold=faults_config.forward_lean.moderate,
+                severe_threshold=faults_config.forward_lean.severe,
+            ),
             KneeValgusRule(
                 mild_threshold=faults_config.knee_valgus.mild,
                 moderate_threshold=faults_config.knee_valgus.moderate,
@@ -132,6 +131,18 @@ class RuleEngine:
                     proportions.tibia_to_reference_ratio,
                     proportions.heel_rise_scale,
                     rule.threshold_degrees,
+                )
+            elif isinstance(rule, ForwardLeanRule):
+                rule.mild_threshold *= proportions.forward_lean_scale
+                rule.moderate_threshold *= proportions.forward_lean_scale
+                rule.severe_threshold *= proportions.forward_lean_scale
+                logger.info(
+                    "[RULE ENGINE] Proportion scaling — forward lean: "
+                    "femur/torso scale=%.2f → thresholds %.1f/%.1f/%.1f",
+                    proportions.forward_lean_scale,
+                    rule.mild_threshold,
+                    rule.moderate_threshold,
+                    rule.severe_threshold,
                 )
 
     def reset(self) -> None:
@@ -250,12 +261,16 @@ class RuleEngine:
         faults_config = self.config.faults
 
         for rule in self.rules:
-            # ForwardLeanRule disabled — skip calibration
-            # if isinstance(rule, ForwardLeanRule):
-            #     rule.mild_threshold = max(faults_config.forward_lean.mild, self._peak_trunk_flexion + 10.0)
-            #     ...
+            if isinstance(rule, ForwardLeanRule):
+                rule.mild_threshold = max(rule.mild_threshold, self._peak_trunk_flexion + 10.0)
+                rule.moderate_threshold = max(rule.moderate_threshold, self._peak_trunk_flexion + 15.0)
+                rule.severe_threshold = max(rule.severe_threshold, self._peak_trunk_flexion + 20.0)
+                logger.info(
+                    "[RULE ENGINE] Forward lean baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
+                    self._peak_trunk_flexion, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
+                )
 
-            if isinstance(rule, KneeValgusRule):
+            elif isinstance(rule, KneeValgusRule):
                 rule.mild_threshold = max(faults_config.knee_valgus.mild, self._peak_hip_adduction + 5.0)
                 rule.moderate_threshold = max(faults_config.knee_valgus.moderate, self._peak_hip_adduction + 10.0)
                 rule.severe_threshold = max(faults_config.knee_valgus.severe, self._peak_hip_adduction + 15.0)

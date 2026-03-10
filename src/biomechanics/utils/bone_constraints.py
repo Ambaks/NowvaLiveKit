@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Population-average reference values for proportion scaling.
 REFERENCE_HIP_TO_FEMUR_RATIO = 0.556  # ~0.25 m hip width / ~0.45 m femur
 REFERENCE_TIBIA_LENGTH_M = 0.45
+REFERENCE_FEMUR_TO_TORSO = 0.90  # ~0.45 m femur / ~0.50 m torso
 
 
 @dataclass
@@ -48,6 +49,8 @@ class BodyProportions:
     # Pre-computed, clamped scale factors for rules
     valgus_scale: float         # multiply valgus thresholds by this
     heel_rise_scale: float      # multiply heel-rise threshold by this
+    forward_lean_scale: float   # multiply forward-lean thresholds by this
+    pelvis_tilt_coupling: float # pelvis tilt as fraction of trunk flexion
 
 
 # Ordered from proximal to distal so corrections cascade properly.
@@ -234,6 +237,18 @@ class BoneLengthConstraints:
         # Longer tibia → higher heel-rise threshold (more lenient)
         heel_rise_scale = float(np.clip(tibia_ratio, 0.8, 1.2))
 
+        # Longer femurs relative to torso → more forward lean needed (more lenient)
+        femur_to_torso = femur_avg / max(torso_avg, 0.01)
+        forward_lean_scale = float(np.clip(
+            femur_to_torso / REFERENCE_FEMUR_TO_TORSO, 0.8, 1.3,
+        ))
+
+        # Pelvis-trunk coupling: wider hips → more pelvis involvement
+        hip_to_torso = hip_width / max(torso_avg, 0.01)
+        pelvis_tilt_coupling = float(np.clip(
+            0.35 + 0.15 * (hip_to_torso / 0.50), 0.30, 0.55,
+        ))
+
         self._body_proportions = BodyProportions(
             hip_width=hip_width,
             femur_length_avg=femur_avg,
@@ -243,12 +258,16 @@ class BoneLengthConstraints:
             tibia_to_reference_ratio=tibia_ratio,
             valgus_scale=valgus_scale,
             heel_rise_scale=heel_rise_scale,
+            forward_lean_scale=forward_lean_scale,
+            pelvis_tilt_coupling=pelvis_tilt_coupling,
         )
 
         logger.info(
             "[BONE CONSTRAINTS] Body proportions: hip_w=%.3fm, femur=%.3fm, "
-            "tibia=%.3fm, valgus_scale=%.2f, heel_rise_scale=%.2f",
-            hip_width, femur_avg, tibia_avg, valgus_scale, heel_rise_scale,
+            "tibia=%.3fm, torso=%.3fm, valgus_scale=%.2f, heel_rise_scale=%.2f, "
+            "fwd_lean_scale=%.2f, pelvis_coupling=%.2f",
+            hip_width, femur_avg, tibia_avg, torso_avg,
+            valgus_scale, heel_rise_scale, forward_lean_scale, pelvis_tilt_coupling,
         )
 
     @property

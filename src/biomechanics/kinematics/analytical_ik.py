@@ -50,6 +50,11 @@ class AnalyticalIKSolver(IKSolver):
         super().__init__()
         self.min_confidence = min_confidence
         self._initialized = True  # No initialization needed for analytical solver
+        self._pelvis_tilt_coupling: float = 0.4  # Default; updated by body proportions
+
+    def set_body_proportions(self, proportions) -> None:
+        """Update pelvis tilt coupling from calibrated body proportions."""
+        self._pelvis_tilt_coupling = proportions.pelvis_tilt_coupling
 
     def solve(self, skeleton: Skeleton3D) -> JointAngles:
         """
@@ -418,14 +423,15 @@ class AnalyticalIKSolver(IKSolver):
             return 0.0
 
         # Scale trunk flexion to estimate pelvis tilt
-        # Pelvis tilt is typically 30-50% of trunk flexion in squats
+        # Pelvis tilt is typically 30-55% of trunk flexion in squats,
+        # varying with hip width and torso proportions.
         trunk_angle = angle_between_vectors(trunk_sagittal, vertical)
 
         # Check direction (forward lean = positive Z component in trunk)
         if trunk_vec[2] < 0:
             trunk_angle = -trunk_angle
 
-        return trunk_angle * 0.4  # Approximate scaling
+        return trunk_angle * self._pelvis_tilt_coupling
 
     def _compute_pelvis_list(self, kpts: dict) -> float:
         """

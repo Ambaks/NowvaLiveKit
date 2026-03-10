@@ -567,9 +567,10 @@ class CoachingOrchestrator:
         context_str = " ".join(parts)
 
         instructions = (
+            f"You are in the middle of a set and you are giving your athlete some motivation"
             f"{context_str} "
             f"Give a SHORT (2-5 words MAX) motivational push. "
-            f"Do NOT give form cues."
+            
         )
 
         logger.info(f"[ORCHESTRATOR] LLM motivation instructions: {instructions[:100]}...")
@@ -614,8 +615,10 @@ class CoachingOrchestrator:
             parts.append(f"Faults: {'; '.join(fault_lines)}.")
 
         context_str = " ".join(parts)
+        print(context_str)
 
         instructions = (
+            f"Your athlete just finished a set. You are giving them feedback on what they just did using the data."
             f"{context_str} "
             f"Give honest feedback (2-4 sentences). "
             f"Highlight what went well. If recurring faults, "

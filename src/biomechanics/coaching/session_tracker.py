@@ -6,8 +6,9 @@ Monitors the timing gap between reps to detect when a set ends
 statistics and triggers set-complete messages through the IPCBridge.
 """
 
+import statistics
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from biomechanics.coaching.ipc_bridge import IPCBridge
 from biomechanics.config import CoachingConfig
@@ -42,6 +43,9 @@ class SessionTracker:
         self.total_reps: int = 0
         self.total_sets: int = 0
         self.all_reps: List[RepData] = []
+
+        # Last completed set summary (populated in _end_current_set)
+        self.last_set_summary: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Rep handling
@@ -98,12 +102,43 @@ class SessionTracker:
     def _end_current_set(self) -> None:
         """Finalize the current set and send summary via IPC."""
         if self.current_set_reps:
+            self.last_set_summary = self._compute_set_summary(
+                self.current_set_number, self.current_set_reps
+            )
             self.ipc_bridge.send_set_complete(
                 self.current_set_number, self.current_set_reps
             )
             self.total_sets += 1
         self.current_set_reps = []
         self.set_active = False
+
+    def _compute_set_summary(
+        self, set_number: int, reps: List[RepData]
+    ) -> Dict[str, Any]:
+        """Compute summary stats for a completed set."""
+        depths = [r.max_depth_angle for r in reps]
+        avg_depth = statistics.mean(depths) if depths else 0.0
+        depth_consistency = statistics.stdev(depths) if len(depths) > 1 else 0.0
+
+        fault_summary: Dict[str, Dict[str, Any]] = {}
+        for rep in reps:
+            for fault in rep.faults:
+                key = fault.fault_type
+                if key not in fault_summary:
+                    fault_summary[key] = {"count": 0, "total_severity": 0.0}
+                fault_summary[key]["count"] += 1
+                fault_summary[key]["total_severity"] += fault.severity_score
+        for data in fault_summary.values():
+            data["avg_severity"] = round(data["total_severity"] / data["count"], 2)
+
+        return {
+            "set_number": set_number,
+            "total_reps": len(reps),
+            "clean_reps": sum(1 for r in reps if r.is_clean),
+            "avg_depth": round(avg_depth, 1),
+            "depth_consistency": round(depth_consistency, 1),
+            "fault_summary": fault_summary,
+        }
 
     def force_end_set(self) -> None:
         """Manually end the current set (e.g. user stops exercising)."""

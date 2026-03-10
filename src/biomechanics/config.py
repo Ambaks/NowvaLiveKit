@@ -153,6 +153,21 @@ class StandingGateConfig(BaseModel):
     required_consecutive_frames: int = 5
 
 
+class ReadinessGateConfig(BaseModel):
+    """Per-set readiness gate configuration.
+
+    Same checks as StandingGateConfig but resets between sets and
+    uses more lenient thresholds — the goal is just to confirm the user
+    is standing in frame, not to calibrate bone lengths.
+    """
+    min_confidence: float = 0.3
+    max_knee_flexion_deg: float = 35.0
+    max_trunk_flexion_deg: float = 35.0
+    min_torso_length_m: float = 0.15
+    max_torso_length_m: float = 1.00
+    required_consecutive_frames: int = 30
+
+
 # =============================================================================
 # FULL CONFIGURATION
 # =============================================================================
@@ -174,6 +189,7 @@ class BiomechanicsConfig(BaseModel):
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
     predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
     standing_gate: StandingGateConfig = Field(default_factory=StandingGateConfig)
+    readiness_gate: ReadinessGateConfig = Field(default_factory=ReadinessGateConfig)
 
     # Convenience properties
     @property
@@ -294,6 +310,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "standing_gate" in raw_config:
         config_dict["standing_gate"] = StandingGateConfig(**raw_config["standing_gate"])
+
+    if "readiness_gate" in raw_config:
+        config_dict["readiness_gate"] = ReadinessGateConfig(**raw_config["readiness_gate"])
 
     return BiomechanicsConfig(**config_dict)
 
