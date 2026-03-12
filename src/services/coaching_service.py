@@ -14,15 +14,12 @@ from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# Minimal system prompt for isolated coaching LLM calls.
-# This is the ONLY context the model sees (no conversation history).
-COACHING_SYSTEM_PROMPT = """You are Nova, an energetic, world-class fitness coach on the Nowva smart squat rack.
-
-Voice & Delivery:
-- HIGH energy, motivating, supportive
-- SHORT responses only — follow the word limits given
-- Sound like a real coach in the gym
-— keep it human"""
+# Persona prefix prepended to all coaching LLM instructions.
+_COACHING_PERSONA = (
+    "You are Nova, an energetic, world-class fitness coach on the Nowva smart squat rack. "
+    "HIGH energy, motivating, supportive. SHORT responses only — follow the word limits given. "
+    "Sound like a real coach in the gym — keep it human."
+)
 
 
 class CoachingService:
@@ -54,8 +51,8 @@ class CoachingService:
         self._event_loop = None
         self._started = False
 
-        # Lock to prevent context swap from overlapping with wake word responses
-        self.context_lock = asyncio.Lock()
+        # Flag for wake word system to detect active coaching speech
+        self.is_coaching_speaking: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle API
@@ -212,12 +209,9 @@ class CoachingService:
                     f"Do NOT ask if they are ready. Do NOT wait for confirmation. "
                     f"Just announce it. Example: 'Set {completed_set} done, set {next_set} — let's go!'"
                 )
-                logger.info("[COACHING SERVICE] → Calling isolated LLM for rest_complete")
-                await self._isolated_llm_reply(
-                    system_prompt=COACHING_SYSTEM_PROMPT,
-                    user_message=instructions,
-                )
-                logger.info("[COACHING SERVICE] ✓ Isolated LLM returned for rest_complete")
+                logger.info("[COACHING SERVICE] → Calling coaching LLM for rest_complete")
+                await self._coaching_llm_reply(instructions)
+                logger.info("[COACHING SERVICE] ✓ Coaching LLM returned for rest_complete")
             elif msg_type == "calibration_rep":
                 rep = message.get("rep_number", 0)
                 total = message.get("total_required", 5)
@@ -299,10 +293,7 @@ class CoachingService:
             f"Say something like: 'Alright, we're all dialed in! Let's get into your workout.' "
             f"Keep it brief and hype."
         )
-        await self._isolated_llm_reply(
-            system_prompt=COACHING_SYSTEM_PROMPT,
-            user_message=instructions,
-        )
+        await self._coaching_llm_reply(instructions)
 
         # Reset orchestrator for the actual workout sets
         if self._coaching_orchestrator:
@@ -510,47 +501,29 @@ class CoachingService:
     # ------------------------------------------------------------------
 
     async def _coaching_llm_reply(self, instructions: str):
-        """Generate a coaching LLM reply with isolated context."""
-        logger.info(f"[COACHING SERVICE] → Isolated LLM call | instructions[:80]={instructions[:80]}...")
-        await self._isolated_llm_reply(
-            system_prompt=COACHING_SYSTEM_PROMPT,
-            user_message=instructions,
-        )
-        logger.info("[COACHING SERVICE] ✓ Isolated LLM call returned")
+        """Generate coaching speech via generate_reply with SpeechHandle tracking.
 
-    async def _isolated_llm_reply(self, system_prompt: str, user_message: str):
-        """Generate an LLM reply with isolated context (no conversation history).
-
-        Swaps the agent's chat context to a minimal system+user pair,
-        generates the reply, then restores the original context.
-        Uses an asyncio.Lock to prevent overlap with wake word responses.
+        Prepends the coaching persona to the instructions and plays the reply
+        non-interruptibly. Blocks until playout completes so callers can
+        safely proceed with phase transitions after this returns.
         """
-        from livekit.agents import llm
-
-        agent = self._session.current_agent
-        if not agent or not hasattr(agent, 'chat_ctx'):
-            logger.warning("[COACHING SERVICE] No agent for isolated reply — falling back")
-            await self._session.generate_reply(instructions=user_message, tool_choice="none")
-            return
-
-        async with self.context_lock:
-            # 1. Snapshot current context
-            original_ctx = agent.chat_ctx
-
-            # 2. Build minimal context: system prompt + coaching data
-            isolated_ctx = llm.ChatContext.empty()
-            isolated_ctx.items.append(llm.ChatMessage(role="system", content=[system_prompt]))
-            isolated_ctx.items.append(llm.ChatMessage(role="user", content=[user_message]))
-
-            # 3. Swap in isolated context
-            await agent.update_chat_ctx(isolated_ctx)
-
-            try:
-                # 4. Generate reply (model only sees system + user message)
-                await self._session.generate_reply(tool_choice="none")
-            finally:
-                # 5. Restore original context (always, even on error)
-                await agent.update_chat_ctx(original_ctx)
+        full_instructions = f"{_COACHING_PERSONA}\n\n{instructions}"
+        logger.info(f"[COACHING SERVICE] → Coaching LLM | instructions[:80]={instructions[:80]}...")
+        self.is_coaching_speaking = True
+        try:
+            handle = self._session.generate_reply(
+                instructions=full_instructions,
+                tool_choice="none",
+                allow_interruptions=False,
+            )
+            await handle.wait_for_playout()
+            logger.info("[COACHING SERVICE] ✓ Coaching LLM playout complete")
+            return handle
+        except Exception as e:
+            logger.error(f"[COACHING SERVICE] Coaching LLM reply failed: {e}", exc_info=True)
+            return None
+        finally:
+            self.is_coaching_speaking = False
 
     async def _duck_llm_audio(self):
         """No-op: session.say() handles audio transitions on the WebRTC track."""

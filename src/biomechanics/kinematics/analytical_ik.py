@@ -296,8 +296,8 @@ class AnalyticalIKSolver(IKSolver):
         """
         Compute trunk forward flexion (sagittal plane).
 
-        0 degrees = upright
-        Positive = forward lean
+        180 degrees = upright (fully extended)
+        Decreases with forward lean (like knee/hip flexion convention)
         """
         left_shoulder = self._get_point(kpts, "left_shoulder")
         right_shoulder = self._get_point(kpts, "right_shoulder")
@@ -305,7 +305,7 @@ class AnalyticalIKSolver(IKSolver):
         right_hip = self._get_point(kpts, "right_hip")
 
         if any(p is None for p in [left_shoulder, right_shoulder, left_hip, right_hip]):
-            return 0.0
+            return 180.0
 
         # Midpoints
         shoulder_mid = midpoint(left_shoulder, right_shoulder)
@@ -314,13 +314,12 @@ class AnalyticalIKSolver(IKSolver):
         # Trunk vector
         trunk_vec = shoulder_mid - hip_mid
 
-        # Upward reference (Y-up coordinate system)
-        vertical = np.array([0, 1, 0])
+        # Y-down reference (MediaPipe world coords are Y-down)
+        vertical = np.array([0, -1, 0])
 
-        # Angle from vertical (0 when upright)
+        # 180 - angle: 180° upright, decreases with lean
         angle = angle_between_vectors(trunk_vec, vertical)
-
-        return angle
+        return 180.0 - angle
 
     def _compute_trunk_lateral_flexion(self, kpts: dict) -> float:
         """

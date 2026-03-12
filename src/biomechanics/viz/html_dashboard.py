@@ -124,11 +124,12 @@ def _prepare_dashboard_payload(plot_data: dict, seg_result: dict) -> dict:
         else:
             derivatives[d_key] = []
 
-    # Use segmentation bottom times as rep markers (already relative)
+    # Use segmentation end times as rep markers (standing position = rep complete)
+    # Shifted by ½ period from bottom so labels align with rep completion.
     rep_markers = []
     for rep in seg_result.get("reps", []):
         rep_markers.append({
-            "time_s": rep["bottom_time_s"],
+            "time_s": rep["end_time_s"],
             "rep_number": rep["rep_number"],
         })
 
@@ -296,6 +297,82 @@ tr:hover td { background: rgba(0, 245, 255, 0.04); }
 }
 .set-panel { display: none; }
 .set-panel.active { display: block; }
+/* Knee Valgus section */
+.valgus-section {
+    background: #16213e;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.3);
+    position: relative;
+}
+.valgus-section > h2 {
+    font-size: 1rem;
+    font-weight: 500;
+    color: #ccc;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+}
+.valgus-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.valgus-chart {
+    background: #1a1a2e;
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 8px;
+    padding: 8px;
+}
+.valgus-chart h3 {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #888;
+    margin: 0 0 4px 4px;
+    letter-spacing: 0.5px;
+}
+.valgus-chart.delta {
+    grid-column: 1 / -1;
+}
+.valgus-readout {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    z-index: 10;
+    background: rgba(22,33,62,0.92);
+    border: 1px solid rgba(0,245,255,0.25);
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-width: 170px;
+    pointer-events: none;
+}
+.valgus-readout .readout-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 0;
+    font-size: 0.8rem;
+}
+.valgus-readout .readout-label {
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 0.7rem;
+}
+.valgus-readout .readout-value {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    color: #ccc;
+    min-width: 60px;
+    text-align: right;
+}
+.valgus-readout .readout-value.left { color: #00f5ff; }
+.valgus-readout .readout-value.right { color: #f44336; }
+.valgus-readout .readout-value.delta { color: #bb86fc; }
+@media (max-width: 768px) {
+    .valgus-grid { grid-template-columns: 1fr; }
+    .valgus-chart.delta { grid-column: auto; }
+}
 """
 
 _PLOTLY_LAYOUT_BASE = {
@@ -407,7 +484,7 @@ function thresholdAnnotations(thresholds, faultKey, levels) {{
 
 // ---- Fault marker config ----
 const FAULT_STYLES = {{
-    'knee_valgus':         {{ color: '#f44336', symbol: 'triangle-down', chart: 'adduction' }},
+    'knee_valgus':         {{ color: '#f44336', symbol: 'triangle-down', chart: 'valgus-left' }},
     'forward_lean':        {{ color: '#ff9800', symbol: 'diamond',       chart: 'pipeline' }},
     'bilateral_asymmetry': {{ color: '#bb86fc', symbol: 'square',        chart: 'asymmetry' }},
     'heel_rise':           {{ color: '#ffeb3b', symbol: 'star',          chart: 'pipeline' }},
@@ -489,6 +566,23 @@ function hoverText(ts, vals, derivs, valUnit, derivUnit) {{
         out.push(v + ' ' + valUnit + '  |  rate: ' + d + ' ' + derivUnit);
     }}
     return out;
+}}
+
+// ---- Valgus readout helpers ----
+function updateValgusReadout(prefix, idx, ts, leftData, rightFlipped, deltaData) {{
+    const el = (s) => document.getElementById(prefix + '-valgus-' + s);
+    const t = el('time'), l = el('val-l'), r = el('val-r'), d = el('val-d');
+    if (t) t.textContent = ts[idx].toFixed(2) + 's';
+    if (l) l.textContent = leftData[idx].toFixed(1) + '\u00b0';
+    if (r) r.textContent = rightFlipped[idx].toFixed(1) + '\u00b0';
+    if (d) d.textContent = deltaData[idx].toFixed(1) + '\u00b0';
+}}
+
+function clearValgusReadout(prefix) {{
+    ['time', 'val-l', 'val-r', 'val-d'].forEach(s => {{
+        const el = document.getElementById(prefix + '-valgus-' + s);
+        if (el) el.textContent = '--';
+    }});
 }}
 
 // ---- Chart builders ----
@@ -617,59 +711,136 @@ function chartPipelineAngles(setD, divId) {{
     Plotly.newPlot(divId, [...traces, ...fTraces], layout, {{ responsive: true }});
 }}
 
-function chartHipAdduction(setD, divId) {{
+function chartKneeValgusSection(setD, prefix) {{
+    const section = document.getElementById(prefix + '-valgus-section');
     if (!setD.hip_adduction_l_deg || setD.hip_adduction_l_deg.length === 0) {{
-        document.getElementById(divId).parentElement.style.display = 'none';
+        if (section) section.style.display = 'none';
         return;
     }}
-    const traces = [
-        {{
-            x: setD.timestamps, y: setD.hip_adduction_l_deg,
-            text: hoverText(setD.timestamps, setD.hip_adduction_l_deg, setD.d_hip_adduction_l_deg_s, '°', '°/s'),
-            hoverinfo: 'x+text', mode: 'lines',
-            line: {{ color: '#00f5ff', width: 2 }}, name: 'Left Hip Adduction',
-        }},
-        {{
-            x: setD.timestamps, y: setD.hip_adduction_r_deg,
-            text: hoverText(setD.timestamps, setD.hip_adduction_r_deg, setD.d_hip_adduction_r_deg_s, '°', '°/s'),
-            hoverinfo: 'x+text', mode: 'lines',
-            line: {{ color: '#f44336', width: 2 }}, name: 'Right Hip Adduction',
-        }},
-    ];
+
+    // --- Derived data ---
+    const ts = setD.timestamps;
+    const leftData = setD.hip_adduction_l_deg;
+    const rightRaw = setD.hip_adduction_r_deg;
+    const rightFlipped = rightRaw.map(v => -v);
+    const deltaData = leftData.map((v, i) => Math.abs(v) - Math.abs(rightRaw[i]));
+    const leftDeriv = setD.d_hip_adduction_l_deg_s;
+    const rightDerivFlipped = (setD.d_hip_adduction_r_deg_s || []).map(v => -v);
+
     const valgusLevels = [
         ['mild', 'Valgus Mild', THRESH_COLORS.mild],
         ['moderate', 'Valgus Mod', THRESH_COLORS.moderate],
         ['severe', 'Valgus Severe', THRESH_COLORS.severe],
     ];
-    const layout = makeLayout({{
-        yaxis: {{ title: {{ text: 'Hip Adduction (°)' }},
+
+    const zeroLine = {{ type: 'line', x0: 0, x1: 1, y0: 0, y1: 0,
+        xref: 'paper', yref: 'y',
+        line: {{ color: 'rgba(255,255,255,0.3)', width: 1 }} }};
+
+    const bandShapes = (setD.valgus_band != null) ? [
+        {{ type: 'rect', x0: 0, x1: 1, y0: 0, y1: setD.valgus_band,
+           xref: 'paper', yref: 'y',
+           fillcolor: 'rgba(0,245,255,0.08)', line: {{ width: 0 }} }},
+        {{ type: 'line', x0: 0, x1: 1, y0: setD.valgus_band, y1: setD.valgus_band,
+           xref: 'paper', yref: 'y',
+           line: {{ color: 'rgba(0,245,255,0.3)', width: 1, dash: 'dash' }} }},
+    ] : [];
+
+    // --- Left Knee chart ---
+    const leftTraces = [{{
+        x: ts, y: leftData,
+        text: hoverText(ts, leftData, leftDeriv, '\u00b0', '\u00b0/s'),
+        hoverinfo: 'x+text', mode: 'lines',
+        line: {{ color: '#00f5ff', width: 2 }}, name: 'Left Adduction',
+    }}];
+    const leftLayout = makeLayout({{
+        yaxis: {{ title: {{ text: 'Adduction (\u00b0)' }},
                   gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
+        margin: {{ l: 50, r: 50, t: 24, b: 36 }},
         shapes: [
-            ...repShapes(setD.rep_markers),
-            {{ type: 'line', x0: 0, x1: 1, y0: 0, y1: 0,
-               xref: 'paper', yref: 'y',
-               line: {{ color: 'rgba(255,255,255,0.3)', width: 1 }} }},
-            ...(setD.valgus_band != null ? [
-                {{ type: 'rect', x0: 0, x1: 1, y0: -setD.valgus_band, y1: setD.valgus_band,
-                   xref: 'paper', yref: 'y',
-                   fillcolor: 'rgba(0,245,255,0.08)', line: {{ width: 0 }} }},
-                {{ type: 'line', x0: 0, x1: 1, y0: setD.valgus_band, y1: setD.valgus_band,
-                   xref: 'paper', yref: 'y',
-                   line: {{ color: 'rgba(0,245,255,0.3)', width: 1, dash: 'dash' }} }},
-                {{ type: 'line', x0: 0, x1: 1, y0: -setD.valgus_band, y1: -setD.valgus_band,
-                   xref: 'paper', yref: 'y',
-                   line: {{ color: 'rgba(0,245,255,0.3)', width: 1, dash: 'dash' }} }},
-            ] : []),
+            ...repShapes(setD.rep_markers), zeroLine, ...bandShapes,
             ...thresholdShapes(setD.thresholds, 'knee_valgus', valgusLevels),
         ],
         annotations: [...repAnnotations(setD.rep_markers),
-                       ...faultAnnotations(setD.fault_events, 'adduction', setD.timestamps,
-                           setD.hip_adduction_l_deg.map((v, i) => Math.max(Math.abs(v), Math.abs(setD.hip_adduction_r_deg[i])))),
+                       ...faultAnnotations(setD.fault_events, 'valgus-left', ts, leftData),
                        ...thresholdAnnotations(setD.thresholds, 'knee_valgus', valgusLevels)],
     }});
-    const maxAdduction = setD.hip_adduction_l_deg.map((v, i) => Math.max(Math.abs(v), Math.abs(setD.hip_adduction_r_deg[i])));
-    const fTraces = faultTracesForChart(setD.fault_events, 'adduction', setD.timestamps, maxAdduction);
-    Plotly.newPlot(divId, [...traces, ...fTraces], layout, {{ responsive: true }});
+    const leftFaults = faultTracesForChart(setD.fault_events, 'valgus-left', ts, leftData);
+    const leftDiv = prefix + '-valgus-left';
+    Plotly.newPlot(leftDiv, [...leftTraces, ...leftFaults], leftLayout, {{ responsive: true }});
+
+    // --- Right Knee chart (flipped) ---
+    const rightTraces = [{{
+        x: ts, y: rightFlipped,
+        text: hoverText(ts, rightFlipped, rightDerivFlipped, '\u00b0', '\u00b0/s'),
+        hoverinfo: 'x+text', mode: 'lines',
+        line: {{ color: '#f44336', width: 2 }}, name: 'Right Adduction (flipped)',
+    }}];
+    const rightLayout = makeLayout({{
+        yaxis: {{ title: {{ text: 'Adduction (\u00b0)' }},
+                  gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
+        margin: {{ l: 50, r: 50, t: 24, b: 36 }},
+        shapes: [
+            ...repShapes(setD.rep_markers), zeroLine, ...bandShapes,
+            ...thresholdShapes(setD.thresholds, 'knee_valgus', valgusLevels),
+        ],
+        annotations: [...repAnnotations(setD.rep_markers),
+                       ...thresholdAnnotations(setD.thresholds, 'knee_valgus', valgusLevels)],
+    }});
+    // Map fault events onto the flipped right signal for y-positioning
+    const rightFaults = faultTracesForChart(setD.fault_events, 'valgus-left', ts, rightFlipped);
+    const rightDiv = prefix + '-valgus-right';
+    Plotly.newPlot(rightDiv, [...rightTraces, ...rightFaults], rightLayout, {{ responsive: true }});
+
+    // --- Delta chart (L-R imbalance) ---
+    const deltaTraces = [{{
+        x: ts, y: deltaData,
+        hoverinfo: 'x+text', mode: 'lines',
+        text: ts.map((t, i) => deltaData[i].toFixed(1) + '\u00b0'),
+        line: {{ color: '#bb86fc', width: 1.5 }}, name: 'L \u2212 R Imbalance',
+        fill: 'tozeroy',
+        fillcolor: 'rgba(187,134,252,0.12)',
+    }}];
+    const deltaLayout = makeLayout({{
+        height: 180,
+        yaxis: {{ title: {{ text: 'Imbalance (\u00b0)' }},
+                  gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
+        margin: {{ l: 50, r: 50, t: 24, b: 36 }},
+        shapes: [...repShapes(setD.rep_markers), zeroLine],
+        annotations: [...repAnnotations(setD.rep_markers)],
+    }});
+    const deltaDiv = prefix + '-valgus-delta';
+    Plotly.newPlot(deltaDiv, deltaTraces, deltaLayout, {{ responsive: true }});
+
+    // --- Linked crosshairs ---
+    const divIds = [leftDiv, rightDiv, deltaDiv];
+    const divs = divIds.map(id => document.getElementById(id));
+    let hoverLock = false;
+
+    divs.forEach((div, idx) => {{
+        div.on('plotly_hover', function(ev) {{
+            if (hoverLock) return;
+            hoverLock = true;
+            const pt = ev.points[0];
+            const pi = pt.pointIndex;
+            divs.forEach((other, oi) => {{
+                if (oi !== idx) {{
+                    Plotly.Fx.hover(other, [{{ curveNumber: 0, pointNumber: pi }}]);
+                }}
+            }});
+            updateValgusReadout(prefix, pi, ts, leftData, rightFlipped, deltaData);
+            hoverLock = false;
+        }});
+        div.on('plotly_unhover', function() {{
+            if (hoverLock) return;
+            hoverLock = true;
+            divs.forEach((other, oi) => {{
+                if (oi !== idx) Plotly.Fx.unhover(other);
+            }});
+            clearValgusReadout(prefix);
+            hoverLock = false;
+        }});
+    }});
 }}
 
 function chartBilateralAsymmetry(setD, divId) {{
@@ -871,7 +1042,20 @@ function renderSet(setD, prefix) {{
         <div class="chart-card"><h2>Hip Velocity</h2><div id="${{prefix}}-hip-vel"></div></div>
         <div class="chart-card"><h2>Joint Angles (3D Geometry)</h2><div id="${{prefix}}-angles"></div></div>
         <div class="chart-card"><h2>Pipeline Angles (IK + One Euro)</h2><div id="${{prefix}}-pipeline"></div></div>
-        <div class="chart-card"><h2>Hip Adduction (Knee Valgus Proxy)</h2><div id="${{prefix}}-adduction"></div></div>
+        <div class="valgus-section" id="${{prefix}}-valgus-section">
+            <h2>Knee Valgus</h2>
+            <div class="valgus-readout" id="${{prefix}}-valgus-readout">
+                <div class="readout-row"><span class="readout-label">Time</span><span class="readout-value" id="${{prefix}}-valgus-time">--</span></div>
+                <div class="readout-row"><span class="readout-label">Left</span><span class="readout-value left" id="${{prefix}}-valgus-val-l">--</span></div>
+                <div class="readout-row"><span class="readout-label">Right</span><span class="readout-value right" id="${{prefix}}-valgus-val-r">--</span></div>
+                <div class="readout-row"><span class="readout-label">&Delta;</span><span class="readout-value delta" id="${{prefix}}-valgus-val-d">--</span></div>
+            </div>
+            <div class="valgus-grid">
+                <div class="valgus-chart"><h3>Left Knee</h3><div id="${{prefix}}-valgus-left"></div></div>
+                <div class="valgus-chart"><h3>Right Knee (flipped)</h3><div id="${{prefix}}-valgus-right"></div></div>
+                <div class="valgus-chart delta"><h3>L &minus; R Imbalance</h3><div id="${{prefix}}-valgus-delta"></div></div>
+            </div>
+        </div>
         <div class="chart-card"><h2>Bilateral Asymmetry</h2><div id="${{prefix}}-asymmetry"></div></div>
         <div class="chart-card"><h2>Rep Segmentation</h2><div id="${{prefix}}-seg"></div></div>
         <div class="rep-table-wrap"><h2>Per-Rep Metrics</h2><div id="${{prefix}}-table"></div></div>
@@ -881,7 +1065,7 @@ function renderSet(setD, prefix) {{
     chartHipVelocity(setD, prefix + '-hip-vel');
     chartJointAngles(setD, prefix + '-angles');
     chartPipelineAngles(setD, prefix + '-pipeline');
-    chartHipAdduction(setD, prefix + '-adduction');
+    chartKneeValgusSection(setD, prefix);
     chartBilateralAsymmetry(setD, prefix + '-asymmetry');
     chartSegmentation(setD, prefix + '-seg');
     document.getElementById(prefix + '-table').innerHTML = repTableHTML(setD);

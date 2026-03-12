@@ -1263,3 +1263,26 @@ class MainMenuAgent(BaseNovaAgent):
         logger.info("[MAIN MENU] User requested to update profile")
         name = self.user_name
         return None, f"The user wants to update their profile. Say something like: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
+
+    @function_tool
+    async def shutdown(self, context: RunContext):
+        """
+        Call this when the user wants to shut down, exit, turn off, or say goodbye.
+        User might say: "shut down", "turn off", "exit", "goodbye", "I'm done",
+        "quit", "close", "power off", "see you later"
+        """
+        logger.info("[MAIN MENU] User requested shutdown")
+
+        name = self.user_name
+
+        # Signal main.py to initiate graceful shutdown
+        self.state.set("shutdown_requested", True)
+        self.state.save_state()
+
+        self._log_function_call("shutdown", {}, "shutdown_requested")
+
+        return None, (
+            f"The user wants to shut down. Say a warm, brief goodbye to {name}. "
+            f"Something like: 'Take care {name}, great chatting with you! See you next time.' "
+            f"Keep it friendly and natural — one or two sentences max."
+        )

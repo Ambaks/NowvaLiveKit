@@ -112,7 +112,6 @@ class CoachingOrchestrator:
         self._on_workout_complete = on_workout_complete_fn
 
         self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
-        self._llm_speaking: bool = False
         self._processing: bool = False
         self._processor_task: Optional[asyncio.Task] = None
 
@@ -691,9 +690,8 @@ class CoachingOrchestrator:
         )
 
         logger.info(f"[ORCHESTRATOR] LLM motivation instructions: {instructions[:100]}...")
-        self._llm_speaking = True
         try:
-            await self._generate_llm(instructions)
+            handle = await self._generate_llm(instructions)
             # Log motivation for set report
             self._set_cue_log.append(CueLogEntry(
                 wall_time=time.time(),
@@ -703,8 +701,6 @@ class CoachingOrchestrator:
             logger.info("[ORCHESTRATOR] ✓ LLM motivation spoken")
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] LLM motivation failed: {e}", exc_info=True)
-        finally:
-            self._llm_speaking = False
 
     async def _speak_llm_set_recap(self, data: dict):
         """Generate and speak comprehensive LLM set recap."""
@@ -761,15 +757,13 @@ class CoachingOrchestrator:
         )
 
         logger.info(f"[ORCHESTRATOR] LLM set recap instructions: {instructions[:120]}...")
-        self._llm_speaking = True
         try:
-            await self._generate_llm(instructions)
+            handle = await self._generate_llm(instructions)
             logger.info("[ORCHESTRATOR] ✓ LLM set recap spoken")
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] LLM set recap failed: {e}", exc_info=True)
         finally:
-            self._llm_speaking = False
-            # Stash report data for deferred generation at session end
+            # Report stashing runs always (data integrity)
             report = data.get("_report")
             if report:
                 self._pending_reports.append({"set_number": set_num, "report": report})
@@ -853,16 +847,14 @@ class CoachingOrchestrator:
         )
 
         logger.info(f"[ORCHESTRATOR] LLM exercise recap instructions: {instructions[:120]}...")
-        self._llm_speaking = True
         try:
-            await self._generate_llm(instructions)
+            handle = await self._generate_llm(instructions)
             logger.info("[ORCHESTRATOR] ✓ LLM exercise recap spoken")
-        except Exception as e:
-            logger.error(f"[ORCHESTRATOR] LLM exercise recap failed: {e}", exc_info=True)
-        finally:
-            self._llm_speaking = False
+            # Only fire workout_complete AFTER speech has played out
             if self._on_workout_complete:
                 try:
                     await self._on_workout_complete()
                 except Exception as e:
                     logger.error(f"[ORCHESTRATOR] on_workout_complete callback failed: {e}")
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] LLM exercise recap failed: {e}", exc_info=True)

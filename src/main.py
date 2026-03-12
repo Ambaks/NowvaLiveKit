@@ -56,6 +56,7 @@ class NowvaApp:
             try:
                 self.state.switch_mode("main_menu")
                 self.state.set("workout.active", False)
+                self.state.set("shutdown_requested", False)
                 self.state.save_state()
                 print("[SIGNAL] State reset to main_menu")
             except Exception as e:
@@ -300,6 +301,7 @@ class NowvaApp:
             print(f"[STATE] Previous mode was '{current_mode}' - resetting to main_menu for safety")
             self.state.switch_mode("main_menu")
             self.state.set("workout.active", False)
+            self.state.set("shutdown_requested", False)
             self.state.save_state()
 
             # Small delay to ensure state file is written before voice agent loads it
@@ -369,6 +371,14 @@ class NowvaApp:
                 # Reload state to check for changes
                 self.state.reload_state()
                 current_mode = self.state.get_mode()
+
+                # Check for graceful shutdown request from voice agent
+                if self.state.get("shutdown_requested", False):
+                    print("\n[SYSTEM] Shutdown requested by user via voice agent")
+                    self.session_logger.log_system_event("shutdown_requested")
+                    # Wait for goodbye speech to finish playing
+                    await asyncio.sleep(5)
+                    break
 
                 # Detect mode changes
                 if current_mode != last_mode:
@@ -548,6 +558,10 @@ class NowvaApp:
             print("SHUTTING DOWN")
             print("="*50)
 
+        # Ignore further signals during cleanup so it can't be interrupted
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
         # Cleanup
         print("\nCleaning up...")
 
@@ -556,6 +570,7 @@ class NowvaApp:
             print("Resetting state to main_menu...")
             self.state.switch_mode("main_menu")
             self.state.set("workout.active", False)
+            self.state.set("shutdown_requested", False)
             self.state.save_state()
 
         if voice_agent_process:

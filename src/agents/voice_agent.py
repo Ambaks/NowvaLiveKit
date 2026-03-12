@@ -179,21 +179,7 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
-    import signal
     import sys
-
-    shutting_down = False
-
-    def signal_handler(signum, frame):
-        """Handle shutdown signals gracefully"""
-        global shutting_down
-        if not shutting_down:
-            shutting_down = True
-            logger.info("[SHUTDOWN] Gracefully shutting down agent...")
-            sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         agents.cli.run_app(

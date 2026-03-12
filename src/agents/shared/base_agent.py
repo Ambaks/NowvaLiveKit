@@ -64,6 +64,7 @@ class BaseNovaAgent(Agent):
         self._suppress_turn_detection()
         handle = self.session.generate_reply(
             instructions=instructions,
+            tool_choice="none",
             allow_interruptions=False,
         )
         if wait:

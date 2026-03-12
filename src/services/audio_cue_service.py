@@ -200,7 +200,8 @@ class AudioCueService:
                 str(wav_path), sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS,
             )
             handle = self._session.say(
-                source=audio_source,
+                "",
+                audio=audio_source,
                 allow_interruptions=False,
                 add_to_chat_ctx=False,
             )
@@ -212,7 +213,8 @@ class AudioCueService:
         if pcm_bytes:
             audio_source = self._pcm_to_audio_frames(pcm_bytes)
             handle = self._session.say(
-                source=audio_source,
+                "",
+                audio=audio_source,
                 allow_interruptions=False,
                 add_to_chat_ctx=False,
             )

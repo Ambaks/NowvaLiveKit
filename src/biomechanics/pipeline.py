@@ -9,7 +9,7 @@ Returns a PipelineFrame per iteration with per-layer timing.
 
 import os
 import time
-from typing import Optional
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -18,7 +18,7 @@ from biomechanics.config import BiomechanicsConfig, load_pipeline_config
 from biomechanics.pose.mediapipe_fallback import MediaPipePoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
 from biomechanics.faults import RuleEngine, HipPositionRepCounter
-from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, CocoKeypoints, DEPTH_CLASS_NAMES
+from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, FaultEvent, CocoKeypoints, DEPTH_CLASS_NAMES
 from biomechanics.utils.filters import JointAngleFilter
 from biomechanics.utils.derivatives import DerivativeTracker
 from biomechanics.utils.confidence_blend import ConfidenceBlender
@@ -167,6 +167,11 @@ class BiomechanicsPipeline:
         self._bilstm_max_knee_flex: float = 0.0
         self._bilstm_min_knee_flex: float = 180.0
 
+        # Buffer faults from the hip counter for the BiLSTM to consume.
+        # The hip counter resets _current_faults on rep completion, which
+        # happens before the BiLSTM fires — so we stash them here.
+        self._pending_bilstm_faults: List[FaultEvent] = []
+
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
 
@@ -189,6 +194,7 @@ class BiomechanicsPipeline:
         self._readiness_gate.reset()
         self._bilstm_max_knee_flex = 0.0
         self._bilstm_min_knee_flex = 180.0
+        self._pending_bilstm_faults.clear()
 
     def process_frame(self) -> PipelineFrame:
         """
@@ -344,6 +350,12 @@ class BiomechanicsPipeline:
             faults.extend(depth_faults)
             self._rule_engine.on_rep_complete_calibration(is_clean=rep_data.is_clean)
 
+            # When BiLSTM is active the hip counter's rep_data is suppressed
+            # (line below), but it has the correct faults.  Stash them so the
+            # BiLSTM path can pick them up via _pending_bilstm_faults.
+            if self._bilstm is not None:
+                self._pending_bilstm_faults.extend(rep_data.faults)
+
         latency_ms["faults"] = (time.perf_counter() - t0) * 1000.0
 
         # Track max knee flexion during BiLSTM rep windows independently
@@ -377,7 +389,12 @@ class BiomechanicsPipeline:
 
             bilstm_rep_data.descent_time = metrics["descent_time"]
             bilstm_rep_data.ascent_time = metrics["ascent_time"]
-            bilstm_rep_data.faults = metrics["faults"]
+            # Combine buffered faults (from hip counter rep completions) with
+            # any still in the counter's accumulator.  The hip counter clears
+            # _current_faults on rep completion, so metrics["faults"] is often
+            # empty — the buffered list has the real data.
+            bilstm_rep_data.faults = self._pending_bilstm_faults + metrics["faults"]
+            self._pending_bilstm_faults.clear()
             bilstm_rep_data.avg_knee_asymmetry = metrics["avg_knee_asymmetry"]
             bilstm_rep_data.avg_hip_asymmetry = metrics["avg_hip_asymmetry"]
             self._rep_counter.clear_current_faults()

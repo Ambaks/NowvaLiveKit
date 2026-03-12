@@ -271,7 +271,7 @@ class WorkoutAgent(BaseNovaAgent):
 
         # Never cancel speech from the coaching service
         coaching = self.userdata.coaching_service
-        if coaching and coaching.context_lock.locked():
+        if coaching and coaching.is_coaching_speaking:
             logger.info("[WAKE WORD] Allowing speech (coaching LLM in progress)")
             return
 
@@ -287,7 +287,7 @@ class WorkoutAgent(BaseNovaAgent):
     async def _activate_listening_mode(self, trigger_transcript: str):
         """Activate listening mode after wake word detection."""
         coaching = self.userdata.coaching_service
-        if coaching and coaching.context_lock.locked():
+        if coaching and coaching.is_coaching_speaking:
             logger.info("[WAKE WORD] Coaching LLM in progress — deferring wake word response")
             return
 
