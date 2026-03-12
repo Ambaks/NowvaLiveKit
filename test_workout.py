@@ -141,6 +141,7 @@ def run_test():
                 bridge.send_frame_data(result)
                 for fault in result.faults:
                     bridge.send_fault(fault)
+                    set_collector.record_fault(fault)
                 if result.rep_data:
                     session_tracker.on_rep_complete(result.rep_data)
                     reps_this_set += 1

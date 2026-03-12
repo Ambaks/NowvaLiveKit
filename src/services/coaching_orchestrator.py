@@ -10,6 +10,7 @@ import asyncio
 import enum
 import logging
 import random
+import statistics
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -132,6 +133,7 @@ class CoachingOrchestrator:
 
         # Rest state — suppress rep/fault processing during rest
         self._resting: bool = False
+        self._rest_seconds: int = 120
         self._total_sets: Optional[int] = None
 
         # Set report data collection
@@ -255,6 +257,8 @@ class CoachingOrchestrator:
         depth: str,
         is_clean: bool,
         faults: List[str],
+        max_depth_angle: float = 0.0,
+        rep_duration_ms: int = 0,
     ):
         """Enqueue rep count cue and evaluate motivation trigger."""
         if self._resting:
@@ -267,6 +271,9 @@ class CoachingOrchestrator:
             "rep_number": self._set_rep_count,
             "is_clean": is_clean,
             "depth": depth,
+            "max_depth_angle": max_depth_angle,
+            "rep_duration_ms": rep_duration_ms,
+            "faults": faults,
         })
 
         if is_clean:
@@ -299,15 +306,8 @@ class CoachingOrchestrator:
             and self._set_rep_count >= self._set_target_reps
         ):
             self._set_number += 1
-            set_data = {
-                "set_number": self._set_number,
-                "total_reps": self._set_rep_count,
-                "clean_reps": self._set_clean_count,
-                "avg_depth": 0,
-                "depth_consistency": 0,
-                "fault_summary": {},
-                "trigger": "rep_count",
-            }
+            set_data = self._build_set_summary()
+            set_data["trigger"] = "rep_count"
 
             is_last_set = (
                 self._total_sets is not None
@@ -400,6 +400,7 @@ class CoachingOrchestrator:
             "clean_reps": final_set_data.get("clean_reps", 0),
             "avg_depth": final_set_data.get("avg_depth", 0),
             "depth_consistency": final_set_data.get("depth_consistency", 0),
+            "avg_duration_ms": final_set_data.get("avg_duration_ms", 0),
             "fault_summary": final_set_data.get("fault_summary", {}),
         })
 
@@ -421,6 +422,56 @@ class CoachingOrchestrator:
             },
         ))
         logger.info("[ORCHESTRATOR] Last set complete — queued exercise recap")
+
+    # ------------------------------------------------------------------
+    # Set summary computation
+    # ------------------------------------------------------------------
+
+    def _build_set_summary(self) -> dict:
+        """Compute set stats from accumulated per-rep data."""
+        depths = [
+            r["max_depth_angle"] for r in self._set_rep_events
+            if r.get("max_depth_angle", 0) > 0
+        ]
+        avg_depth = round(statistics.mean(depths), 1) if depths else 0
+        depth_consistency = round(statistics.stdev(depths), 1) if len(depths) > 1 else 0
+
+        durations = [
+            r["rep_duration_ms"] for r in self._set_rep_events
+            if r.get("rep_duration_ms", 0) > 0
+        ]
+        avg_duration_ms = round(statistics.mean(durations)) if durations else 0
+
+        # Aggregate faults across all reps
+        fault_counts: Dict[str, int] = {}
+        for rep in self._set_rep_events:
+            for ft in rep.get("faults", []):
+                fault_counts[ft] = fault_counts.get(ft, 0) + 1
+        fault_summary = {
+            ft: {"count": cnt, "pct": round(cnt / len(self._set_rep_events) * 100)}
+            for ft, cnt in fault_counts.items()
+        } if self._set_rep_events else {}
+
+        return {
+            "set_number": self._set_number,
+            "total_reps": self._set_rep_count,
+            "clean_reps": self._set_clean_count,
+            "avg_depth": avg_depth,
+            "depth_consistency": depth_consistency,
+            "avg_duration_ms": avg_duration_ms,
+            "fault_summary": fault_summary,
+            "per_rep": [
+                {
+                    "rep": r["rep_number"],
+                    "depth": r["depth"],
+                    "depth_angle": round(r.get("max_depth_angle", 0), 1),
+                    "clean": r["is_clean"],
+                    "faults": r.get("faults", []),
+                    "duration_ms": r.get("rep_duration_ms", 0),
+                }
+                for r in self._set_rep_events
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Motivation trigger logic
@@ -495,9 +546,9 @@ class CoachingOrchestrator:
             await self._dispatch_cached_cue(event)
 
         elif event.event_type == "llm_motivation":
-            # Drop stale motivation events (>8s old)
+            # Drop stale motivation events
             age = time.monotonic() - event.timestamp
-            if age > 1.0:
+            if age > 1.5:
                 logger.info("[ORCHESTRATOR] Dropping stale motivation event (%.1fs old)", age)
                 return
             # Drain any pending cached cues first, then speak motivation
@@ -624,17 +675,18 @@ class CoachingOrchestrator:
         parts = [f"Rep {rep_number} just finished."]
         if reps_remaining is not None and reps_remaining > 0:
             parts.append(f"{reps_remaining} reps to go.")
-        if clean_streak >= 3:
+        if clean_streak >= 2:
             parts.append(f"{clean_streak} clean reps in a row!")
         if recent_faults:
-            parts.append(f"Watch for: {', '.join(recent_faults[-2:])}.")
+            parts.append(f"Recent Faults: {', '.join(recent_faults[-2:])}.")
 
         context_str = " ".join(parts)
 
         instructions = (
-            f"You are in the middle of a set and you are giving your athlete some motivation"
-            f"{context_str} "
+            f"You are in the middle of a set and you are giving your athlete some motivation you have about one and a half seconds to say something."
             f"Give a SHORT (2-5 words MAX) motivational push. "
+            f"Here is the data:"
+            f"{context_str} "
             
         )
 
@@ -656,39 +708,56 @@ class CoachingOrchestrator:
 
     async def _speak_llm_set_recap(self, data: dict):
         """Generate and speak comprehensive LLM set recap."""
-        total_reps = data.get("total_reps", 0)
         set_num = data.get("set_number", 0)
+        total_reps = data.get("total_reps", 0)
         clean_reps = data.get("clean_reps", 0)
         avg_depth = data.get("avg_depth", 0)
         depth_consistency = data.get("depth_consistency", 0)
+        avg_duration_ms = data.get("avg_duration_ms", 0)
         fault_summary = data.get("fault_summary", {})
+        per_rep = data.get("per_rep", [])
 
         next_set = set_num + 1
         total_sets_str = f" of {self._total_sets}" if self._total_sets else ""
-        parts = [f"Set {set_num}{total_sets_str} just finished: {total_reps} reps. Next up is set {next_set}{total_sets_str}."]
-        parts.append(f"{clean_reps}/{total_reps} clean reps.")
+
+        # Build structured context for LLM
+        parts = [
+            f"Set {set_num}{total_sets_str} just finished: {total_reps} reps.",
+            f"Next up is set {next_set}{total_sets_str}.",
+            f"{clean_reps}/{total_reps} clean reps.",
+        ]
         if avg_depth:
-            parts.append(f"Average depth: {avg_depth}°.")
-        if depth_consistency:
-            parts.append(f"Depth consistency (stdev): {depth_consistency}°.")
+            parts.append(f"Average depth: {avg_depth}° (consistency stdev: {depth_consistency}°).")
+        if avg_duration_ms:
+            parts.append(f"Average rep tempo: {avg_duration_ms}ms.")
         if fault_summary:
             fault_lines = []
             for fault_type, stats in fault_summary.items():
                 count = stats.get("count", 0)
-                avg_sev = stats.get("avg_severity", "N/A")
-                fault_lines.append(f"{fault_type}: {count}x (avg severity {avg_sev})")
+                pct = stats.get("pct", 0)
+                fault_lines.append(f"{fault_type}: {count}/{total_reps} reps ({pct}%)")
             parts.append(f"Faults: {'; '.join(fault_lines)}.")
+        if per_rep:
+            rep_lines = []
+            for r in per_rep:
+                faults_str = f" faults={r['faults']}" if r.get("faults") else ""
+                rep_lines.append(
+                    f"  Rep {r['rep']}: {r['depth']} ({r['depth_angle']}°) "
+                    f"{'clean' if r['clean'] else 'fault'}{faults_str}"
+                )
+            parts.append("Per-rep breakdown:\n" + "\n".join(rep_lines))
 
         context_str = " ".join(parts)
         print(context_str)
 
         instructions = (
-            f"Your athlete just finished a set. You are giving them feedback on what they just did using the data."
-            f"{context_str} "
-            f"Give honest feedback (2-4 sentences). "
+            f"Your athlete just finished a set. You are giving them feedback on what they just did using the data. "
+            f"Give honest feedback. You have {self._rest_seconds - 5} seconds to make your point. "
             f"Highlight what went well. If recurring faults, "
             f"give ONE specific coaching tip for the next set. "
-            f"Be encouraging — reference the numbers."
+            f"Be encouraging — reference the numbers. "
+            f"Here is the data: "
+            f"{context_str}"
         )
 
         logger.info(f"[ORCHESTRATOR] LLM set recap instructions: {instructions[:120]}...")
@@ -711,6 +780,7 @@ class CoachingOrchestrator:
                 "clean_reps": clean_reps,
                 "avg_depth": avg_depth,
                 "depth_consistency": depth_consistency,
+                "avg_duration_ms": avg_duration_ms,
                 "fault_summary": fault_summary,
             })
             # Only reset if not already reset by rep-count trigger
@@ -728,6 +798,14 @@ class CoachingOrchestrator:
         total_clean = sum(s.get("clean_reps", 0) for s in all_summaries)
         clean_pct = round(total_clean / total_reps * 100) if total_reps > 0 else 0
 
+        # Aggregate depth across sets
+        all_depths = [s.get("avg_depth", 0) for s in all_summaries if s.get("avg_depth")]
+        overall_avg_depth = round(statistics.mean(all_depths), 1) if all_depths else 0
+
+        # Aggregate tempo across sets
+        all_tempos = [s.get("avg_duration_ms", 0) for s in all_summaries if s.get("avg_duration_ms")]
+        overall_avg_tempo = round(statistics.mean(all_tempos)) if all_tempos else 0
+
         # Aggregate faults across all sets
         all_faults: Dict[str, int] = {}
         for s in all_summaries:
@@ -740,17 +818,28 @@ class CoachingOrchestrator:
             sn = s.get("set_number", 0)
             tr = s.get("total_reps", 0)
             cr = s.get("clean_reps", 0)
-            per_set_lines.append(f"Set {sn}: {tr} reps, {cr} clean")
+            ad = s.get("avg_depth", 0)
+            depth_str = f", avg depth {ad}°" if ad else ""
+            faults_in_set = s.get("fault_summary", {})
+            fault_str = ""
+            if faults_in_set:
+                fault_parts = [f"{ft}: {st['count']}x" for ft, st in faults_in_set.items()]
+                fault_str = f", faults: {'; '.join(fault_parts)}"
+            per_set_lines.append(f"Set {sn}: {tr} reps, {cr} clean{depth_str}{fault_str}")
 
         parts = [
             f"Exercise complete! {total_sets} sets finished.",
             f"Total: {total_reps} reps, {total_clean} clean ({clean_pct}%).",
         ]
+        if overall_avg_depth:
+            parts.append(f"Overall average depth: {overall_avg_depth}°.")
+        if overall_avg_tempo:
+            parts.append(f"Overall average tempo: {overall_avg_tempo}ms per rep.")
         if per_set_lines:
-            parts.append(f"Breakdown: {'; '.join(per_set_lines)}.")
+            parts.append(f"Per-set breakdown: {'; '.join(per_set_lines)}.")
         if all_faults:
             top_faults = sorted(all_faults.items(), key=lambda x: x[1], reverse=True)[:3]
-            fault_str = ", ".join(f"{ft}: {cnt}x" for ft, cnt in top_faults)
+            fault_str = ", ".join(f"{ft}: {cnt}x across all sets" for ft, cnt in top_faults)
             parts.append(f"Most common faults: {fault_str}.")
 
         context_str = " ".join(parts)

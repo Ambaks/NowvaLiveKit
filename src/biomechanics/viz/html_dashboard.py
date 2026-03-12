@@ -111,6 +111,9 @@ def _prepare_dashboard_payload(plot_data: dict, seg_result: dict) -> dict:
         "pipeline_knee_flexion_deg": ("d_pipeline_knee_deg_s", "°/s"),
         "pipeline_hip_flexion_deg": ("d_pipeline_hip_deg_s", "°/s"),
         "pipeline_trunk_flexion_deg": ("d_pipeline_trunk_deg_s", "°/s"),
+        "hip_adduction_l_deg": ("d_hip_adduction_l_deg_s", "°/s"),
+        "hip_adduction_r_deg": ("d_hip_adduction_r_deg_s", "°/s"),
+        "bilateral_asymmetry_deg": ("d_bilateral_asymmetry_deg_s", "°/s"),
     }
 
     derivatives = {}
@@ -140,9 +143,15 @@ def _prepare_dashboard_payload(plot_data: dict, seg_result: dict) -> dict:
         "pipeline_knee_flexion_deg": plot_data.get("pipeline_knee_flexion_deg", []),
         "pipeline_hip_flexion_deg": plot_data.get("pipeline_hip_flexion_deg", []),
         "pipeline_trunk_flexion_deg": plot_data.get("pipeline_trunk_flexion_deg", []),
+        "hip_adduction_l_deg": plot_data.get("hip_adduction_l_deg", []),
+        "hip_adduction_r_deg": plot_data.get("hip_adduction_r_deg", []),
+        "bilateral_asymmetry_deg": plot_data.get("bilateral_asymmetry_deg", []),
         **derivatives,
         "rep_markers": rep_markers,
         "segmentation": seg_result,
+        "fault_events": plot_data.get("fault_events", []),
+        "valgus_band": plot_data.get("valgus_band", None),
+        "thresholds": plot_data.get("thresholds", None),
     }
 
 
@@ -303,7 +312,7 @@ _PLOTLY_LAYOUT_BASE = {
         "zerolinecolor": "rgba(255,255,255,0.12)",
     },
     "legend": {"bgcolor": "rgba(0,0,0,0)", "font": {"size": 11}},
-    "margin": {"l": 60, "r": 20, "t": 36, "b": 44},
+    "margin": {"l": 60, "r": 80, "t": 36, "b": 44},
     "hovermode": "x unified",
 }
 
@@ -368,6 +377,110 @@ function repAnnotations(markers) {{
     }}));
 }}
 
+// ---- Threshold line helpers ----
+const THRESH_COLORS = {{
+    mild: '#ffeb3b',
+    moderate: '#ff9800',
+    severe: '#f44336',
+}};
+
+function thresholdShapes(thresholds, faultKey, levels) {{
+    if (!thresholds || !thresholds[faultKey]) return [];
+    const t = thresholds[faultKey];
+    return levels.map(([field, label, color]) => ({{
+        type: 'line', x0: 0, x1: 1, y0: t[field], y1: t[field],
+        xref: 'paper', yref: 'y',
+        line: {{ color: color, width: 1.5, dash: 'dot' }},
+    }})).filter(s => s.y0 != null);
+}}
+
+function thresholdAnnotations(thresholds, faultKey, levels) {{
+    if (!thresholds || !thresholds[faultKey]) return [];
+    const t = thresholds[faultKey];
+    return levels.map(([field, label, color]) => ({{
+        x: 1, y: t[field], xref: 'paper', yref: 'y',
+        text: label, showarrow: false, xanchor: 'left',
+        font: {{ size: 9, color: color }},
+        bgcolor: 'rgba(22,33,62,0.85)', borderpad: 2,
+    }})).filter(a => a.y != null);
+}}
+
+// ---- Fault marker config ----
+const FAULT_STYLES = {{
+    'knee_valgus':         {{ color: '#f44336', symbol: 'triangle-down', chart: 'adduction' }},
+    'forward_lean':        {{ color: '#ff9800', symbol: 'diamond',       chart: 'pipeline' }},
+    'bilateral_asymmetry': {{ color: '#bb86fc', symbol: 'square',        chart: 'asymmetry' }},
+    'heel_rise':           {{ color: '#ffeb3b', symbol: 'star',          chart: 'pipeline' }},
+    'depth':               {{ color: '#00bcd4', symbol: 'circle',        chart: 'hip-pos' }},
+}};
+
+const SEVERITY_SIZE = {{ 'mild': 8, 'moderate': 11, 'severe': 14 }};
+
+function nearestIdx(timestamps, t) {{
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < timestamps.length; i++) {{
+        const d = Math.abs(timestamps[i] - t);
+        if (d < bestD) {{ bestD = d; best = i; }}
+    }}
+    return best;
+}}
+
+function faultTracesForChart(faultEvents, chartKey, timestamps, signalValues) {{
+    const relevant = (faultEvents || []).filter(f => {{
+        const s = FAULT_STYLES[f.fault_type];
+        return s && s.chart === chartKey;
+    }});
+    if (relevant.length === 0) return [];
+    const groups = {{}};
+    relevant.forEach(f => {{
+        if (!groups[f.fault_type]) groups[f.fault_type] = [];
+        groups[f.fault_type].push(f);
+    }});
+    const traces = [];
+    Object.entries(groups).forEach(([faultType, events]) => {{
+        const style = FAULT_STYLES[faultType];
+        const xs = [], ys = [], texts = [], sizes = [];
+        events.forEach(e => {{
+            xs.push(e.time_s);
+            const idx = nearestIdx(timestamps, e.time_s);
+            ys.push(signalValues ? signalValues[idx] : 0);
+            texts.push(e.severity.toUpperCase() + ': ' + e.message + ' (Rep ' + e.rep_number + ')');
+            sizes.push(SEVERITY_SIZE[e.severity] || 10);
+        }});
+        traces.push({{
+            x: xs, y: ys, mode: 'markers',
+            marker: {{ symbol: style.symbol, color: style.color, size: sizes,
+                      line: {{ color: '#fff', width: 1 }} }},
+            name: faultType.replace(/_/g, ' ') + ' fault',
+            text: texts, hoverinfo: 'text', showlegend: true,
+        }});
+    }});
+    return traces;
+}}
+
+function faultAnnotations(faultEvents, chartKey, timestamps, signalValues) {{
+    const relevant = (faultEvents || []).filter(f => {{
+        const s = FAULT_STYLES[f.fault_type];
+        return s && s.chart === chartKey;
+    }});
+    const offsets = [30, -35, 45, -50, 60, -65];
+    return relevant.map((f, idx) => {{
+        const style = FAULT_STYLES[f.fault_type];
+        const i = nearestIdx(timestamps, f.time_s);
+        const yVal = signalValues ? signalValues[i] : 0;
+        return {{
+            x: f.time_s, y: yVal, xref: 'x', yref: 'y',
+            text: f.severity.charAt(0).toUpperCase(),
+            showarrow: true, arrowhead: 2, arrowsize: 1, arrowwidth: 1.5,
+            arrowcolor: style.color,
+            ax: 0, ay: offsets[idx % offsets.length],
+            font: {{ size: 9, color: style.color }},
+            bgcolor: 'rgba(22,33,62,0.9)',
+            bordercolor: style.color, borderpad: 2,
+        }};
+    }});
+}}
+
 function hoverText(ts, vals, derivs, valUnit, derivUnit) {{
     const out = [];
     for (let i = 0; i < ts.length; i++) {{
@@ -391,15 +504,19 @@ function chartHipPosition(setD, divId) {{
         yaxis: {{ title: {{ text: 'Hip Height (cm)' }}, autorange: 'reversed',
                   gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
         shapes: repShapes(setD.rep_markers),
-        annotations: repAnnotations(setD.rep_markers),
+        annotations: [...repAnnotations(setD.rep_markers),
+                       ...faultAnnotations(setD.fault_events, 'hip-pos', setD.timestamps, setD.hip_position_cm)],
     }});
-    Plotly.newPlot(divId, traces, layout, {{ responsive: true }});
+    const fTraces = faultTracesForChart(setD.fault_events, 'hip-pos', setD.timestamps, setD.hip_position_cm);
+    Plotly.newPlot(divId, [...traces, ...fTraces], layout, {{ responsive: true }});
 }}
 
 function chartHipVelocity(setD, divId) {{
+    const negVel = setD.hip_velocity_cm_s.map(v => -v);
+    const negAcc = setD.d_hip_velocity_cm_s2.map(v => -v);
     const traces = [{{
-        x: setD.timestamps, y: setD.hip_velocity_cm_s,
-        text: hoverText(setD.timestamps, setD.hip_velocity_cm_s, setD.d_hip_velocity_cm_s2, 'cm/s', 'cm/s²'),
+        x: setD.timestamps, y: negVel,
+        text: hoverText(setD.timestamps, negVel, negAcc, 'cm/s', 'cm/s²'),
         hoverinfo: 'x+text', mode: 'lines',
         line: {{ color: '#ff00ff', width: 2 }},
         name: 'Hip Velocity',
@@ -473,13 +590,121 @@ function chartPipelineAngles(setD, divId) {{
             line: {{ color: '#39ff14', width: 2 }}, name: 'Trunk (IK)',
         }},
     ];
+    const depthLevels = [
+        ['parallel_threshold', 'Deep Squat', '#00bcd4'],
+        ['half_threshold', 'Parallel', '#0097a7'],
+        ['quarter_threshold', 'Half Squat', '#00697a'],
+    ];
+    const forwardLeanLevels = [
+        ['mild', 'Lean Mild', THRESH_COLORS.mild],
+        ['moderate', 'Lean Mod', THRESH_COLORS.moderate],
+        ['severe', 'Lean Severe', THRESH_COLORS.severe],
+    ];
     const layout = makeLayout({{
         yaxis: {{ title: {{ text: 'Angle (°)' }},
                   gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
-        shapes: repShapes(setD.rep_markers),
-        annotations: repAnnotations(setD.rep_markers),
+        shapes: [
+            ...repShapes(setD.rep_markers),
+            ...thresholdShapes(setD.thresholds, 'depth', depthLevels),
+            ...thresholdShapes(setD.thresholds, 'forward_lean', forwardLeanLevels),
+        ],
+        annotations: [...repAnnotations(setD.rep_markers),
+                       ...faultAnnotations(setD.fault_events, 'pipeline', setD.timestamps, setD.pipeline_trunk_flexion_deg),
+                       ...thresholdAnnotations(setD.thresholds, 'depth', depthLevels),
+                       ...thresholdAnnotations(setD.thresholds, 'forward_lean', forwardLeanLevels)],
     }});
-    Plotly.newPlot(divId, traces, layout, {{ responsive: true }});
+    const fTraces = faultTracesForChart(setD.fault_events, 'pipeline', setD.timestamps, setD.pipeline_trunk_flexion_deg);
+    Plotly.newPlot(divId, [...traces, ...fTraces], layout, {{ responsive: true }});
+}}
+
+function chartHipAdduction(setD, divId) {{
+    if (!setD.hip_adduction_l_deg || setD.hip_adduction_l_deg.length === 0) {{
+        document.getElementById(divId).parentElement.style.display = 'none';
+        return;
+    }}
+    const traces = [
+        {{
+            x: setD.timestamps, y: setD.hip_adduction_l_deg,
+            text: hoverText(setD.timestamps, setD.hip_adduction_l_deg, setD.d_hip_adduction_l_deg_s, '°', '°/s'),
+            hoverinfo: 'x+text', mode: 'lines',
+            line: {{ color: '#00f5ff', width: 2 }}, name: 'Left Hip Adduction',
+        }},
+        {{
+            x: setD.timestamps, y: setD.hip_adduction_r_deg,
+            text: hoverText(setD.timestamps, setD.hip_adduction_r_deg, setD.d_hip_adduction_r_deg_s, '°', '°/s'),
+            hoverinfo: 'x+text', mode: 'lines',
+            line: {{ color: '#f44336', width: 2 }}, name: 'Right Hip Adduction',
+        }},
+    ];
+    const valgusLevels = [
+        ['mild', 'Valgus Mild', THRESH_COLORS.mild],
+        ['moderate', 'Valgus Mod', THRESH_COLORS.moderate],
+        ['severe', 'Valgus Severe', THRESH_COLORS.severe],
+    ];
+    const layout = makeLayout({{
+        yaxis: {{ title: {{ text: 'Hip Adduction (°)' }},
+                  gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
+        shapes: [
+            ...repShapes(setD.rep_markers),
+            {{ type: 'line', x0: 0, x1: 1, y0: 0, y1: 0,
+               xref: 'paper', yref: 'y',
+               line: {{ color: 'rgba(255,255,255,0.3)', width: 1 }} }},
+            ...(setD.valgus_band != null ? [
+                {{ type: 'rect', x0: 0, x1: 1, y0: -setD.valgus_band, y1: setD.valgus_band,
+                   xref: 'paper', yref: 'y',
+                   fillcolor: 'rgba(0,245,255,0.08)', line: {{ width: 0 }} }},
+                {{ type: 'line', x0: 0, x1: 1, y0: setD.valgus_band, y1: setD.valgus_band,
+                   xref: 'paper', yref: 'y',
+                   line: {{ color: 'rgba(0,245,255,0.3)', width: 1, dash: 'dash' }} }},
+                {{ type: 'line', x0: 0, x1: 1, y0: -setD.valgus_band, y1: -setD.valgus_band,
+                   xref: 'paper', yref: 'y',
+                   line: {{ color: 'rgba(0,245,255,0.3)', width: 1, dash: 'dash' }} }},
+            ] : []),
+            ...thresholdShapes(setD.thresholds, 'knee_valgus', valgusLevels),
+        ],
+        annotations: [...repAnnotations(setD.rep_markers),
+                       ...faultAnnotations(setD.fault_events, 'adduction', setD.timestamps,
+                           setD.hip_adduction_l_deg.map((v, i) => Math.max(Math.abs(v), Math.abs(setD.hip_adduction_r_deg[i])))),
+                       ...thresholdAnnotations(setD.thresholds, 'knee_valgus', valgusLevels)],
+    }});
+    const maxAdduction = setD.hip_adduction_l_deg.map((v, i) => Math.max(Math.abs(v), Math.abs(setD.hip_adduction_r_deg[i])));
+    const fTraces = faultTracesForChart(setD.fault_events, 'adduction', setD.timestamps, maxAdduction);
+    Plotly.newPlot(divId, [...traces, ...fTraces], layout, {{ responsive: true }});
+}}
+
+function chartBilateralAsymmetry(setD, divId) {{
+    if (!setD.bilateral_asymmetry_deg || setD.bilateral_asymmetry_deg.length === 0) {{
+        document.getElementById(divId).parentElement.style.display = 'none';
+        return;
+    }}
+    const traces = [{{
+        x: setD.timestamps, y: setD.bilateral_asymmetry_deg,
+        text: hoverText(setD.timestamps, setD.bilateral_asymmetry_deg, setD.d_bilateral_asymmetry_deg_s, '°', '°/s'),
+        hoverinfo: 'x+text', mode: 'lines',
+        line: {{ color: '#bb86fc', width: 2 }},
+        name: 'Bilateral Asymmetry (max of knee/hip)',
+    }}];
+    const asymLevels = [
+        ['mild', 'Asym Mild', THRESH_COLORS.mild],
+        ['moderate', 'Asym Mod', THRESH_COLORS.moderate],
+        ['severe', 'Asym Severe', THRESH_COLORS.severe],
+    ];
+    const layout = makeLayout({{
+        yaxis: {{ title: {{ text: 'Asymmetry (°)' }},
+                  gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
+        shapes: [
+            ...repShapes(setD.rep_markers),
+            {{ type: 'line', x0: 0, x1: 1, y0: 0, y1: 0,
+               xref: 'paper', yref: 'y',
+               line: {{ color: 'rgba(255,255,255,0.3)', width: 1 }} }},
+            ...thresholdShapes(setD.thresholds, 'bilateral_asymmetry', asymLevels),
+        ],
+        annotations: [...repAnnotations(setD.rep_markers),
+                       ...faultAnnotations(setD.fault_events, 'asymmetry', setD.timestamps, setD.bilateral_asymmetry_deg),
+                       ...thresholdAnnotations(setD.thresholds, 'bilateral_asymmetry', asymLevels)],
+    }});
+    const fTraces = faultTracesForChart(setD.fault_events, 'asymmetry', setD.timestamps, setD.bilateral_asymmetry_deg);
+    Plotly.newPlot(divId, [...traces, ...fTraces], layout, {{ responsive: true }});
 }}
 
 function chartSegmentation(setD, divId) {{
@@ -646,6 +871,8 @@ function renderSet(setD, prefix) {{
         <div class="chart-card"><h2>Hip Velocity</h2><div id="${{prefix}}-hip-vel"></div></div>
         <div class="chart-card"><h2>Joint Angles (3D Geometry)</h2><div id="${{prefix}}-angles"></div></div>
         <div class="chart-card"><h2>Pipeline Angles (IK + One Euro)</h2><div id="${{prefix}}-pipeline"></div></div>
+        <div class="chart-card"><h2>Hip Adduction (Knee Valgus Proxy)</h2><div id="${{prefix}}-adduction"></div></div>
+        <div class="chart-card"><h2>Bilateral Asymmetry</h2><div id="${{prefix}}-asymmetry"></div></div>
         <div class="chart-card"><h2>Rep Segmentation</h2><div id="${{prefix}}-seg"></div></div>
         <div class="rep-table-wrap"><h2>Per-Rep Metrics</h2><div id="${{prefix}}-table"></div></div>
     `;
@@ -654,6 +881,8 @@ function renderSet(setD, prefix) {{
     chartHipVelocity(setD, prefix + '-hip-vel');
     chartJointAngles(setD, prefix + '-angles');
     chartPipelineAngles(setD, prefix + '-pipeline');
+    chartHipAdduction(setD, prefix + '-adduction');
+    chartBilateralAsymmetry(setD, prefix + '-asymmetry');
     chartSegmentation(setD, prefix + '-seg');
     document.getElementById(prefix + '-table').innerHTML = repTableHTML(setD);
 }}

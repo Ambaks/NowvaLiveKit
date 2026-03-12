@@ -66,6 +66,8 @@ class RuleEngine:
         self._calibration_target: int = 1  # Calibrate after 1 clean rep
         self._peak_trunk_flexion: float = 0.0
         self._peak_hip_adduction: float = 0.0
+        self._rep_peak_hip_adductions: List[float] = []
+        self._current_rep_peak_adduction: float = 0.0
         self._peak_asymmetry: float = 0.0
         self._peak_dorsiflexion_drop: float = 0.0
         self._baseline_dorsiflexion_l: float = 0.0
@@ -227,10 +229,8 @@ class RuleEngine:
 
         # Track peaks
         self._peak_trunk_flexion = max(self._peak_trunk_flexion, abs(angles.trunk_flexion))
-        self._peak_hip_adduction = max(
-            self._peak_hip_adduction,
-            max(angles.hip_adduction_l, angles.hip_adduction_r),
-        )
+        frame_adduction = max(abs(angles.hip_adduction_l), abs(angles.hip_adduction_r))
+        self._current_rep_peak_adduction = max(self._current_rep_peak_adduction, frame_adduction)
         self._peak_asymmetry = max(
             self._peak_asymmetry,
             abs(angles.hip_flexion_l - angles.hip_flexion_r),
@@ -249,6 +249,11 @@ class RuleEngine:
         if self._calibrated:
             return
 
+        # Save this rep's peak adduction and reset for next rep
+        if self._current_rep_peak_adduction > 0:
+            self._rep_peak_hip_adductions.append(self._current_rep_peak_adduction)
+        self._current_rep_peak_adduction = 0.0
+
         if is_clean:
             self._calibration_reps += 1
 
@@ -259,6 +264,15 @@ class RuleEngine:
         """Adjust rule thresholds based on observed baseline peaks."""
         self._calibrated = True
         faults_config = self.config.faults
+
+        # Compute average of per-rep peak hip adduction values
+        if self._rep_peak_hip_adductions:
+            self._peak_hip_adduction = sum(self._rep_peak_hip_adductions) / len(self._rep_peak_hip_adductions)
+            logger.info(
+                "[RULE ENGINE] Hip adduction per-rep peaks: %s → avg=%.1f°",
+                [f"{v:.1f}" for v in self._rep_peak_hip_adductions],
+                self._peak_hip_adduction,
+            )
 
         for rule in self.rules:
             if isinstance(rule, ForwardLeanRule):
@@ -271,9 +285,9 @@ class RuleEngine:
                 )
 
             elif isinstance(rule, KneeValgusRule):
-                rule.mild_threshold = max(faults_config.knee_valgus.mild, self._peak_hip_adduction + 5.0)
-                rule.moderate_threshold = max(faults_config.knee_valgus.moderate, self._peak_hip_adduction + 10.0)
-                rule.severe_threshold = max(faults_config.knee_valgus.severe, self._peak_hip_adduction + 15.0)
+                rule.mild_threshold = self._peak_hip_adduction + 5.0
+                rule.moderate_threshold = self._peak_hip_adduction + 10.0
+                rule.severe_threshold = self._peak_hip_adduction + 15.0
                 logger.info(
                     "[RULE ENGINE] Knee valgus baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
                     self._peak_hip_adduction, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,

@@ -1,25 +1,39 @@
 """
-Audio Cue Service — Pre-generates and caches TTS audio for real-time coaching.
+Audio Cue Service — Loads pre-generated TTS audio for real-time coaching.
 
-Uses OpenAI's TTS API to generate PCM audio for each coaching cue key.
-Audio is stored in memory with a 30-minute TTL and regenerated on the next set.
+Audio files are generated once via scripts/generate_cue_audio.py using the
+OpenAI Realtime API (same voice as the voice agent). Multiple variants per
+cue are stored on disk as WAV files; this service indexes the paths and picks
+a random variant each time for natural-sounding playback.
+
+Playback routes through LiveKit's session.say() so audio reaches the user
+via the WebRTC track.
+
+Fallback: if no pre-generated files exist for a cue, generates audio on
+the fly via the OpenAI TTS API and plays it through session.say().
 """
 
 import asyncio
 import logging
+import os
+import random
 import time
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
+from livekit import rtc
+from livekit.agents.utils.audio import audio_frames_from_file
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
-# TTL for cached audio (30 minutes)
-CACHE_TTL_SECONDS = 30 * 60
+# Directory where pre-generated cue files live
+CUES_DIR = Path(__file__).parent.parent / "assets" / "cues"
+CUES_WAV_DIR = CUES_DIR / "wav"
 
-# TTS configuration
+# Fallback TTS configuration (only used if pre-generated files are missing)
 TTS_MODEL = "gpt-4o-mini-tts"
-TTS_VOICE = "marin"
+TTS_VOICE = os.getenv("REALTIME_VOICE", "cedar")
 TTS_SPEED = 1.1
 TTS_FORMAT = "pcm"  # 24kHz 16-bit mono PCM
 TTS_INSTRUCTIONS = (
@@ -60,84 +74,165 @@ CUE_TEXT_MAP: Dict[str, str] = {
     **{f"rep_{i}": _NUMBER_WORDS[i] for i in range(1, 21)},
 }
 
+# Audio format constants
+SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
+SAMPLES_PER_CHUNK = 2048  # ~85ms per chunk at 24kHz
+
 
 class AudioCueService:
     """
-    Manages pre-cached TTS audio for low-latency coaching cue playback.
+    Indexes pre-generated WAV cue files from disk with random variant selection.
+    Plays cues through LiveKit's session.say() for WebRTC delivery.
 
-    Call ``cache_cues()`` at the start of each set/exercise to pre-generate
-    TTS audio. Then ``get_cue_audio()`` returns cached PCM bytes instantly.
+    Falls back to runtime TTS generation for any cues missing on disk.
     """
 
-    def __init__(self) -> None:
-        self.cache: Dict[str, bytes] = {}
-        self.cache_expiry: float = 0.0
+    def __init__(self, session) -> None:
+        self._session = session  # AgentSession — for session.say()
+        # cue_key → list of WAV file paths (one per variant)
+        self._disk_cache: Dict[str, List[Path]] = {}
+        # Runtime-generated fallback cache: cue_key → raw PCM bytes
+        self._fallback_cache: Dict[str, bytes] = {}
         self._client: Optional[AsyncOpenAI] = None
+        self._disk_loaded: bool = False
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
             self._client = AsyncOpenAI()
         return self._client
 
-    async def cache_cues(self, cues: Dict[str, str]) -> None:
-        """
-        Pre-generate TTS audio for all provided cue keys concurrently.
-
-        Args:
-            cues: Dict of cue_key → cue_identifier (from biomechanics CueCache).
-                  Only keys present in CUE_TEXT_MAP will be generated.
-        """
-        start = time.monotonic()
-        keys_to_generate = [k for k in cues if k in CUE_TEXT_MAP]
-
-        if not keys_to_generate:
-            logger.warning("[AUDIO CUE] No known cue keys to generate")
+    def _load_from_disk(self) -> None:
+        """Index all pre-generated WAV files from the cues directory."""
+        if self._disk_loaded:
             return
 
-        logger.info(f"[AUDIO CUE] Generating TTS for {len(keys_to_generate)} cues...")
+        if not CUES_WAV_DIR.exists():
+            logger.warning(f"[AUDIO CUE] WAV cues directory not found: {CUES_WAV_DIR}")
+            self._disk_loaded = True
+            return
 
+        count = 0
+        for wav_file in CUES_WAV_DIR.glob("*.wav"):
+            # Filename format: {cue_key}_{variant}.wav
+            name = wav_file.stem
+            # Split on last underscore to get cue_key and variant number
+            last_underscore = name.rfind("_")
+            if last_underscore == -1:
+                continue
+            cue_key = name[:last_underscore]
+            try:
+                int(name[last_underscore + 1:])  # Validate variant is a number
+            except ValueError:
+                continue
+
+            if cue_key not in self._disk_cache:
+                self._disk_cache[cue_key] = []
+            self._disk_cache[cue_key].append(wav_file)
+            count += 1
+
+        self._disk_loaded = True
+        logger.info(
+            f"[AUDIO CUE] Indexed {count} pre-generated WAV files "
+            f"for {len(self._disk_cache)} cue keys from {CUES_WAV_DIR}"
+        )
+
+    async def cache_cues(self, cues: Dict[str, str]) -> None:
+        """
+        Ensure cues are available for playback.
+
+        Indexes pre-generated WAV files from disk. For any requested cue keys
+        that don't have pre-generated files, falls back to runtime TTS.
+        """
+        self._load_from_disk()
+
+        # Find cues that need runtime generation (no disk files)
+        keys_to_generate = [
+            k for k in cues
+            if k in CUE_TEXT_MAP and k not in self._disk_cache and k not in self._fallback_cache
+        ]
+
+        if not keys_to_generate:
+            logger.info(f"[AUDIO CUE] All {len(cues)} cues available (pre-generated)")
+            return
+
+        logger.info(
+            f"[AUDIO CUE] {len(keys_to_generate)} cues missing from disk, "
+            f"generating via TTS fallback..."
+        )
+
+        start = time.monotonic()
         tasks = [
             self._generate_single_cue(key, CUE_TEXT_MAP[key])
             for key in keys_to_generate
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        new_cache: Dict[str, bytes] = {}
         errors = 0
         for result in results:
             if isinstance(result, Exception):
                 errors += 1
-                logger.error(f"[AUDIO CUE] Generation failed: {result}")
+                logger.error(f"[AUDIO CUE] Fallback generation failed: {result}")
             else:
                 key, audio_bytes = result
-                new_cache[key] = audio_bytes
-
-        self.cache = new_cache
-        self.cache_expiry = time.monotonic() + CACHE_TTL_SECONDS
+                self._fallback_cache[key] = audio_bytes
 
         elapsed = time.monotonic() - start
         logger.info(
-            f"[AUDIO CUE] Cached {len(new_cache)} cues in {elapsed:.2f}s "
-            f"({errors} errors)"
+            f"[AUDIO CUE] Fallback generated {len(keys_to_generate) - errors} cues "
+            f"in {elapsed:.2f}s ({errors} errors)"
         )
 
-    def get_cue_audio(self, cue_key: str) -> Optional[bytes]:
-        """Return cached PCM audio bytes for a cue key, or None on miss/expiry."""
-        if not self.is_cache_valid():
-            return None
-        return self.cache.get(cue_key)
+    def has_cue(self, cue_key: str) -> bool:
+        """Check whether audio is available for a cue key."""
+        self._load_from_disk()
+        return cue_key in self._disk_cache or cue_key in self._fallback_cache
+
+    async def play_cue(self, cue_key: str) -> None:
+        """Play a cue through LiveKit's session.say()."""
+        self._load_from_disk()
+
+        # Prefer pre-generated WAV variants (random selection)
+        variants = self._disk_cache.get(cue_key)
+        if variants:
+            wav_path = random.choice(variants)
+            audio_source = audio_frames_from_file(
+                str(wav_path), sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS,
+            )
+            handle = self._session.say(
+                source=audio_source,
+                allow_interruptions=False,
+                add_to_chat_ctx=False,
+            )
+            await handle.join()
+            return
+
+        # Fall back to runtime-generated PCM cache
+        pcm_bytes = self._fallback_cache.get(cue_key)
+        if pcm_bytes:
+            audio_source = self._pcm_to_audio_frames(pcm_bytes)
+            handle = self._session.say(
+                source=audio_source,
+                allow_interruptions=False,
+                add_to_chat_ctx=False,
+            )
+            await handle.join()
+            return
+
+        logger.warning(f"[AUDIO CUE] No audio available for cue: {cue_key}")
 
     def is_cache_valid(self) -> bool:
-        """Check whether the cache is populated and has not expired."""
-        return bool(self.cache) and time.monotonic() < self.cache_expiry
+        """Check whether any cue audio is available."""
+        self._load_from_disk()
+        return bool(self._disk_cache) or bool(self._fallback_cache)
 
     @staticmethod
     def get_cue_text(cue_key: str) -> Optional[str]:
-        """Return the spoken text for a cue key (used by Option C fallback)."""
+        """Return the spoken text for a cue key (used by fallback)."""
         return CUE_TEXT_MAP.get(cue_key)
 
     async def _generate_single_cue(self, key: str, text: str) -> Tuple[str, bytes]:
-        """Generate TTS audio for a single cue."""
+        """Generate TTS audio for a single cue (fallback path)."""
         client = self._get_client()
         response = await client.audio.speech.create(
             model=TTS_MODEL,
@@ -149,3 +244,20 @@ class AudioCueService:
         )
         audio_bytes = response.read()
         return key, audio_bytes
+
+    @staticmethod
+    async def _pcm_to_audio_frames(
+        pcm_bytes: bytes,
+    ) -> AsyncGenerator[rtc.AudioFrame, None]:
+        """Convert raw PCM bytes (24kHz, 16-bit mono) into AudioFrame chunks."""
+        bytes_per_sample = 2  # int16
+        chunk_bytes = SAMPLES_PER_CHUNK * NUM_CHANNELS * bytes_per_sample
+        for offset in range(0, len(pcm_bytes), chunk_bytes):
+            chunk = pcm_bytes[offset:offset + chunk_bytes]
+            samples = len(chunk) // (NUM_CHANNELS * bytes_per_sample)
+            yield rtc.AudioFrame(
+                data=chunk,
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+                samples_per_channel=samples,
+            )

@@ -132,3 +132,6 @@ downloads/
 # Generated program files
 src/programs/*.md
 programs/*.md
+
+# Generated audio cues
+src/assets/cues/

@@ -1,0 +1,97 @@
+"""
+Database utilities for user biomechanical calibration data.
+"""
+
+import logging
+from typing import Optional
+from sqlalchemy.orm import Session
+
+from db.models import UserCalibration
+
+logger = logging.getLogger(__name__)
+
+
+def get_user_calibration(db: Session, user_id, movement_pattern: str) -> Optional[dict]:
+    """Load calibration thresholds from DB.
+
+    Returns the thresholds dict if calibration exists, None otherwise.
+    """
+    row = (
+        db.query(UserCalibration)
+        .filter(
+            UserCalibration.user_id == user_id,
+            UserCalibration.movement_pattern == movement_pattern,
+        )
+        .first()
+    )
+    if row is None:
+        return None
+
+    return row.thresholds
+
+
+def get_user_calibration_full(db: Session, user_id, movement_pattern: str) -> Optional[dict]:
+    """Load full calibration data (peaks + thresholds) from DB.
+
+    Returns dict with 'peaks' and 'thresholds' keys, or None.
+    """
+    row = (
+        db.query(UserCalibration)
+        .filter(
+            UserCalibration.user_id == user_id,
+            UserCalibration.movement_pattern == movement_pattern,
+        )
+        .first()
+    )
+    if row is None:
+        return None
+
+    return {
+        "peaks": row.peaks,
+        "thresholds": row.thresholds,
+        "calibration_reps": row.calibration_reps,
+    }
+
+
+def save_user_calibration(
+    db: Session,
+    user_id,
+    movement_pattern: str,
+    peaks: dict,
+    thresholds: dict,
+    calibration_reps: int = 5,
+) -> None:
+    """Upsert calibration profile to DB.
+
+    If a row for (user_id, movement_pattern) already exists, it is updated.
+    """
+    row = (
+        db.query(UserCalibration)
+        .filter(
+            UserCalibration.user_id == user_id,
+            UserCalibration.movement_pattern == movement_pattern,
+        )
+        .first()
+    )
+
+    if row:
+        row.peaks = peaks
+        row.thresholds = thresholds
+        row.calibration_reps = calibration_reps
+        logger.info(
+            f"[CALIBRATION] Updated calibration for user={user_id} pattern={movement_pattern}"
+        )
+    else:
+        row = UserCalibration(
+            user_id=user_id,
+            movement_pattern=movement_pattern,
+            peaks=peaks,
+            thresholds=thresholds,
+            calibration_reps=calibration_reps,
+        )
+        db.add(row)
+        logger.info(
+            f"[CALIBRATION] Created calibration for user={user_id} pattern={movement_pattern}"
+        )
+
+    db.commit()

@@ -23,6 +23,7 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
+from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
@@ -809,8 +810,9 @@ async def entrypoint(ctx: agents.JobContext):
             eagerness="low",           # Patient — let users finish thinking before responding
             create_response=True,
             interrupt_response=True,
+            silence_duration_ms=1000,   # Require 1s of silence before treating as end-of-turn
         ),
-        input_audio_noise_reduction="near_field",
+        input_audio_noise_reduction="far_field",  # Users may be at varying distances
         modalities=["audio", "text"],
     )
 
@@ -828,7 +830,14 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Start session — on_enter() will handle the initial greeting automatically
     logger.info("[WEBSITE AGENT] Starting session...")
-    await session.start(room=ctx.room, agent=agent)
+    await session.start(
+        room=ctx.room,
+        agent=agent,
+        room_input_options=RoomInputOptions(
+            pre_connect_audio=True,
+            pre_connect_audio_timeout=5.0,
+        ),
+    )
 
     logger.info("[WEBSITE AGENT] Session ended.")
 

@@ -78,8 +78,8 @@ class KneeValgusRule(FaultRule):
         adduction_l = angles.hip_adduction_l
         adduction_r = angles.hip_adduction_r
 
-        # Only consider positive adduction (actual valgus)
-        max_adduction = max(adduction_l, adduction_r)
+        # Use abs() — one knee reads positive, the other negative
+        max_adduction = max(abs(adduction_l), abs(adduction_r))
 
         if max_adduction < self.mild_threshold:
             return None

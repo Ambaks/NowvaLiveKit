@@ -11,7 +11,7 @@ from typing import Optional
 import numpy as np
 import matplotlib.pyplot as plt
 
-from biomechanics.utils.types import PipelineFrame, Skeleton3D, CocoKeypoints
+from biomechanics.utils.types import PipelineFrame, Skeleton3D, CocoKeypoints, FaultEvent
 from biomechanics.utils.geometry import joint_angle_3_points, calculate_trunk_angle
 from biomechanics.analysis.rep_segmenter import segment_set, plot_segmentation, write_set_report
 from biomechanics.viz.html_dashboard import generate_set_dashboard
@@ -146,6 +146,54 @@ def save_pipeline_angles_plot(set_num, t_rel, knee_flexion, hip_flexion,
     plt.close(fig)
 
 
+def save_hip_adduction_plot(set_num, t_rel, hip_adduction_l, hip_adduction_r,
+                            rep_events, timestamps, out_dir):
+    """Generate and save hip adduction (knee valgus proxy) plot for a set."""
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(t_rel, hip_adduction_l, label="Left Hip Adduction", color="#2196F3", linewidth=1.5)
+    ax.plot(t_rel, hip_adduction_r, label="Right Hip Adduction", color="#F44336", linewidth=1.5)
+    ax.axhline(y=0, color="black", linewidth=0.5, linestyle="-")
+    for ts_val, rep_num in rep_events:
+        rt = ts_val - timestamps[0]
+        ax.axvline(x=rt, color="green", linestyle="--", alpha=0.5)
+        ax.annotate(f"Rep {rep_num}", (rt, ax.get_ylim()[1]),
+                    textcoords="offset points", xytext=(5, -15), fontsize=8, color="green")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Hip Adduction (°)")
+    ax.set_title(f"Hip Adduction (Knee Valgus Proxy) — Set {set_num}")
+    ax.legend(loc="upper right")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = str(Path(out_dir) / f"set{set_num}_hip_adduction.png")
+    fig.savefig(path, dpi=150)
+    print(f"  Saved: {path}")
+    plt.close(fig)
+
+
+def save_bilateral_asymmetry_plot(set_num, t_rel, bilateral_asymmetry,
+                                  rep_events, timestamps, out_dir):
+    """Generate and save bilateral asymmetry plot for a set."""
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(t_rel, bilateral_asymmetry, label="Bilateral Asymmetry (max of knee/hip)",
+            color="#9C27B0", linewidth=1.5)
+    ax.axhline(y=0, color="black", linewidth=0.5, linestyle="-")
+    for ts_val, rep_num in rep_events:
+        rt = ts_val - timestamps[0]
+        ax.axvline(x=rt, color="green", linestyle="--", alpha=0.5)
+        ax.annotate(f"Rep {rep_num}", (rt, ax.get_ylim()[1]),
+                    textcoords="offset points", xytext=(5, -15), fontsize=8, color="green")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Asymmetry (°)")
+    ax.set_title(f"Bilateral Asymmetry — Set {set_num}")
+    ax.legend(loc="upper right")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = str(Path(out_dir) / f"set{set_num}_bilateral_asymmetry.png")
+    fig.savefig(path, dpi=150)
+    print(f"  Saved: {path}")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Per-set data collector
 # ---------------------------------------------------------------------------
@@ -161,8 +209,13 @@ class SetDataCollector:
         self.pipeline_knee: list = []
         self.pipeline_hip: list = []
         self.pipeline_trunk: list = []
+        self.hip_adduction_l: list = []
+        self.hip_adduction_r: list = []
+        self.bilateral_asymmetry: list = []
         self.rep_events: list = []
+        self.fault_events: list = []
         self.frames_data: list = []
+        self.thresholds: dict | None = None
 
     def record_frame(self, result: PipelineFrame, skeleton_3d: Skeleton3D) -> None:
         """Record one frame of data.
@@ -223,10 +276,18 @@ class SetDataCollector:
             self.pipeline_knee.append(avg_knee)
             self.pipeline_hip.append(avg_hip)
             self.pipeline_trunk.append(result.joint_angles.trunk_flexion)
+            self.hip_adduction_l.append(result.joint_angles.hip_adduction_l)
+            self.hip_adduction_r.append(result.joint_angles.hip_adduction_r)
+            self.bilateral_asymmetry.append(
+                max(result.joint_angles.knee_asymmetry, result.joint_angles.hip_asymmetry)
+            )
         else:
             self.pipeline_knee.append(0.0)
             self.pipeline_hip.append(0.0)
             self.pipeline_trunk.append(0.0)
+            self.hip_adduction_l.append(0.0)
+            self.hip_adduction_r.append(0.0)
+            self.bilateral_asymmetry.append(0.0)
 
         # Rep events
         if result.rep_data is not None:
@@ -246,6 +307,18 @@ class SetDataCollector:
             "shoulder_r": {"x": shoulder_r.x, "y": shoulder_r.y, "z": shoulder_r.z},
         })
 
+    def record_fault(self, fault: FaultEvent) -> None:
+        """Record a fault event for dashboard visualization."""
+        self.fault_events.append({
+            "timestamp": fault.timestamp,
+            "frame_index": fault.frame_index,
+            "fault_type": fault.fault_type,
+            "severity": fault.severity.value,
+            "severity_score": fault.severity_score,
+            "message": fault.message,
+            "rep_number": fault.rep_number,
+        })
+
     def has_enough_data(self) -> bool:
         return len(self.timestamps) > 10
 
@@ -258,8 +331,13 @@ class SetDataCollector:
         self.pipeline_knee.clear()
         self.pipeline_hip.clear()
         self.pipeline_trunk.clear()
+        self.hip_adduction_l.clear()
+        self.hip_adduction_r.clear()
+        self.bilateral_asymmetry.clear()
         self.rep_events.clear()
+        self.fault_events.clear()
         self.frames_data.clear()
+        # Note: thresholds intentionally NOT cleared — they persist across sets
 
 
 # ---------------------------------------------------------------------------
@@ -288,9 +366,9 @@ def finalize_set(
     sma_start = int(np.searchsorted(t_rel, 1.5))
 
     # Smooth hip position and compute velocity
-    hip_mid = smooth_1d(raw_mid, sma_window=3, sma_start=sma_start)
+    hip_mid = smooth_1d(raw_mid, sma_window=2, sma_start=sma_start)
     raw_vel = np.gradient(hip_mid, timestamps)
-    vel_mid = smooth_1d(raw_vel, median_window=1, sma_window=6, sma_start=sma_start)
+    vel_mid = smooth_1d(raw_vel, median_window=1, sma_window=3, sma_start=sma_start)
 
     # Smooth joint angles
     knee_ang = smooth_1d(np.array(collector.knee_angles), sma_window=3, sma_start=sma_start)
@@ -305,12 +383,24 @@ def finalize_set(
 
     # Smooth and plot pipeline joint angles
     pipe_knee = pipe_hip = pipe_trunk = None
+    adduction_l = adduction_r = bilat_asym = None
     if collector.pipeline_knee:
         pipe_knee = smooth_1d(np.array(collector.pipeline_knee), sma_window=3, sma_start=sma_start)
         pipe_hip = smooth_1d(np.array(collector.pipeline_hip), sma_window=3, sma_start=sma_start)
         pipe_trunk = smooth_1d(np.array(collector.pipeline_trunk), sma_window=3, sma_start=sma_start)
+        adduction_l = smooth_1d(np.array(collector.hip_adduction_l), sma_window=3, sma_start=sma_start)
+        adduction_r = smooth_1d(np.array(collector.hip_adduction_r), sma_window=3, sma_start=sma_start)
+        bilat_asym = smooth_1d(np.array(collector.bilateral_asymmetry), sma_window=3, sma_start=sma_start)
         save_pipeline_angles_plot(
-            set_number, t_rel, pipe_knee, pipe_hip, pipe_trunk,
+            set_number, t_rel, 180.0 - pipe_knee, pipe_hip, pipe_trunk,
+            collector.rep_events, timestamps, out_dir,
+        )
+        save_hip_adduction_plot(
+            set_number, t_rel, adduction_l, adduction_r,
+            collector.rep_events, timestamps, out_dir,
+        )
+        save_bilateral_asymmetry_plot(
+            set_number, t_rel, bilat_asym,
             collector.rep_events, timestamps, out_dir,
         )
 
@@ -338,6 +428,14 @@ def finalize_set(
         "pipeline_knee_flexion_deg": pipe_knee.tolist() if pipe_knee is not None else [],
         "pipeline_hip_flexion_deg": pipe_hip.tolist() if pipe_hip is not None else [],
         "pipeline_trunk_flexion_deg": pipe_trunk.tolist() if pipe_trunk is not None else [],
+        "hip_adduction_l_deg": adduction_l.tolist() if adduction_l is not None else [],
+        "hip_adduction_r_deg": adduction_r.tolist() if adduction_r is not None else [],
+        "bilateral_asymmetry_deg": bilat_asym.tolist() if bilat_asym is not None else [],
+        "fault_events": [
+            {**fe, "time_s": fe["timestamp"] - timestamps[0]}
+            for fe in collector.fault_events
+        ],
+        "thresholds": collector.thresholds,
     }
     plot_path = str(Path(out_dir) / f"set{set_number}_plot_data.json")
     with open(plot_path, "w") as f:

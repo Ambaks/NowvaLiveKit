@@ -131,6 +131,11 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
           connect={true}
           audio={true}
           video={false}
+          options={{
+            publishDefaults: {
+              preConnectBuffer: true,
+            },
+          }}
           onConnected={handleConnected}
           onDisconnected={handleDisconnect}
           onError={handleError}

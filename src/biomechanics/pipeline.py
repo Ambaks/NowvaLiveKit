@@ -161,6 +161,12 @@ class BiomechanicsPipeline:
                 config=bilstm_counter_cfg,
             )
 
+        # Track max knee flexion independently for BiLSTM rep windows.
+        # The hip position counter's snapshot may be desync'd from the
+        # BiLSTM's rep boundaries, so we track angle peaks here.
+        self._bilstm_max_knee_flex: float = 0.0
+        self._bilstm_min_knee_flex: float = 180.0
+
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
 
@@ -181,6 +187,8 @@ class BiomechanicsPipeline:
         set requires the user to be fully detected for 30 frames first.
         """
         self._readiness_gate.reset()
+        self._bilstm_max_knee_flex = 0.0
+        self._bilstm_min_knee_flex = 180.0
 
     def process_frame(self) -> PipelineFrame:
         """
@@ -338,6 +346,15 @@ class BiomechanicsPipeline:
 
         latency_ms["faults"] = (time.perf_counter() - t0) * 1000.0
 
+        # Track max knee flexion during BiLSTM rep windows independently
+        # of the hip counter, which may be at a different phase.
+        if self._bilstm is not None and self._bilstm.in_rep:
+            knee = angles.avg_knee_flexion
+            if knee > self._bilstm_max_knee_flex:
+                self._bilstm_max_knee_flex = knee
+            if knee < self._bilstm_min_knee_flex:
+                self._bilstm_min_knee_flex = knee
+
         self._frame_index += 1
 
         # Use BiLSTM rep data as primary when enabled and available.
@@ -349,8 +366,15 @@ class BiomechanicsPipeline:
             # consumers (IPC bridge, coaching LLM, set reports) get real
             # angle data, faults, timing, and asymmetry values.
             metrics = self._rep_counter.snapshot_rep_metrics()
-            bilstm_rep_data.max_depth_angle = metrics["max_depth_angle"]
-            bilstm_rep_data.min_depth_angle = metrics["min_depth_angle"]
+
+            # Use our independently-tracked knee flexion for depth, since
+            # the hip counter's snapshot may be desync'd from the BiLSTM's
+            # rep boundaries (causing false "quarter" depth classifications).
+            bilstm_rep_data.max_depth_angle = self._bilstm_max_knee_flex
+            bilstm_rep_data.min_depth_angle = self._bilstm_min_knee_flex
+            self._bilstm_max_knee_flex = 0.0
+            self._bilstm_min_knee_flex = 180.0
+
             bilstm_rep_data.descent_time = metrics["descent_time"]
             bilstm_rep_data.ascent_time = metrics["ascent_time"]
             bilstm_rep_data.faults = metrics["faults"]

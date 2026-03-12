@@ -157,7 +157,9 @@ class NowvaApp:
         return server_thread
 
     def start_pose_estimation(self, cam0_id: int = 0, cam1_id: int = 1,
-                              exercise_name: str = "Barbell Back Squat"):
+                              exercise_name: str = "Barbell Back Squat",
+                              calibration_file: str = None,
+                              calibration_mode: bool = False):
         """
         Start pose estimation process
 
@@ -165,14 +167,22 @@ class NowvaApp:
             cam0_id: First camera ID
             cam1_id: Second camera ID
             exercise_name: Name of the exercise for coaching cues
+            calibration_file: Path to existing calibration JSON (if returning user)
+            calibration_mode: If True, run calibration phase before workout
         """
         print("\nStarting pose estimation process...")
 
         # Start pose estimation as subprocess
         pose_script = Path(__file__).parent / 'pose' / 'pose_estimation_process.py'
 
+        cmd = [sys.executable, str(pose_script), str(cam0_id), str(cam1_id), exercise_name]
+        if calibration_file:
+            cmd.extend(["--calibration-file", calibration_file])
+        if calibration_mode:
+            cmd.append("--calibration-mode")
+
         self.pose_process = subprocess.Popen(
-            [sys.executable, str(pose_script), str(cam0_id), str(cam1_id), exercise_name],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -435,6 +445,12 @@ class NowvaApp:
                                 print(f"[BIOMECH] Play cue: {message.get('cue')}")
                             elif msg_type == 'rest_complete':
                                 print("[BIOMECH] Rest timer expired")
+                            elif msg_type == 'calibration_rep':
+                                rep = message.get('rep_number', 0)
+                                total = message.get('total_required', 5)
+                                print(f"[BIOMECH] Calibration rep {rep}/{total}")
+                            elif msg_type == 'calibration_complete':
+                                print(f"[BIOMECH] Calibration complete for {message.get('movement_pattern')}")
                             elif msg_type == 'pipeline_status':
                                 print(f"[BIOMECH] Pipeline: {message.get('status')}")
                             # --- Legacy / backward-compatible types ---
@@ -452,7 +468,7 @@ class NowvaApp:
                                 print(f"[IPC] Error: {value}")
 
                             # Forward coaching-relevant messages to voice agent
-                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data'):
+                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete'):
                                 if self.coaching_ipc and self.coaching_ipc.client_socket:
                                     try:
                                         self.coaching_ipc.send_message(message)
@@ -485,7 +501,24 @@ class NowvaApp:
                                 exercise_name = session_data["exercises"][0].get("exercise_name", "Barbell Back Squat")
                             else:
                                 exercise_name = "Barbell Back Squat"
-                        self.start_pose_estimation(exercise_name=exercise_name)
+
+                        # Check for calibration state
+                        cal_mode = bool(self.state.get("calibration.active"))
+                        cal_file = None
+                        cal_profile = self.state.get("workout.calibration_profile")
+                        if cal_profile and not cal_mode:
+                            # Write calibration profile to temp file for pipeline
+                            import json, tempfile
+                            cal_file = os.path.join(tempfile.gettempdir(), f"nowva_cal_{id(self)}.json")
+                            with open(cal_file, "w") as f:
+                                json.dump(cal_profile, f)
+                            print(f"[CALIBRATION] Wrote calibration profile to {cal_file}")
+
+                        self.start_pose_estimation(
+                            exercise_name=exercise_name,
+                            calibration_file=cal_file,
+                            calibration_mode=cal_mode,
+                        )
                     pose_running = True
                     print("[POSE] Pose estimation started" if not getattr(self, 'simulate_mode', False) else "[SIMULATE] IPC servers ready — waiting for simulator")
 

@@ -33,6 +33,7 @@ class User(Base):
     partner_programs = relationship("PartnerProgram", back_populates="user", cascade="all, delete-orphan")
     progress_logs = relationship("ProgressLog", back_populates="user", cascade="all, delete-orphan")
     schedule = relationship("Schedule", back_populates="user", cascade="all, delete-orphan")
+    calibrations = relationship("UserCalibration", back_populates="user", cascade="all, delete-orphan")
 
 
 # -------------------------
@@ -332,6 +333,22 @@ class TrainingLoadMetrics(Base):
 # -------------------------
 # Deload History
 # -------------------------
+class UserCalibration(Base):
+    __tablename__ = "user_calibrations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    movement_pattern = Column(String(50), nullable=False)  # "squat", "hip_hinge", etc.
+    peaks = Column(JSONB, nullable=False)
+    thresholds = Column(JSONB, nullable=False)
+    calibration_reps = Column(Integer, nullable=False, default=5)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="calibrations")
+
+
 class DeloadHistory(Base):
     __tablename__ = "deload_history"
 

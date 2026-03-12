@@ -102,6 +102,7 @@ def compute_exercise_score(
     program_goal: str,                         # "hypertrophy", "strength", "power"
     user_preferences: dict = None,             # exercise_id → preference score (or list of ids)
     vbt_enabled: bool = False,
+    training_level: str = "intermediate",
 ) -> float:
     """
     Compute a composite score for an exercise candidate.  Higher = better.
@@ -224,6 +225,20 @@ def compute_exercise_score(
     # are essential for developing athletic power (NSCA guidelines).
     if program_goal == "power" and exercise.exercise_type in (ExerciseType.POWER, ExerciseType.PLYOMETRIC):
         score += 15
+
+    # ── 9b. Olympic Catch Lift Bonus (advanced/intermediate power programs) ──
+    # Olympic lifts with a catch component (power clean, hang clean, snatch) are
+    # the gold standard for developing explosive power and vertical jump.
+    # Advanced athletes should always have these in a power program.
+    if (program_goal == "power"
+            and exercise.exercise_type == ExerciseType.POWER
+            and "olympic" in exercise.variation_tags
+            and training_level in ("advanced", "intermediate")):
+        # Catch lifts (clean, snatch) > pulls (no catch) for power transfer
+        if "catch" in exercise.variation_tags or "from_floor" in exercise.variation_tags:
+            score += 35  # Strong priority — power clean/hang clean are mandatory-tier
+        else:
+            score += 15  # Pulls are still valuable but secondary to catch lifts
 
     # ── 10. VBT Bonus ──────────────────────────────────────────────────────
     # When VBT is enabled, prefer exercises that can leverage velocity tracking

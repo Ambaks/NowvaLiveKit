@@ -456,6 +456,7 @@ def _build_session(
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
+                    training_level=profile.training_level,
                 )
 
                 # BUG 1 FIX: Add compound priority bonuses for Phase 1
@@ -664,6 +665,7 @@ def _build_session(
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
+                    training_level=profile.training_level,
                 )
 
                 # FIX 2: Apply same-week variety penalty
@@ -772,6 +774,7 @@ def _build_session(
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
+                    training_level=profile.training_level,
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -853,6 +856,7 @@ def _build_session(
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
+                    training_level=profile.training_level,
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -976,6 +980,7 @@ def _build_session(
                 program_goal=profile.training_goal,
                 user_preferences=profile.exercises_to_include,
                 vbt_enabled=strategy.vbt_enabled,
+                training_level=profile.training_level,
             )
             score += get_week_variety_penalty(ex)
 
@@ -1091,6 +1096,7 @@ def _build_session(
                     program_goal=profile.training_goal,
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
+                    training_level=profile.training_level,
                 )
                 # FIX 2: Apply same-week variety penalty
                 score += get_week_variety_penalty(ex)

@@ -34,7 +34,7 @@ def _make_callbacks():
         "generate_llm_reply_fn": AsyncMock(),
         "duck_llm_fn": AsyncMock(),
         "unduck_llm_fn": AsyncMock(),
-        "get_cue_audio_fn": lambda key: b"fake_audio" if key else None,
+        "get_cue_audio_fn": lambda key: True if key else False,
     }
 
 
@@ -150,7 +150,7 @@ class TestEventEnqueueing:
 
     def test_on_fault_no_audio_skips(self):
         cbs = _make_callbacks()
-        cbs["get_cue_audio_fn"] = lambda key: None
+        cbs["get_cue_audio_fn"] = lambda key: False
         orch = CoachingOrchestrator(**cbs)
 
         async def _run():
@@ -278,7 +278,7 @@ class TestDispatch:
             await orch._dispatch(event)
             mock_callbacks["generate_llm_reply_fn"].assert_awaited_once()
             call_args = mock_callbacks["generate_llm_reply_fn"].call_args[0][0]
-            assert "[SET RECAP DATA]" in call_args
+            assert "just finished a set" in call_args
             assert "5 reps" in call_args
         asyncio.run(_run())
 
@@ -295,7 +295,7 @@ class TestDispatch:
             await orch._dispatch(event)
             mock_callbacks["generate_llm_reply_fn"].assert_awaited_once()
             call_args = mock_callbacks["generate_llm_reply_fn"].call_args[0][0]
-            assert "[COACHING CONTEXT]" in call_args
+            assert "motivational push" in call_args
         asyncio.run(_run())
 
 

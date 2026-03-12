@@ -12,9 +12,6 @@ import logging
 import threading
 from typing import Optional, Callable, Dict, Any
 
-import numpy as np
-import sounddevice as sd
-
 logger = logging.getLogger(__name__)
 
 # Minimal system prompt for isolated coaching LLM calls.
@@ -40,10 +37,12 @@ class CoachingService:
         session,          # AgentSession — for generate_reply, output.audio
         state,            # AgentState — for reading/writing WorkoutSession
         on_set_complete: Optional[Callable] = None,
+        on_calibration_complete: Optional[Callable] = None,
     ):
         self._session = session
         self._state = state
         self._on_set_complete_callback = on_set_complete
+        self._on_calibration_complete_callback = on_calibration_complete
 
         # Owned components
         self._coaching_ipc = None
@@ -174,6 +173,8 @@ class CoachingService:
                 depth = message.get("depth_category", "")
                 is_clean = message.get("is_clean", False)
                 faults = message.get("faults_in_rep", [])
+                max_depth_angle = message.get("max_depth_angle", 0.0)
+                rep_duration_ms = message.get("rep_duration_ms", 0)
                 logger.info(
                     f"[COACHING SERVICE] REP COMPLETE received: rep={rep} depth={depth} "
                     f"is_clean={is_clean} faults={faults}"
@@ -184,6 +185,8 @@ class CoachingService:
                         depth=depth,
                         is_clean=is_clean,
                         faults=faults,
+                        max_depth_angle=max_depth_angle,
+                        rep_duration_ms=rep_duration_ms,
                     )
                 else:
                     logger.warning("[COACHING SERVICE] No orchestrator — rep_complete dropped")
@@ -215,6 +218,17 @@ class CoachingService:
                     user_message=instructions,
                 )
                 logger.info("[COACHING SERVICE] ✓ Isolated LLM returned for rest_complete")
+            elif msg_type == "calibration_rep":
+                rep = message.get("rep_number", 0)
+                total = message.get("total_required", 5)
+                depth = message.get("depth_angle", 0)
+                logger.info(f"[COACHING SERVICE] CALIBRATION REP {rep}/{total} depth={depth}°")
+                # Play cached rep count cue (same "rep_N" keys used during workouts)
+                cue_key = f"rep_{rep}"
+                await self._play_cached_cue_audio(cue_key)
+            elif msg_type == "calibration_complete":
+                logger.info("[COACHING SERVICE] CALIBRATION COMPLETE — saving to DB")
+                await self._on_calibration_complete(message)
             elif msg_type == "play_cue":
                 logger.debug("[COACHING SERVICE] play_cue ignored (orchestrator handles dispatch)")
             else:
@@ -227,7 +241,7 @@ class CoachingService:
         from services.audio_cue_service import AudioCueService
 
         if self._audio_cue_service is None:
-            self._audio_cue_service = AudioCueService()
+            self._audio_cue_service = AudioCueService(session=self._session)
 
         cues = message.get("cues", {})
         exercise = message.get("exercise_name", "unknown")
@@ -241,6 +255,71 @@ class CoachingService:
                 self._coaching_orchestrator._positive_cue_keys = available
         except Exception as e:
             logger.error(f"[COACHING SERVICE] TTS cache generation failed: {e}")
+
+    async def _on_calibration_complete(self, message: dict):
+        """Handle calibration_complete IPC message — save to DB and notify user."""
+        from db.database import SessionLocal
+        from db.calibration_utils import save_user_calibration
+
+        movement_pattern = message.get("movement_pattern", "squat")
+        peaks = message.get("peaks", {})
+        thresholds = message.get("thresholds", {})
+
+        # Save calibration to database
+        user_id = self._state.get("user.id")
+        if user_id:
+            db = SessionLocal()
+            try:
+                save_user_calibration(
+                    db=db,
+                    user_id=user_id,
+                    movement_pattern=movement_pattern,
+                    peaks=peaks,
+                    thresholds=thresholds,
+                )
+                logger.info(f"[CALIBRATION] Saved calibration to DB for user={user_id} pattern={movement_pattern}")
+            except Exception as e:
+                logger.error(f"[CALIBRATION] Failed to save to DB: {e}", exc_info=True)
+            finally:
+                db.close()
+        else:
+            logger.warning("[CALIBRATION] No user_id in state — cannot save calibration to DB")
+
+        # Store profile in state for future use
+        self._state.set("workout.calibration_profile", thresholds)
+        self._state.set("calibration.active", None)
+        self._state.set("calibration.movement_pattern", None)
+        self._state.save_state()
+
+        # Announce calibration completion via LLM
+        name = self._state.get("user.name", "there")
+        instructions = (
+            f"[CALIBRATION COMPLETE] Calibration is done for {name}. "
+            f"Their custom movement thresholds are now set. "
+            f"Say something like: 'Alright, we're all dialed in! Let's get into your workout.' "
+            f"Keep it brief and hype."
+        )
+        await self._isolated_llm_reply(
+            system_prompt=COACHING_SYSTEM_PROMPT,
+            user_message=instructions,
+        )
+
+        # Reset orchestrator for the actual workout sets
+        if self._coaching_orchestrator:
+            target_reps = self._get_current_target_reps()
+            total_sets = self._get_total_sets()
+            self._coaching_orchestrator.reset_set(target_reps=target_reps, total_sets=total_sets)
+            logger.info("[CALIBRATION] Orchestrator reset for workout phase")
+
+        # Notify voice agent so it can start the wake word system now that
+        # calibration speech is finished and the user is ready to work out.
+        if self._on_calibration_complete_callback:
+            try:
+                ret = self._on_calibration_complete_callback()
+                if asyncio.iscoroutine(ret):
+                    await ret
+            except Exception as e:
+                logger.error(f"[CALIBRATION] on_calibration_complete callback error: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Orchestrator Setup
@@ -329,6 +408,8 @@ class CoachingService:
 
             completed_set = session.get_current_set()
             rest_seconds = completed_set.rest_seconds if completed_set else 30
+            if self._coaching_orchestrator:
+                self._coaching_orchestrator._rest_seconds = rest_seconds
 
             rep_count = (
                 self._coaching_orchestrator._set_rep_count
@@ -410,41 +491,19 @@ class CoachingService:
     # ------------------------------------------------------------------
 
     async def _play_cached_cue_audio(self, cue_key: str):
-        """Play a cached cue on the secondary audio track."""
+        """Play a cached cue through LiveKit's session.say()."""
         logger.info(f"[COACHING SERVICE] → Playing cached cue: {cue_key}")
         if self._audio_cue_service:
-            audio_bytes = self._audio_cue_service.get_cue_audio(cue_key)
-            if audio_bytes:
-                logger.info(f"[COACHING SERVICE] Audio found for '{cue_key}' ({len(audio_bytes)} bytes) — publishing")
-                await self._publish_cached_audio(audio_bytes)
-                logger.info(f"[COACHING SERVICE] ✓ Cached cue played: {cue_key}")
-            else:
-                logger.warning(f"[COACHING SERVICE] No audio bytes found for cue: {cue_key}")
+            await self._audio_cue_service.play_cue(cue_key)
+            logger.info(f"[COACHING SERVICE] ✓ Cached cue played: {cue_key}")
         else:
             logger.warning(f"[COACHING SERVICE] No audio_cue_service — cannot play: {cue_key}")
 
-    async def _publish_cached_audio(self, pcm_bytes: bytes):
-        """
-        Play pre-cached PCM audio through system speakers via sounddevice.
-        Audio format from OpenAI TTS (pcm): 24kHz, 16-bit signed, mono.
-        """
-        audio_array = np.frombuffer(pcm_bytes, dtype=np.int16)
-        done_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
-
-        def _play_blocking():
-            sd.play(audio_array, samplerate=24000, blocksize=2400)
-            sd.wait()
-            loop.call_soon_threadsafe(done_event.set)
-
-        loop.run_in_executor(None, _play_blocking)
-        await done_event.wait()
-
-    def _get_cached_audio(self, cue_key: str) -> Optional[bytes]:
+    def _get_cached_audio(self, cue_key: str) -> bool:
         """Check if cached audio exists for a cue key."""
         if self._audio_cue_service:
-            return self._audio_cue_service.get_cue_audio(cue_key)
-        return None
+            return self._audio_cue_service.has_cue(cue_key)
+        return False
 
     # ------------------------------------------------------------------
     # LLM & Audio Ducking
@@ -494,17 +553,9 @@ class CoachingService:
                 await agent.update_chat_ctx(original_ctx)
 
     async def _duck_llm_audio(self):
-        """Pause the LLM audio output (duck) while a cached cue plays."""
-        logger.debug("[COACHING SERVICE] Ducking LLM audio")
-        try:
-            self._session.output.audio.pause()
-        except Exception as e:
-            logger.debug(f"[COACHING SERVICE] Duck failed (non-critical): {e}")
+        """No-op: session.say() handles audio transitions on the WebRTC track."""
+        pass
 
     async def _unduck_llm_audio(self):
-        """Resume the LLM audio output after cached cue finishes."""
-        logger.debug("[COACHING SERVICE] Unducking LLM audio")
-        try:
-            self._session.output.audio.resume()
-        except Exception as e:
-            logger.debug(f"[COACHING SERVICE] Unduck failed (non-critical): {e}")
+        """No-op: session.say() handles audio transitions on the WebRTC track."""
+        pass
