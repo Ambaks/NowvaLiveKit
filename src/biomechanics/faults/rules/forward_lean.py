@@ -17,17 +17,19 @@ class ForwardLeanRule(FaultRule):
     """
     Rule for detecting excessive forward lean.
 
-    Monitors trunk flexion angle during reps.
+    Monitors trunk flexion angle during reps.  Trunk flexion uses the
+    180-convention: 180° = upright, decreasing with lean.
+
     Some forward lean is normal and necessary in squats,
     but excessive lean can indicate:
     - Poor ankle mobility
     - Weak posterior chain
     - Bar position issues
 
-    Severity thresholds:
-    - Mild: 35-45° trunk flexion
-    - Moderate: 45-55° trunk flexion
-    - Severe: >55° trunk flexion
+    Severity thresholds (180-convention — lower = more lean):
+    - Mild: below 145°
+    - Moderate: below 135°
+    - Severe: below 125°
 
     Note: These thresholds may need adjustment based on
     squat style (high bar vs low bar) and body proportions.
@@ -35,9 +37,9 @@ class ForwardLeanRule(FaultRule):
 
     def __init__(
         self,
-        mild_threshold: float = 35.0,
-        moderate_threshold: float = 45.0,
-        severe_threshold: float = 55.0,
+        mild_threshold: float = 145.0,
+        moderate_threshold: float = 135.0,
+        severe_threshold: float = 125.0,
     ):
         self.mild_threshold = mild_threshold
         self.moderate_threshold = moderate_threshold
@@ -69,17 +71,20 @@ class ForwardLeanRule(FaultRule):
         if angles.frame_index - self._last_fault_frame < 150:
             return None
 
-        trunk_flexion = abs(angles.trunk_flexion)
+        trunk_flexion = angles.trunk_flexion  # 180° = upright, lower = more lean
 
-        if trunk_flexion < self.mild_threshold:
+        # Above mild threshold → upright enough → no fault
+        if trunk_flexion > self.mild_threshold:
             return None
 
+        # Invert so _get_severity works (higher = more severe)
+        lean_amount = self.mild_threshold - trunk_flexion
         severity, score = self._get_severity(
-            trunk_flexion,
+            lean_amount,
             {
-                "mild": self.mild_threshold,
-                "moderate": self.moderate_threshold,
-                "severe": self.severe_threshold,
+                "mild": 0.0,
+                "moderate": self.mild_threshold - self.moderate_threshold,
+                "severe": self.mild_threshold - self.severe_threshold,
             },
         )
 

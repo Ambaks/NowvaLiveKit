@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import time
+import wave
 from pathlib import Path
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -92,10 +93,15 @@ class AudioCueService:
         self._session = session  # AgentSession — for session.say()
         # cue_key → list of WAV file paths (one per variant)
         self._disk_cache: Dict[str, List[Path]] = {}
+        # cue_key → list of variants, each variant is a list of AudioFrame chunks (in-memory)
+        self._memory_cache: Dict[str, List[List[rtc.AudioFrame]]] = {}
         # Runtime-generated fallback cache: cue_key → raw PCM bytes
         self._fallback_cache: Dict[str, bytes] = {}
         self._client: Optional[AsyncOpenAI] = None
         self._disk_loaded: bool = False
+
+        # Eagerly load and pre-read all WAV cues into memory
+        self._load_from_disk()
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
@@ -136,6 +142,33 @@ class AudioCueService:
             f"[AUDIO CUE] Indexed {count} pre-generated WAV files "
             f"for {len(self._disk_cache)} cue keys from {CUES_WAV_DIR}"
         )
+
+        # Pre-read all WAV files into memory as AudioFrame lists
+        # (audio_frames_from_file is async, so we read WAV files directly here)
+        mem_count = 0
+        bytes_per_sample = 2  # int16
+        chunk_bytes = SAMPLES_PER_CHUNK * NUM_CHANNELS * bytes_per_sample
+        for cue_key, paths in self._disk_cache.items():
+            self._memory_cache[cue_key] = []
+            for wav_path in paths:
+                try:
+                    with wave.open(str(wav_path), "rb") as wf:
+                        pcm_data = wf.readframes(wf.getnframes())
+                    frames = []
+                    for offset in range(0, len(pcm_data), chunk_bytes):
+                        chunk = pcm_data[offset:offset + chunk_bytes]
+                        samples = len(chunk) // (NUM_CHANNELS * bytes_per_sample)
+                        frames.append(rtc.AudioFrame(
+                            data=chunk,
+                            sample_rate=SAMPLE_RATE,
+                            num_channels=NUM_CHANNELS,
+                            samples_per_channel=samples,
+                        ))
+                    self._memory_cache[cue_key].append(frames)
+                    mem_count += 1
+                except Exception as e:
+                    logger.warning(f"[AUDIO CUE] Failed to pre-load {wav_path}: {e}")
+        logger.info(f"[AUDIO CUE] Pre-loaded {mem_count} WAV variants into memory")
 
     async def cache_cues(self, cues: Dict[str, str]) -> None:
         """
@@ -186,16 +219,29 @@ class AudioCueService:
     def has_cue(self, cue_key: str) -> bool:
         """Check whether audio is available for a cue key."""
         self._load_from_disk()
-        return cue_key in self._disk_cache or cue_key in self._fallback_cache
+        return cue_key in self._memory_cache or cue_key in self._disk_cache or cue_key in self._fallback_cache
 
     async def play_cue(self, cue_key: str) -> None:
         """Play a cue through LiveKit's session.say()."""
         self._load_from_disk()
 
-        # Prefer pre-generated WAV variants (random selection)
-        variants = self._disk_cache.get(cue_key)
-        if variants:
-            wav_path = random.choice(variants)
+        # Prefer in-memory pre-loaded frames (zero disk I/O)
+        mem_variants = self._memory_cache.get(cue_key)
+        if mem_variants:
+            frames = random.choice(mem_variants)
+            handle = self._session.say(
+                "",
+                audio=self._frames_to_async_gen(frames),
+                allow_interruptions=False,
+                add_to_chat_ctx=False,
+            )
+            await handle.join()
+            return
+
+        # Fall back to disk-based WAV variants (if memory pre-load failed)
+        disk_variants = self._disk_cache.get(cue_key)
+        if disk_variants:
+            wav_path = random.choice(disk_variants)
             audio_source = audio_frames_from_file(
                 str(wav_path), sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS,
             )
@@ -222,6 +268,14 @@ class AudioCueService:
             return
 
         logger.warning(f"[AUDIO CUE] No audio available for cue: {cue_key}")
+
+    @staticmethod
+    async def _frames_to_async_gen(
+        frames: List[rtc.AudioFrame],
+    ) -> AsyncGenerator[rtc.AudioFrame, None]:
+        """Yield pre-loaded AudioFrame chunks as an async generator."""
+        for frame in frames:
+            yield frame
 
     def is_cache_valid(self) -> bool:
         """Check whether any cue audio is available."""

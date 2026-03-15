@@ -40,7 +40,7 @@ class ProgramCreationAgent(BaseNovaAgent):
             program_name = state.get("program_update.selected_program_name", "your program")
             name = state.get_user().get("name", "there")
             return (
-                f"You are Nova, an AI fitness coach helping {name} update their '{program_name}' program. "
+                f"You are Nova, an AI fitness coach helping the user update their '{program_name}' program. "
                 f"Ask what they want to change about the program, then call capture_program_change_request() "
                 f"with their description. Be conversational and helpful."
             )
@@ -93,20 +93,18 @@ class ProgramCreationAgent(BaseNovaAgent):
         if state.get("program_creation.precaptured_session_duration"):
             precaptured_params["session_duration"] = state.get("program_creation.precaptured_session_duration")
 
-        return get_program_creation_prompt(name, existing_data, precaptured_params)
+        return get_program_creation_prompt(existing_data, precaptured_params)
 
     async def on_enter(self):
         """Generate greeting based on creation vs update mode."""
-        name = self.user_name
-
         if self.state.get("program_update.selected_program_id"):
             program_name = self.state.get("program_update.selected_program_name", "your program")
             await self._say(
-                f"You're helping {name} update their '{program_name}' program. Ask what they'd like to change about it. Be conversational."
+                f"You're helping the user update their '{program_name}' program. Ask what they'd like to change about it. Be conversational."
             )
         else:
             await self._say(
-                f"You're helping {name} create a new workout program. Start by asking the first question based on what data you already have. Follow the program creation flow."
+                f"You're helping the user create a new workout program. Start by asking the first question based on what data you already have. Follow the program creation flow."
             )
 
     # ===== CONTEXT SUMMARIZATION =====
@@ -382,8 +380,6 @@ class ProgramCreationAgent(BaseNovaAgent):
             weight_value: The weight as spoken by the user (e.g., "185 pounds", "80 kg"), or None to use DB value
         """
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             from db.models import User
@@ -442,8 +438,6 @@ class ProgramCreationAgent(BaseNovaAgent):
             sex: "male", "female", "M", "F", etc., or None to use DB value
         """
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             from db.models import User
@@ -697,8 +691,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         """
         logger.info(f"[PROGRAM] Capturing fitness level: {fitness_level}")
 
-        name = self.user_name
-
         normalized_level = normalize_fitness_level(fitness_level)
 
         self.state.set("program_creation.fitness_level", normalized_level)
@@ -714,7 +706,7 @@ class ProgramCreationAgent(BaseNovaAgent):
 
         logger.info("="*60)
         logger.info("[PROGRAM CREATION] All parameters collected:")
-        logger.info(f"  User: {name} (ID: {self.user_id})")
+        logger.info(f"  User: the user (ID: {self.user_id})")
         logger.info(f"  Height: {height_cm} cm, Weight: {weight_kg} kg")
         logger.info(f"  Goal: {goal_category} (\"{goal_raw}\")")
         logger.info(f"  Duration: {duration_weeks} weeks, Frequency: {days_per_week} days/week")
@@ -767,8 +759,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         logger.info("="*80)
 
         user_id = self.user_id
-        name = self.user_name
-
         saved_program_id = self.state.get("program_creation.saved_program_id")
         if saved_program_id:
             return None, f"Program already generated. Now call finish_program_creation() to complete."
@@ -853,7 +843,7 @@ class ProgramCreationAgent(BaseNovaAgent):
         except Exception as e:
             logger.exception("[PROGRAM] ERROR")
 
-            result = (None, f"Error starting generation. Say something like: '{name}, I had trouble starting your program. Let me try again.' Keep it apologetic.")
+            result = (None, f"Error starting generation. Say something like: 'I had trouble starting your program. Let me try again.' Keep it apologetic.")
             self._log_function_call("generate_workout_program", {}, result)
 
             return result
@@ -865,8 +855,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         Call this after generate_workout_program() to poll for completion.
         """
         import httpx
-
-        name = self.user_name
 
         job_id = self.state.get("program_creation.job_id")
         if not job_id:
@@ -910,8 +898,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         """
         logger.info("[PROGRAM] Finishing program creation, returning to main menu...")
 
-        name = self.user_name
-
         self.state.set("program_creation", None)
         self.state.switch_mode("main_menu")
         self.state.save_state()
@@ -920,6 +906,7 @@ class ProgramCreationAgent(BaseNovaAgent):
 
         # Handoff to MainMenuAgent
         self._suppress_turn_detection()
+        await self._truncate_context_for_handoff()
         from agents.main_menu_agent import MainMenuAgent
         return MainMenuAgent(state=self.state, userdata=self.userdata)
 
@@ -933,8 +920,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         Args:
             program_name: The name of the program the user wants to update
         """
-        name = self.user_name
-
         programs = self.state.get("program_update.available_programs", [])
 
         if not programs:
@@ -968,8 +953,6 @@ class ProgramCreationAgent(BaseNovaAgent):
             change_request: The user's description of what they want to change
         """
         user_id = self.user_id
-        name = self.user_name
-
         program_id = self.state.get("program_update.selected_program_id")
         program_name = self.state.get("program_update.selected_program_name")
 
@@ -996,6 +979,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                     self.state.switch_mode("main_menu")
                     self.state.save_state()
                     self._suppress_turn_detection()
+                    await self._truncate_context_for_handoff()
                     from agents.main_menu_agent import MainMenuAgent
                     return MainMenuAgent(state=self.state, userdata=self.userdata)
                 else:
@@ -1010,7 +994,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                 return None, f"Error: User not found in database."
 
             if not db_user.age or not db_user.sex or not db_user.height_cm or not db_user.weight_kg:
-                return None, f"Say something like: '{name}, I need some more information about you first. Let me ask you a few quick questions.' Then ask for missing: age, sex, height, weight."
+                return None, f"Say something like: 'I need some more information about you first. Let me ask you a few quick questions.' Then ask for missing: age, sex, height, weight."
 
             user_profile = {
                 "age": int(db_user.age),
@@ -1067,8 +1051,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         """
         import httpx
 
-        name = self.user_name
-
         program_id = self.state.get("program_update.selected_program_id")
         program_name = self.state.get("program_update.selected_program_name")
         change_request = self.state.get("program_update.change_request")
@@ -1103,6 +1085,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                 self.state.switch_mode("main_menu")
                 self.state.save_state()
                 self._suppress_turn_detection()
+                await self._truncate_context_for_handoff()
                 from agents.main_menu_agent import MainMenuAgent
                 return MainMenuAgent(state=self.state, userdata=self.userdata)
 
@@ -1143,7 +1126,7 @@ class ProgramCreationAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[PROGRAM UPDATE] ERROR")
-            return None, f"Error starting update. Say something like: '{name}, I had trouble starting the update. Let me try again.'"
+            return None, f"Error starting update. Say something like: 'I had trouble starting the update. Let me try again.'"
 
     @function_tool
     async def check_program_update_status(self, context: RunContext):
@@ -1152,8 +1135,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         Call this after start_program_update_job() to poll for completion.
         """
         import httpx
-
-        name = self.user_name
 
         job_id = self.state.get("program_update.job_id")
         program_name = self.state.get("program_update.selected_program_name")
@@ -1190,13 +1171,14 @@ class ProgramCreationAgent(BaseNovaAgent):
                 self.state.switch_mode("main_menu")
                 self.state.save_state()
                 self._suppress_turn_detection()
+                await self._truncate_context_for_handoff()
                 from agents.main_menu_agent import MainMenuAgent
                 return MainMenuAgent(state=self.state, userdata=self.userdata)
 
             elif status == "failed":
                 error = data.get("error_message", "Unknown error")
                 logger.info(f"[PROGRAM UPDATE] Update failed: {error}")
-                return None, f"Update failed. Say something like: '{name}, I had trouble updating your program. Let's try again.'"
+                return None, f"Update failed. Say something like: 'I had trouble updating your program. Let's try again.'"
 
             else:
                 logger.info(f"[PROGRAM UPDATE] Update in progress: {progress}%")

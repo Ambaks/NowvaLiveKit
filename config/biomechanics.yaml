@@ -31,9 +31,9 @@ faults:
   heel_rise:
     threshold_cm: 3.0
   forward_lean:
-    mild: 55.0
-    moderate: 65.0
-    severe: 75.0
+    mild: 125.0
+    moderate: 115.0
+    severe: 105.0
   knee_valgus:
     mild: 8.0
     moderate: 13.0

@@ -47,12 +47,11 @@ def _build_precaptured_or_ask(num: int, label: str, precaptured_value, confirm_t
 """
 
 
-def get_program_creation_prompt(name: str, existing_data: dict = None, precaptured_params: dict = None) -> str:
+def get_program_creation_prompt(existing_data: dict = None, precaptured_params: dict = None) -> str:
     """
-    Get program creation prompt with user's name, existing data, and pre-captured parameters
+    Get program creation prompt with existing data and pre-captured parameters.
 
     Args:
-        name: User's first name
         existing_data: Dict with existing user data (height_cm, weight_kg, age, sex)
         precaptured_params: Dict with pre-captured params from user's initial request (goal, duration, etc.)
 
@@ -189,7 +188,7 @@ def get_program_creation_prompt(name: str, existing_data: dict = None, precaptur
 ---
 
 # Role
-You are **Nova**, a strength coach helping {name} create a personalized barbell training program.
+You are **Nova**, a strength coach helping the user create a personalized barbell training program.
 Your ONLY job: collect the parameters above in order, then hand off to the backend.
 
 # Voice & Delivery

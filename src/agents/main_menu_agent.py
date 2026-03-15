@@ -23,25 +23,22 @@ class MainMenuAgent(BaseNovaAgent):
     """Primary interaction hub: schedule management, workout start, program creation."""
 
     def __init__(self, state, userdata) -> None:
-        name = state.get_user().get("name", "there")
-        super().__init__(state=state, userdata=userdata, instructions=get_main_menu_prompt(name))
+        super().__init__(state=state, userdata=userdata, instructions=get_main_menu_prompt())
 
     async def on_enter(self):
         """Generate main menu greeting."""
-        name = self.user_name
-
         # Check if this is the first time arriving at main menu (from onboarding)
         if self.state.is_first_time_main_menu():
             self.state.mark_main_menu_visited()
             self.state.save_state()
             await self._say(
-                f"Welcome {name} to the main menu for the first time! "
+                f"Welcome the user to the main menu for the first time! "
                 f"Tell them about their options: start a workout, create or update a program, "
                 f"check their progress, or update their profile. Keep it friendly and conversational."
             )
         else:
             await self._say(
-                f"The user, {name}, is back at the main menu. Welcome them back and tell them "
+                f"The user, is back at the main menu. Welcome them back and tell them "
                 f"about their options which are to start a workout, create or update a program, "
                 f"check their progress, or update their profile. Keep it friendly and conversational."
             )
@@ -62,13 +59,11 @@ class MainMenuAgent(BaseNovaAgent):
         db = SessionLocal()
         try:
             user_id = self.user_id
-            name = self.user_name
-
             workout = get_todays_workout(db, user_id)
 
             if not workout:
                 logger.info("[WORKOUT] No workout scheduled for today")
-                return None, f"Tell the user: 'Hey {name}, you don't have a workout scheduled for today. Would you like to check your upcoming schedule or create a new program?' Keep it helpful and supportive."
+                return None, f"Tell the user: 'Hey you don't have a workout scheduled for today. Would you like to check your upcoming schedule or create a new program?' Keep it helpful and supportive."
 
             # Initialize workout session
             session = WorkoutSession(
@@ -146,11 +141,9 @@ class MainMenuAgent(BaseNovaAgent):
         self.state.set("quick_exercise.gathering_params", True)
         self.state.save_state()
 
-        name = self.user_name
-
         result = (None, (
             f"The user wants to do {normalized} as a quick exercise (not part of a scheduled workout). "
-            f"Now ask {name} conversationally about their plan. Ask how many sets they're thinking, "
+            f"Now ask the user conversationally about their plan. Ask how many sets they're thinking, "
             f"how many reps per set, what weight they want to use, and how long they want to rest between sets. "
             f"Once you have all the details, call confirm_quick_exercise() with the parameters. "
             f"Keep it natural and conversational — like a coach checking in. "
@@ -420,8 +413,6 @@ class MainMenuAgent(BaseNovaAgent):
         logger.info("="*80)
 
         user_id = self.user_id
-        name = self.user_name
-
         # Extract program parameters from user request
         extracted_params = {}
         if user_request:
@@ -441,7 +432,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to enter program creation: {e}")
-            return None, f"There was an error starting program creation. Say something like: '{name}, I'm having trouble. Let's try again.' Keep it apologetic."
+            return None, f"There was an error starting program creation. Say something like: 'I'm having trouble. Let's try again.' Keep it apologetic."
         finally:
             db.close()
 
@@ -454,8 +445,6 @@ class MainMenuAgent(BaseNovaAgent):
         logger.info("[MAIN MENU] User requested to update program")
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             from db.program_utils import get_program_summary_list
@@ -463,7 +452,7 @@ class MainMenuAgent(BaseNovaAgent):
             programs = get_program_summary_list(db, user_id)
 
             if len(programs) == 0:
-                return None, f"Say something like: '{name}, you don't have any programs yet. Would you like to create your first program?' Keep it encouraging."
+                return None, f"Say something like: 'you don't have any programs yet. Would you like to create your first program?' Keep it encouraging."
             elif len(programs) == 1:
                 program = programs[0]
                 self.state.set("program_update.selected_program_id", program["id"])
@@ -489,7 +478,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to list programs: {e}")
-            return None, f"Say something like: '{name}, I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
+            return None, f"Say something like: 'I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
         finally:
             db.close()
 
@@ -511,8 +500,6 @@ class MainMenuAgent(BaseNovaAgent):
         db = SessionLocal()
         try:
             user_id = self.user_id
-            name = self.user_name
-
             workouts = get_upcoming_workouts(db, user_id, days_ahead)
 
             if not workouts:
@@ -552,8 +539,6 @@ class MainMenuAgent(BaseNovaAgent):
         db = SessionLocal()
         try:
             user_id = self.user_id
-            name = self.user_name
-
             try:
                 target_date = parse_natural_date(date_text)
             except DateParseError as e:
@@ -628,8 +613,6 @@ class MainMenuAgent(BaseNovaAgent):
         from datetime import date, timedelta
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             try:
@@ -674,7 +657,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] move_workout_to_date failed")
-            return None, f"Sorry {name}, I ran into an issue moving that workout. Let's try again."
+            return None, f"Sorry I ran into an issue moving that workout. Let's try again."
         finally:
             db.close()
 
@@ -692,8 +675,6 @@ class MainMenuAgent(BaseNovaAgent):
         from datetime import date, timedelta
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             def find_workout(description: str):
@@ -735,7 +716,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] swap_two_workouts failed")
-            return None, f"Sorry {name}, I ran into an issue swapping those workouts. Let's try again."
+            return None, f"Sorry I ran into an issue swapping those workouts. Let's try again."
         finally:
             db.close()
 
@@ -752,8 +733,6 @@ class MainMenuAgent(BaseNovaAgent):
         from utils.date_parser import parse_week_range, DateParseError
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             try:
@@ -771,7 +750,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] swap_entire_weeks failed")
-            return None, f"Sorry {name}, I ran into an issue swapping those weeks. Let's try again."
+            return None, f"Sorry I ran into an issue swapping those weeks. Let's try again."
         finally:
             db.close()
 
@@ -786,25 +765,23 @@ class MainMenuAgent(BaseNovaAgent):
         from db.schedule_utils import get_todays_workout, skip_workout
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             workout = get_todays_workout(db, user_id)
 
             if not workout:
-                return None, f"{name}, you don't have a workout scheduled today. Would you like to see your upcoming schedule?"
+                return None, f"you don't have a workout scheduled today. Would you like to see your upcoming schedule?"
 
             success, error_msg = skip_workout(db, workout["schedule_id"], reason=reason)
 
             if not success:
                 return None, f"I couldn't skip that workout. {error_msg}"
 
-            return None, f"No problem, {name}. I've marked today's workout as skipped. Rest up and we'll get back to it next time!"
+            return None, f"No problem. I've marked today's workout as skipped. Rest up and we'll get back to it next time!"
 
         except Exception as e:
             logger.exception("[ERROR] skip_workout_today failed")
-            return None, f"Sorry {name}, I ran into an issue. Let's try again."
+            return None, f"Sorry I ran into an issue. Let's try again."
         finally:
             db.close()
 
@@ -820,8 +797,6 @@ class MainMenuAgent(BaseNovaAgent):
         from utils.date_parser import parse_natural_date, get_date_description, DateParseError
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             try:
@@ -839,7 +814,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] add_rest_day_and_shift failed")
-            return None, f"Sorry {name}, I ran into an issue. Let's try again."
+            return None, f"Sorry I ran into an issue. Let's try again."
         finally:
             db.close()
 
@@ -857,8 +832,6 @@ class MainMenuAgent(BaseNovaAgent):
         from datetime import date
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             try:
@@ -894,7 +867,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] repeat_workout_on_date failed")
-            return None, f"Sorry {name}, I ran into an issue. Let's try again."
+            return None, f"Sorry I ran into an issue. Let's try again."
         finally:
             db.close()
 
@@ -911,8 +884,6 @@ class MainMenuAgent(BaseNovaAgent):
         from utils.date_parser import parse_week_range, DateParseError
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             try:
@@ -933,7 +904,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] apply_deload_to_week failed")
-            return None, f"Sorry {name}, I ran into an issue. Let's try again."
+            return None, f"Sorry I ran into an issue. Let's try again."
         finally:
             db.close()
 
@@ -950,8 +921,6 @@ class MainMenuAgent(BaseNovaAgent):
         from utils.date_parser import parse_natural_date, DateParseError
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             try:
@@ -965,11 +934,11 @@ class MainMenuAgent(BaseNovaAgent):
             if not success:
                 return None, f"I couldn't clear that range. {error_msg}"
 
-            return None, f"Done! I cleared {cleared_count} workouts from {start_date} to {end_date}. Enjoy your break, {name}!"
+            return None, f"Done! I cleared {cleared_count} workouts from {start_date} to {end_date}. Enjoy your break!"
 
         except Exception as e:
             logger.exception("[ERROR] clear_schedule_for_vacation failed")
-            return None, f"Sorry {name}, I ran into an issue. Let's try again."
+            return None, f"Sorry I ran into an issue. Let's try again."
         finally:
             db.close()
 
@@ -984,8 +953,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.schedule_utils import reschedule_remaining_week
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             if not (1 <= days <= 7):
@@ -1000,7 +967,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] push_remaining_week_forward failed")
-            return None, f"Sorry {name}, I ran into an issue. Let's try again."
+            return None, f"Sorry I ran into an issue. Let's try again."
         finally:
             db.close()
 
@@ -1012,8 +979,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.schedule_history import undo_last_change
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             success, error_msg = undo_last_change(db, user_id)
@@ -1025,7 +990,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] undo_last_schedule_change failed")
-            return None, f"Sorry {name}, I ran into an issue undoing that change. Let's try again."
+            return None, f"Sorry I ran into an issue undoing that change. Let's try again."
         finally:
             db.close()
 
@@ -1040,8 +1005,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.schedule_history import get_recent_changes, format_change_for_display
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             if not (1 <= limit <= 10):
@@ -1061,7 +1024,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] view_schedule_change_history failed")
-            return None, f"Sorry {name}, I ran into an issue retrieving your change history."
+            return None, f"Sorry I ran into an issue retrieving your change history."
         finally:
             db.close()
 
@@ -1073,8 +1036,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.recovery_analysis import analyze_schedule_recovery, format_recommendation_for_display
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             analysis = analyze_schedule_recovery(db, user_id)
@@ -1094,7 +1055,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] analyze_schedule_for_recovery failed")
-            return None, f"Sorry {name}, I ran into an issue analyzing your schedule."
+            return None, f"Sorry I ran into an issue analyzing your schedule."
         finally:
             db.close()
 
@@ -1109,8 +1070,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.recovery_analysis import apply_all_recommended_rest_days
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             success, error, added_count = apply_all_recommended_rest_days(
@@ -1125,7 +1084,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] apply_recommended_rest_days failed")
-            return None, f"Sorry {name}, I ran into an issue adding those rest days."
+            return None, f"Sorry I ran into an issue adding those rest days."
         finally:
             db.close()
 
@@ -1137,8 +1096,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.training_load import check_deload_recommendation
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             needs_deload, recommendation, reason = check_deload_recommendation(db, user_id)
@@ -1159,7 +1116,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] check_if_deload_needed failed")
-            return None, f"Sorry {name}, I ran into an issue checking your training load."
+            return None, f"Sorry I ran into an issue checking your training load."
         finally:
             db.close()
 
@@ -1171,8 +1128,6 @@ class MainMenuAgent(BaseNovaAgent):
         from db.training_load import check_deload_recommendation, apply_deload_recommendation
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             needs_deload, recommendation, reason = check_deload_recommendation(db, user_id)
@@ -1192,7 +1147,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] apply_deload_week_recommendation failed")
-            return None, f"Sorry {name}, I ran into an issue applying the deload week."
+            return None, f"Sorry I ran into an issue applying the deload week."
         finally:
             db.close()
 
@@ -1208,8 +1163,6 @@ class MainMenuAgent(BaseNovaAgent):
         from sqlalchemy import desc
 
         user_id = self.user_id
-        name = self.user_name
-
         db = SessionLocal()
         try:
             if not (1 <= weeks <= 12):
@@ -1242,7 +1195,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[ERROR] view_training_load_history failed")
-            return None, f"Sorry {name}, I ran into an issue retrieving your training load."
+            return None, f"Sorry I ran into an issue retrieving your training load."
         finally:
             db.close()
 
@@ -1252,7 +1205,6 @@ class MainMenuAgent(BaseNovaAgent):
         Call this when the user wants to view their progress, stats, or history.
         """
         logger.info("[MAIN MENU] User requested to view progress")
-        name = self.user_name
         return None, f"The user wants to see their progress. Acknowledge their request and let them know this feature is coming soon - they'll be able to see workout history, personal records, and progress charts. Keep it encouraging."
 
     @function_tool
@@ -1261,8 +1213,7 @@ class MainMenuAgent(BaseNovaAgent):
         Call this when the user wants to update their profile or settings.
         """
         logger.info("[MAIN MENU] User requested to update profile")
-        name = self.user_name
-        return None, f"The user wants to update their profile. Say something like: '{name}, profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
+        return None, f"The user wants to update their profile. Say something like: 'profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
 
     @function_tool
     async def shutdown(self, context: RunContext):
@@ -1273,8 +1224,6 @@ class MainMenuAgent(BaseNovaAgent):
         """
         logger.info("[MAIN MENU] User requested shutdown")
 
-        name = self.user_name
-
         # Signal main.py to initiate graceful shutdown
         self.state.set("shutdown_requested", True)
         self.state.save_state()
@@ -1282,7 +1231,7 @@ class MainMenuAgent(BaseNovaAgent):
         self._log_function_call("shutdown", {}, "shutdown_requested")
 
         return None, (
-            f"The user wants to shut down. Say a warm, brief goodbye to {name}. "
-            f"Something like: 'Take care {name}, great chatting with you! See you next time.' "
+            f"The user wants to shut down. Say a warm, brief goodbye to the user. "
+            f"Something like: 'Take care great chatting with you! See you next time.' "
             f"Keep it friendly and natural — one or two sentences max."
         )

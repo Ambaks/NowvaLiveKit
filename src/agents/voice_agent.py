@@ -18,7 +18,7 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import openai
+from livekit.plugins import openai, noise_cancellation
 from openai.types.beta.realtime.session import TurnDetection
 
 from core.agent_state import AgentState
@@ -27,6 +27,7 @@ from agents.main_menu_agent import MainMenuAgent
 from agents.workout_agent import WorkoutAgent
 from agents.program_creation_agent import ProgramCreationAgent
 from agents.shared.userdata import UserData
+from core.latency_tracker import LatencyTracker
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,6 @@ async def entrypoint(ctx: agents.JobContext):
             create_response=True,
             interrupt_response=True,
         ),
-        input_audio_noise_reduction="far_field",
         modalities=["audio", "text"],
     )
     logger.info("[NOVA] Realtime model initialized")
@@ -81,7 +81,7 @@ async def entrypoint(ctx: agents.JobContext):
     session = AgentSession(
         llm=realtime_model,
         userdata=userdata,
-        preemptive_generation=False,
+        preemptive_generation=True,
     )
     logger.info("[NOVA] Agent session created")
 
@@ -97,6 +97,10 @@ async def entrypoint(ctx: agents.JobContext):
     agent = AgentClass(state=state, userdata=userdata)
 
     logger.info(f"[NOVA] Starting {AgentClass.__name__} (mode={mode})")
+
+    # Initialize latency tracker
+    latency_tracker = LatencyTracker.get_instance()
+    latency_tracker.reset()
 
     # --- Session event tracking ---
     @session.on("agent_state_changed")
@@ -144,6 +148,8 @@ async def entrypoint(ctx: agents.JobContext):
                 f"output_tokens={getattr(m, 'output_tokens', 'N/A')}, "
                 f"tps={getattr(m, 'tokens_per_second', 'N/A')}"
             )
+            # Feed TTFT into latency tracker
+            latency_tracker.record_ttft(m.ttft)
         elif hasattr(m, "audio_duration"):
             logger.info(
                 f"[METRICS] {m.type} — duration={m.duration:.3f}s, "
@@ -165,17 +171,48 @@ async def entrypoint(ctx: agents.JobContext):
     @session.on("close")
     def _on_close(ev):
         logger.info(f"[SESSION] Session closed — reason={ev.reason.value}, error={ev.error}")
+        # Log final latency summary
+        latency_tracker.log_summary()
+        # Graceful cleanup if session closes during workout
+        if state.get_mode() == "workout":
+            logger.info("[SESSION] Session closed during workout — saving state")
+            try:
+                coaching = userdata.coaching_service
+                if coaching:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(coaching.stop(), loop)
+                    userdata.coaching_service = None
+                state.save_state()
+                logger.info("[SESSION] Workout state saved on close")
+            except Exception as e:
+                logger.error(f"[SESSION] Failed to save workout state on close: {e}")
 
     await session.start(
         room=ctx.room,
         agent=agent,
         room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC(),
             pre_connect_audio=True,
             pre_connect_audio_timeout=5.0,
         ),
     )
 
     logger.info(f"Nova voice agent started in room: {ctx.room.name}")
+
+
+def prewarm(proc: agents.JobProcess):
+    """Pre-load heavy resources before any room connection."""
+    logger.info("[PREWARM] Pre-loading audio cue index...")
+    try:
+        from services.audio_cue_service import AudioCueService
+        # Trigger eager disk indexing and memory pre-load (session=None is fine
+        # for the pre-load step — playback requires a session)
+        _cue_svc = AudioCueService(session=None)
+        logger.info(f"[PREWARM] Audio cues pre-loaded: {len(_cue_svc._memory_cache)} cue keys")
+    except Exception as e:
+        logger.warning(f"[PREWARM] Audio cue pre-load failed (will retry at session start): {e}")
 
 
 if __name__ == "__main__":
@@ -185,6 +222,7 @@ if __name__ == "__main__":
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
+                prewarm_fnc=prewarm,
             )
         )
     except KeyboardInterrupt:

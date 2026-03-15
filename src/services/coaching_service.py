@@ -96,21 +96,45 @@ class CoachingService:
     # ------------------------------------------------------------------
 
     async def _start_ipc_listener(self):
-        """Connect to the coaching IPC server and listen for biomechanics messages."""
+        """Connect to the coaching IPC server and listen for biomechanics messages.
+
+        Uses exponential backoff reconnection (3 attempts: 1s, 2s, 4s).
+        If the connection drops mid-session, the listener thread will
+        automatically attempt to reconnect.
+        """
         if self._listener_running:
             logger.info("[COACHING SERVICE] Listener already running")
             return
 
         from core.ipc_communication import IPCClient
 
-        self._coaching_ipc = IPCClient(socket_path="/tmp/nowva_coaching.sock")
+        max_retries = 3
+        base_delay = 1.0  # seconds
+
+        def _connect_with_retry() -> bool:
+            """Attempt IPC connection with exponential backoff."""
+            for attempt in range(1, max_retries + 1):
+                self._coaching_ipc = IPCClient(socket_path="/tmp/nowva_coaching.sock")
+                if self._coaching_ipc.connect(timeout=15):
+                    logger.info(f"[COACHING SERVICE] Connected to coaching IPC server (attempt {attempt})")
+                    return True
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    f"[COACHING SERVICE] IPC connection attempt {attempt}/{max_retries} failed, "
+                    f"retrying in {delay}s..."
+                )
+                import time as _time
+                _time.sleep(delay)
+            logger.error(
+                f"[COACHING SERVICE] Failed to connect to coaching IPC server "
+                f"after {max_retries} attempts — coaching data will be unavailable"
+            )
+            return False
 
         def _listen_thread():
             try:
-                if not self._coaching_ipc.connect(timeout=15):
-                    logger.warning("[COACHING SERVICE] Failed to connect to coaching IPC server")
+                if not _connect_with_retry():
                     return
-                logger.info("[COACHING SERVICE] Connected to coaching IPC server")
                 self._listener_running = True
 
                 def on_message(message: dict):
@@ -123,6 +147,23 @@ class CoachingService:
                 self._coaching_ipc.listen(message_callback=on_message)
             except Exception as e:
                 logger.error(f"[COACHING SERVICE] Listener error: {e}")
+                # Attempt reconnection on unexpected disconnect
+                if self._started:
+                    logger.info("[COACHING SERVICE] Attempting reconnection after disconnect...")
+                    try:
+                        if _connect_with_retry():
+                            self._listener_running = True
+
+                            def on_message_retry(message: dict):
+                                if self._event_loop and self._event_loop.is_running():
+                                    asyncio.run_coroutine_threadsafe(
+                                        self._handle_message(message),
+                                        self._event_loop,
+                                    )
+
+                            self._coaching_ipc.listen(message_callback=on_message_retry)
+                    except Exception as e2:
+                        logger.error(f"[COACHING SERVICE] Reconnection failed: {e2}")
             finally:
                 self._listener_running = False
 
@@ -286,12 +327,11 @@ class CoachingService:
         self._state.save_state()
 
         # Announce calibration completion via LLM
-        name = self._state.get("user.name", "there")
         instructions = (
-            f"[CALIBRATION COMPLETE] Calibration is done for {name}. "
-            f"Their custom movement thresholds are now set. "
-            f"Say something like: 'Alright, we're all dialed in! Let's get into your workout.' "
-            f"Keep it brief and hype."
+            "[CALIBRATION COMPLETE] Calibration is done. "
+            "The user's custom movement thresholds are now set. "
+            "Say something like: 'Alright, we're all dialed in! Let's get into your workout.' "
+            "Keep it brief and hype."
         )
         await self._coaching_llm_reply(instructions)
 
@@ -328,6 +368,7 @@ class CoachingService:
             get_cue_audio_fn=self._get_cached_audio,
             advance_set_fn=self._advance_workout_set,
             on_workout_complete_fn=self._on_workout_complete,
+            prune_context_fn=self._prune_conversation_context,
         )
 
         target_reps = self._get_current_target_reps()
@@ -499,6 +540,30 @@ class CoachingService:
     # ------------------------------------------------------------------
     # LLM & Audio Ducking
     # ------------------------------------------------------------------
+
+    async def _prune_conversation_context(self, max_items: int = 6):
+        """Prune old conversation items to prevent progressive latency degradation.
+
+        gpt-realtime-1.5 has a known latency increase in long sessions.
+        Keeping only the last N items helps mitigate this.
+        """
+        try:
+            agent = self._session.current_agent
+            if agent is None:
+                return
+            ctx = agent.chat_ctx
+            if len(ctx.items) <= max_items:
+                return
+            old_count = len(ctx.items)
+            new_ctx = ctx.copy()
+            new_ctx.truncate(max_items=max_items)
+            await agent.update_chat_ctx(new_ctx)
+            logger.info(
+                f"[COACHING SERVICE] Pruned conversation context: "
+                f"{old_count} → {len(new_ctx.items)} items"
+            )
+        except Exception as e:
+            logger.warning(f"[COACHING SERVICE] Context pruning failed: {e}")
 
     async def _coaching_llm_reply(self, instructions: str):
         """Generate coaching speech via generate_reply with SpeechHandle tracking.

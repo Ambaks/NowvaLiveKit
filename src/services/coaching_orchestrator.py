@@ -102,6 +102,7 @@ class CoachingOrchestrator:
         get_cue_audio_fn: Callable,
         advance_set_fn: Optional[Callable] = None,
         on_workout_complete_fn: Optional[Callable] = None,
+        prune_context_fn: Optional[Callable] = None,
     ):
         self._play_cached = play_cached_audio_fn
         self._generate_llm = generate_llm_reply_fn
@@ -110,6 +111,7 @@ class CoachingOrchestrator:
         self._get_cue_audio = get_cue_audio_fn
         self._advance_set = advance_set_fn
         self._on_workout_complete = on_workout_complete_fn
+        self._prune_context = prune_context_fn
 
         self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
         self._processing: bool = False
@@ -744,7 +746,6 @@ class CoachingOrchestrator:
             parts.append("Per-rep breakdown:\n" + "\n".join(rep_lines))
 
         context_str = " ".join(parts)
-        print(context_str)
 
         instructions = (
             f"Your athlete just finished a set. You are giving them feedback on what they just did using the data. "
@@ -760,6 +761,12 @@ class CoachingOrchestrator:
         try:
             handle = await self._generate_llm(instructions)
             logger.info("[ORCHESTRATOR] ✓ LLM set recap spoken")
+            # Prune old conversation items to prevent progressive latency
+            if self._prune_context:
+                try:
+                    await self._prune_context(max_items=6)
+                except Exception as e:
+                    logger.warning(f"[ORCHESTRATOR] Post-recap context prune failed: {e}")
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] LLM set recap failed: {e}", exc_info=True)
         finally:

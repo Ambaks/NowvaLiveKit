@@ -67,10 +67,10 @@ class HeelRiseConfig(BaseModel):
 
 
 class ForwardLeanConfig(BaseModel):
-    """Forward lean fault thresholds."""
-    mild: float = 45.0
-    moderate: float = 55.0
-    severe: float = 65.0
+    """Forward lean fault thresholds (180-convention: lower = more lean)."""
+    mild: float = 135.0
+    moderate: float = 125.0
+    severe: float = 115.0
 
 
 class KneeValgusConfig(BaseModel):

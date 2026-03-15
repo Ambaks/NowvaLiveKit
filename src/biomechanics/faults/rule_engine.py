@@ -64,7 +64,7 @@ class RuleEngine:
         self._calibrated: bool = False
         self._calibration_reps: int = 0
         self._calibration_target: int = 1  # Calibrate after 1 clean rep
-        self._peak_trunk_flexion: float = 0.0
+        self._peak_trunk_flexion: float = 180.0  # Track minimum (most lean)
         self._peak_hip_adduction: float = 0.0
         self._rep_peak_hip_adductions: List[float] = []
         self._current_rep_peak_adduction: float = 0.0
@@ -228,7 +228,7 @@ class RuleEngine:
             self._baseline_set = True
 
         # Track peaks
-        self._peak_trunk_flexion = max(self._peak_trunk_flexion, abs(angles.trunk_flexion))
+        self._peak_trunk_flexion = min(self._peak_trunk_flexion, angles.trunk_flexion)
         frame_adduction = max(abs(angles.hip_adduction_l), abs(angles.hip_adduction_r))
         self._current_rep_peak_adduction = max(self._current_rep_peak_adduction, frame_adduction)
         self._peak_asymmetry = max(
@@ -276,9 +276,9 @@ class RuleEngine:
 
         for rule in self.rules:
             if isinstance(rule, ForwardLeanRule):
-                rule.mild_threshold = max(rule.mild_threshold, self._peak_trunk_flexion + 10.0)
-                rule.moderate_threshold = max(rule.moderate_threshold, self._peak_trunk_flexion + 15.0)
-                rule.severe_threshold = max(rule.severe_threshold, self._peak_trunk_flexion + 20.0)
+                rule.mild_threshold = min(rule.mild_threshold, self._peak_trunk_flexion - 10.0)
+                rule.moderate_threshold = min(rule.moderate_threshold, self._peak_trunk_flexion - 15.0)
+                rule.severe_threshold = min(rule.severe_threshold, self._peak_trunk_flexion - 20.0)
                 logger.info(
                     "[RULE ENGINE] Forward lean baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
                     self._peak_trunk_flexion, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,

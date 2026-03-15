@@ -73,6 +73,26 @@ class BaseNovaAgent(Agent):
             self._restore_turn_detection()
         return handle
 
+    async def _truncate_context_for_handoff(self, max_items: int = 6):
+        """Truncate conversation context before agent handoff.
+
+        Prevents passing the full conversation history (e.g., an entire
+        workout session) to the next agent. Keeps only the last N items.
+        """
+        try:
+            ctx = self.chat_ctx
+            if len(ctx.items) <= max_items:
+                return
+            old_count = len(ctx.items)
+            new_ctx = ctx.copy()
+            new_ctx.truncate(max_items=max_items)
+            await self.update_chat_ctx(new_ctx)
+            logger.info(
+                f"[HANDOFF] Truncated context: {old_count} → {len(new_ctx.items)} items"
+            )
+        except Exception as e:
+            logger.warning(f"[HANDOFF] Context truncation failed: {e}")
+
     def _log_function_call(self, function_name: str, parameters: dict, result):
         """Helper method to log function tool calls"""
         from core.session_logger import SessionLogger

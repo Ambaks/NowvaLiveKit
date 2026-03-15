@@ -61,9 +61,9 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
             "severe": peaks["hip_adduction"] + 15.0,
         },
         "forward_lean": {
-            "mild": peaks["trunk_flexion"] + 10.0,
-            "moderate": peaks["trunk_flexion"] + 15.0,
-            "severe": peaks["trunk_flexion"] + 20.0,
+            "mild": peaks["trunk_flexion"] - 10.0,
+            "moderate": peaks["trunk_flexion"] - 15.0,
+            "severe": peaks["trunk_flexion"] - 20.0,
         },
         "bilateral_asymmetry": {
             "mild": peaks["asymmetry"] + 5.0,
@@ -198,8 +198,8 @@ class CalibrationTracker:
         self.target_reps = target_reps
         self.reps_completed = 0
 
-        # Peak trackers
-        self.peak_trunk = 0.0
+        # Peak trackers (trunk uses 180-convention: track minimum = most lean)
+        self.peak_trunk = 180.0
         self.rep_adduction_peaks: list = []
         self._current_rep_peak_adduction = 0.0
         self.peak_asymmetry = 0.0
@@ -223,8 +223,8 @@ class CalibrationTracker:
         standing_knee = max(ja.knee_flexion_l, ja.knee_flexion_r)
         self.standing_knee_flexion = max(self.standing_knee_flexion, standing_knee)
 
-        # Peak trunk flexion
-        self.peak_trunk = max(self.peak_trunk, abs(ja.trunk_flexion))
+        # Peak trunk flexion (180-convention: track minimum = most lean)
+        self.peak_trunk = min(self.peak_trunk, ja.trunk_flexion)
 
         # Per-rep peak abs(adduction)
         self._current_rep_peak_adduction = max(

@@ -28,8 +28,7 @@ class WorkoutAgent(BaseNovaAgent):
         self._wake_word_phrases: list[str] = ["hey nova", "hey, nova", "a nova"]
         self._wake_word_timeout_seconds: float = 5.0
 
-        name = state.get_user().get("name", "there")
-        super().__init__(state=state, userdata=userdata, instructions=get_workout_prompt(name))
+        super().__init__(state=state, userdata=userdata, instructions=get_workout_prompt())
 
     async def on_enter(self):
         """Start coaching service, generate greeting, then activate wake word system."""
@@ -49,13 +48,12 @@ class WorkoutAgent(BaseNovaAgent):
 
         # Generate context-aware greeting BEFORE starting wake word system.
         # _say() suppresses turn detection so the greeting can't be interrupted.
-        name = self.user_name
         exercise_name = self.state.get("workout.exercise_name", "")
 
         if needs_calibration:
             # Don't restore turn detection — calibration is conversational
             await self._say(
-                f"Tell {name} conversationally that you don't have their biomechanical data "
+                f"Tell the user conversationally that you don't have their biomechanical data "
                 f"for {exercise_name} yet, and that you need to gather it before they can move on. "
                 f"Say something like: 'So, I don't have your movement data for {exercise_name} yet. "
                 f"Before we get into your workout, I need you to do 5 deep bodyweight squats "
@@ -104,6 +102,7 @@ class WorkoutAgent(BaseNovaAgent):
         if set_summary.get("workout_complete"):
             logger.info("[COACHING] Workout complete — running cleanup")
             await self._cleanup_workout()
+            await self._truncate_context_for_handoff()
             # Handoff back to MainMenuAgent via session.update_agent (callback, not function tool)
             from agents.main_menu_agent import MainMenuAgent
             new_agent = MainMenuAgent(state=self.state, userdata=self.userdata)
@@ -219,7 +218,7 @@ class WorkoutAgent(BaseNovaAgent):
             self.session.llm.update_options(
                 turn_detection=TurnDetection(
                     type="semantic_vad",
-                    eagerness="low",
+                    eagerness="medium",
                     create_response=True,
                     interrupt_response=True,
                 )
@@ -418,10 +417,10 @@ class WorkoutAgent(BaseNovaAgent):
         """
         logger.info("[WORKOUT] User requested to end workout")
         await self._cleanup_workout()
-        name = self.user_name
 
         # Handoff to MainMenuAgent
         self._suppress_turn_detection()
+        await self._truncate_context_for_handoff()
         from agents.main_menu_agent import MainMenuAgent
         return MainMenuAgent(state=self.state, userdata=self.userdata)
 
@@ -475,8 +474,6 @@ class WorkoutAgent(BaseNovaAgent):
             self.state.set("workout.current_session", session.to_dict())
             self.state.save_state()
 
-            name = self.user_name
-
             if has_next:
                 next_desc = session.get_current_exercise_description()
                 rest_time = current_set.rest_seconds
@@ -485,10 +482,10 @@ class WorkoutAgent(BaseNovaAgent):
                 rest_sec = rest_time % 60
                 rest_display = f"{rest_min}:{rest_sec:02d}" if rest_min > 0 else f"{rest_sec} seconds"
 
-                return None, f"Tell the user: 'Awesome set, {name}! That's {reps} reps at {weight}kg.' Then say: 'Rest for {rest_display}. Next up: {next_desc}' Keep it energetic and clear."
+                return None, f"Tell the user: 'Awesome set! That's {reps} reps at {weight}kg.' Then say: 'Rest for {rest_display}. Next up: {next_desc}' Keep it energetic and clear."
             else:
                 summary = session.get_progress_summary()
-                return None, f"Tell the user: 'YES! That's the last one, {name}! You completed {summary['completed_sets']} total sets today. Amazing work! Ready to wrap up?' Keep it celebratory."
+                return None, f"Tell the user: 'YES! That's the last one! You completed {summary['completed_sets']} total sets today. Amazing work! Ready to wrap up?' Keep it celebratory."
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to complete set")
@@ -588,9 +585,7 @@ class WorkoutAgent(BaseNovaAgent):
 
             summary = session.get_progress_summary()
 
-            name = self.user_name
-
-            return None, f"Tell the user: 'You're crushing it, {name}! You've completed {summary['completed_sets']} out of {summary['total_sets']} sets. That's {summary['percent_complete']}% done. Currently on {summary['current_exercise_name']}.' Keep it motivating and clear."
+            return None, f"Tell the user: 'You're crushing it! You've completed {summary['completed_sets']} out of {summary['total_sets']} sets. That's {summary['percent_complete']}% done. Currently on {summary['current_exercise_name']}.' Keep it motivating and clear."
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to get progress")

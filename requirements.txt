@@ -7,6 +7,7 @@
 livekit>=1.0.0
 livekit-agents>=1.4.0
 livekit-plugins-openai>=1.4.0          # OpenAI Realtime API (handles STT+LLM+TTS)
+livekit-plugins-noise-cancellation~=0.2  # Krisp BVC server-side noise cancellation
 
 # Note: These are no longer needed with Realtime API:
 # - livekit-plugins-deepgram (STT handled by Realtime)
