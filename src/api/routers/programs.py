@@ -27,6 +27,8 @@ from ..services.job_manager import create_job, get_job_status
 from db.database import get_db
 from db.models import UserGeneratedProgram, User
 from db.program_utils import get_program_summary_list
+from utils.username_generator import generate_username
+from auth.user_management import generate_temporary_password
 
 router = APIRouter()
 
@@ -127,16 +129,19 @@ async def start_program_generation(
     # Get or create user
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user:
-        # Create new user with the provided information
+        # Create new user with required username + password_hash fields
+        username = generate_username(request.name, db)
         user = User(
             id=request.user_id,
+            username=username,
             email=request.email,
-            name=request.name
+            name=request.name,
+            password_hash=generate_temporary_password()
         )
         db.add(user)
         db.commit()
         db.refresh(user)
-        print(f"[API] Created new user {user.id} ({user.email}) for program generation")
+        print(f"[API] Created new user {user.id} ({username} / {user.email}) for program generation")
 
     # Create job record
     job = create_job(

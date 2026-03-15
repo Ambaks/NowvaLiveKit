@@ -26,6 +26,7 @@ from agents.onboarding_agent import OnboardingAgent
 from agents.main_menu_agent import MainMenuAgent
 from agents.workout_agent import WorkoutAgent
 from agents.program_creation_agent import ProgramCreationAgent
+from agents.schedule_agent import ScheduleMaintenanceAgent
 from agents.shared.userdata import UserData
 from core.latency_tracker import LatencyTracker
 
@@ -92,6 +93,7 @@ async def entrypoint(ctx: agents.JobContext):
         "main_menu": MainMenuAgent,
         "workout": WorkoutAgent,
         "program_creation": ProgramCreationAgent,
+        "schedule": ScheduleMaintenanceAgent,
     }
     AgentClass = agent_map.get(mode, OnboardingAgent)
     agent = AgentClass(state=state, userdata=userdata)
