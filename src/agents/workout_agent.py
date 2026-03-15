@@ -62,6 +62,10 @@ class WorkoutAgent(BaseNovaAgent):
                 f"Keep it natural and encouraging.",
                 restore=True,
             )
+            # Signal main.py that greeting is done — safe to start pose estimation
+            self.state.set("workout.greeting_done", True)
+            self.state.save_state()
+            logger.info("[WORKOUT] Greeting done — signalled main.py to start pose estimation")
         else:
             # Don't restore — wake word system sets its own turn detection next
             from core.workout_session import WorkoutSession
@@ -89,6 +93,11 @@ class WorkoutAgent(BaseNovaAgent):
                     f"Workout mode is starting. Psych the user up and get them ready to workout!",
                     restore=False,
                 )
+
+            # Signal main.py that greeting is done — safe to start pose estimation
+            self.state.set("workout.greeting_done", True)
+            self.state.save_state()
+            logger.info("[WORKOUT] Greeting done — signalled main.py to start pose estimation")
 
             # Now start wake word system AFTER greeting has fully played out
             await self._start_wake_word_system()
@@ -165,6 +174,7 @@ class WorkoutAgent(BaseNovaAgent):
         self.state.set("calibration.active", None)
         self.state.set("calibration.movement_pattern", None)
         self.state.set("calibration.pending_workout", None)
+        self.state.set("workout.greeting_done", False)
 
         await self._stop_wake_word_system()
 

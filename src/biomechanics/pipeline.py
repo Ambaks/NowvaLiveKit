@@ -8,6 +8,7 @@ Returns a PipelineFrame per iteration with per-layer timing.
 """
 
 import os
+import threading
 import time
 from typing import List, Optional
 
@@ -45,7 +46,7 @@ class BiomechanicsPipeline:
         # Optional pre-IK filtering (off by default, enable via .env)
         self._preik_enabled = os.getenv("ENABLE_PREIK_FILTERS", "true").lower() == "true"
 
-        # Layer 1: Capture
+        # Layer 1: Capture (threaded — always holds the latest frame)
         self._cap = cv2.VideoCapture(self.config.capture.device_id)
         w, h = self.config.capture.resolution
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
@@ -55,6 +56,14 @@ class BiomechanicsPipeline:
             raise RuntimeError(
                 f"Could not open camera device {self.config.capture.device_id}"
             )
+
+        self._latest_frame = None
+        self._frame_lock = threading.Lock()
+        self._capture_running = True
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, daemon=True
+        )
+        self._capture_thread.start()
 
         # Layer 2: Pose estimation
         if self.config.pose.backend == "rtmpose":
@@ -196,6 +205,14 @@ class BiomechanicsPipeline:
         self._bilstm_min_knee_flex = 180.0
         self._pending_bilstm_faults.clear()
 
+    def _capture_loop(self) -> None:
+        """Continuously read frames from the camera in a background thread."""
+        while self._capture_running:
+            ret, frame = self._cap.read()
+            if ret and frame is not None:
+                with self._frame_lock:
+                    self._latest_frame = frame
+
     def process_frame(self) -> PipelineFrame:
         """
         Run one full pipeline iteration.
@@ -206,12 +223,13 @@ class BiomechanicsPipeline:
         latency_ms = {}
         now = time.time()
 
-        # --- Capture ---
+        # --- Capture (grab latest frame from capture thread) ---
         t0 = time.perf_counter()
-        ret, frame = self._cap.read()
+        with self._frame_lock:
+            frame = self._latest_frame
         latency_ms["capture"] = (time.perf_counter() - t0) * 1000.0
 
-        if not ret or frame is None:
+        if frame is None:
             self._frame_index += 1
             return PipelineFrame(
                 frame_index=self._frame_index,
@@ -428,6 +446,9 @@ class BiomechanicsPipeline:
 
     def release(self):
         """Release all resources."""
+        self._capture_running = False
+        if self._capture_thread is not None:
+            self._capture_thread.join(timeout=2.0)
         if self._cap is not None:
             self._cap.release()
         if self._pose_estimator is not None:

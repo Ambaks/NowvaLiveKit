@@ -275,8 +275,8 @@ class FaultEvent(BaseModel):
 
     @property
     def is_significant(self) -> bool:
-        """Return True if fault is moderate or severe."""
-        return self.severity in (FaultSeverity.MODERATE, FaultSeverity.SEVERE)
+        """Return True if fault is mild, moderate, or severe."""
+        return self.severity in (FaultSeverity.MILD, FaultSeverity.MODERATE, FaultSeverity.SEVERE)
 
 
 class FaultType:

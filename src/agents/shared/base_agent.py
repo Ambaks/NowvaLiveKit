@@ -65,7 +65,6 @@ class BaseNovaAgent(Agent):
         handle = self.session.generate_reply(
             instructions=instructions,
             tool_choice="none",
-            allow_interruptions=False,
         )
         if wait:
             await handle.wait_for_playout()

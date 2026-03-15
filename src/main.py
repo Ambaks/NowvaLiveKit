@@ -301,6 +301,7 @@ class NowvaApp:
             print(f"[STATE] Previous mode was '{current_mode}' - resetting to main_menu for safety")
             self.state.switch_mode("main_menu")
             self.state.set("workout.active", False)
+            self.state.set("workout.greeting_done", False)
             self.state.set("shutdown_requested", False)
             self.state.save_state()
 
@@ -393,6 +394,11 @@ class NowvaApp:
                 # (workout.current_session is set by confirm_quick_exercise/start_workout)
                 has_workout_session = self.state.get("workout.current_session") is not None
                 if current_mode == "workout" and not pose_running and has_workout_session:
+                    # Wait for voice agent greeting to finish before starting
+                    # pose estimation (camera/window startup can cancel speech)
+                    if not self.state.get("workout.greeting_done", False):
+                        continue
+
                     print("\n" + "="*50)
                     print("STARTING WORKOUT SESSION")
                     print("="*50)
