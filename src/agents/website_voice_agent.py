@@ -42,6 +42,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _service_headers() -> dict:
+    """Headers for authenticated service-to-service API calls."""
+    return {"X-Service-Key": os.getenv("SERVICE_API_KEY", "")}
+
+
 class WebsiteVoiceAgent(Agent):
     """Streamlined voice agent for website visitors creating programs"""
 
@@ -624,7 +629,7 @@ class WebsiteVoiceAgent(Agent):
             logger.info(f"[PROGRAM] Calling program generation API: {url}")
 
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=_service_headers())
 
                 if response.status_code == 202:
                     # Success - generation started

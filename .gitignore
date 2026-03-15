@@ -38,6 +38,20 @@ session.key
 *.db-journal
 migrations/versions/*.pyc
 
+# Secrets & credentials (GCP, AWS, Firebase, etc.)
+*.json.key
+*-key.json
+*-credentials.json
+*service-account*.json
+*serviceaccount*.json
+*sa-key*.json
+*.p12
+*.pem
+*.keystore
+*.jks
+credentials/
+secrets/
+
 # Environment variables
 .env
 .env.local

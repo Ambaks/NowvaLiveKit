@@ -29,8 +29,20 @@ from db.models import UserGeneratedProgram, User
 from db.program_utils import get_program_summary_list
 from utils.username_generator import generate_username
 from auth.user_management import generate_temporary_password
+from auth.security import hash_password, get_current_user
 
 router = APIRouter()
+
+
+def _check_program_access(program: UserGeneratedProgram, current_user: User, *, allow_public: bool = False):
+    """Raise 403 unless the user owns the program (or it is public and allow_public=True).
+    Service accounts (X-Service-Key) bypass ownership checks."""
+    if getattr(current_user, "is_service", False):
+        return
+    if program.user_id != current_user.id:
+        if allow_public and program.is_public:
+            return
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 def _get_program_file_path(user_id: str, program_id: str, extension: str) -> Path:
@@ -114,7 +126,8 @@ async def check_program_eligibility(
 @router.post("/generate", response_model=JobResponse, status_code=202)
 async def start_program_generation(
     request: ProgramGenerationRequest,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Start generating a workout program via Celery.
@@ -126,6 +139,10 @@ async def start_program_generation(
     from datetime import datetime, timedelta
     from ..celery_tasks import generate_program_v5_task
 
+    # Verify caller owns the user_id
+    if not getattr(current_user, "is_service", False) and request.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Get or create user
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user:
@@ -136,7 +153,7 @@ async def start_program_generation(
             username=username,
             email=request.email,
             name=request.name,
-            password_hash=generate_temporary_password()
+            password_hash=hash_password(generate_temporary_password())
         )
         db.add(user)
         db.commit()
@@ -201,7 +218,8 @@ async def start_program_generation(
 @router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_generation_status(
     job_id: UUID,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Check the status of a program generation job.
@@ -219,6 +237,9 @@ async def get_generation_status(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    if not getattr(current_user, "is_service", False) and job.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     response = JobStatusResponse(
         job_id=str(job.id),
@@ -245,7 +266,8 @@ async def get_generation_status(
 @router.get("/{program_id}", response_model=ProgramResponse)
 async def get_program(
     program_id: int,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Retrieve a generated program by ID.
@@ -266,6 +288,8 @@ async def get_program(
     if not program:
         raise HTTPException(status_code=404, detail="Program not found")
 
+    _check_program_access(program, current_user, allow_public=True)
+
     # Get PDF and markdown URLs if files exist
     pdf_url, md_url = _get_program_file_urls(str(program.user_id), str(program_id))
 
@@ -283,7 +307,8 @@ async def get_program(
 @router.get("/list/{user_id}", response_model=ProgramListResponse)
 async def list_user_programs(
     user_id: UUID,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Get a list of all programs for a user.
@@ -297,6 +322,9 @@ async def list_user_programs(
     Raises:
         404: User not found
     """
+    if not getattr(current_user, "is_service", False) and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Verify user exists
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -315,7 +343,8 @@ async def list_user_programs(
 async def start_program_update(
     program_id: int,
     request: ProgramUpdateRequest,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Start updating an existing workout program via Celery.
@@ -340,6 +369,8 @@ async def start_program_update(
 
     if not program:
         raise HTTPException(status_code=404, detail=f"Program {program_id} not found")
+
+    _check_program_access(program, current_user)
 
     user_id = str(program.user_id)
 
@@ -393,7 +424,8 @@ async def start_program_update(
 @router.get("/update-status/{job_id}", response_model=UpdateStatusResponse)
 async def get_update_status(
     job_id: UUID,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Check the status of a program update job.
@@ -411,6 +443,9 @@ async def get_update_status(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    if not getattr(current_user, "is_service", False) and job.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     response = UpdateStatusResponse(
         job_id=str(job.id),
@@ -443,7 +478,8 @@ async def get_update_status(
 async def validate_program_change(
     program_id: int,
     request: ProgramUpdateRequest,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Validate a proposed program change without applying it.
@@ -466,6 +502,8 @@ async def validate_program_change(
 
     if not program:
         raise HTTPException(status_code=404, detail=f"Program {program_id} not found")
+
+    _check_program_access(program, current_user)
 
     # Get current program structure
     current_program = _get_current_program_as_json(db, program_id)
@@ -495,7 +533,8 @@ async def validate_program_change(
 @router.get("/{program_id}/download/pdf")
 async def download_program_pdf(
     program_id: int,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Download the PDF file for a program.
@@ -517,6 +556,8 @@ async def download_program_pdf(
     if not program:
         raise HTTPException(status_code=404, detail=f"Program {program_id} not found")
 
+    _check_program_access(program, current_user, allow_public=True)
+
     # Get PDF path
     pdf_path = _get_program_file_path(str(program.user_id), str(program_id), "pdf")
 
@@ -537,7 +578,8 @@ async def download_program_pdf(
 @router.get("/{program_id}/download/markdown")
 async def download_program_markdown(
     program_id: int,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Download the Markdown file for a program.
@@ -558,6 +600,8 @@ async def download_program_markdown(
 
     if not program:
         raise HTTPException(status_code=404, detail=f"Program {program_id} not found")
+
+    _check_program_access(program, current_user, allow_public=True)
 
     # Get markdown path
     md_path = _get_program_file_path(str(program.user_id), str(program_id), "md")

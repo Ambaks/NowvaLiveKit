@@ -8,6 +8,7 @@ import string
 from db.database import SessionLocal
 from db.models import User
 from utils.username_generator import generate_username
+from auth.security import hash_password
 
 
 def generate_temporary_password(length: int = 16) -> str:
@@ -68,7 +69,7 @@ def create_user_account(first_name: str, email: str) -> tuple[User, str]:
             username=username,
             name=first_name,
             email=email,
-            password_hash=temp_password  # TODO: Hash this properly when password reset is implemented
+            password_hash=hash_password(temp_password)
         )
 
         db.add(new_user)

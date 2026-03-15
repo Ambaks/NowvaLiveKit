@@ -3,22 +3,41 @@ import { motion } from 'framer-motion';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Sparkles, Zap, CheckCircle2, Loader2 } from 'lucide-react';
+import { authApi } from '@/api/auth';
 
 interface EmailGateProps {
   onSubmit: (email: string) => void;
 }
 
+type AuthMode = 'register' | 'login';
+
 export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
+  const [mode, setMode] = useState<AuthMode>('register');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
-  const [isChecking, setIsChecking] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
   const validateEmail = (email: string) => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  };
+
+  const checkEligibility = async (userEmail: string) => {
+    const response = await fetch(`${apiUrl}/api/programs/check-eligibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: userEmail }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to check eligibility');
+    }
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -29,32 +48,37 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
       return;
     }
 
-    setIsChecking(true);
+    if (!password) {
+      setError('Please enter a password');
+      return;
+    }
+
+    if (mode === 'register' && !name.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+
+    setIsLoading(true);
     setError('');
 
     try {
-      // Check if user is eligible to generate a program
-      const response = await fetch(`${apiUrl}/api/programs/check-eligibility`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to check eligibility');
+      if (mode === 'register') {
+        await authApi.register(name.trim(), email, password);
+        await authApi.login(email, password);
+      } else {
+        await authApi.login(email, password);
       }
 
-      // User is eligible - proceed
+      // Check eligibility (still public endpoint, no auth needed)
+      await checkEligibility(email);
+
       localStorage.setItem('nowva_user_email', email);
       onSubmit(email);
     } catch (err) {
-      console.error('Eligibility check failed:', err);
-      setError(err instanceof Error ? err.message : 'Failed to check eligibility');
+      console.error('Auth failed:', err);
+      setError(err instanceof Error ? err.message : 'Authentication failed');
     } finally {
-      setIsChecking(false);
+      setIsLoading(false);
     }
   };
 
@@ -100,7 +124,7 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
             }}
           />
 
-          {/* Gradient overlays - purple to pink - intensify on hover */}
+          {/* Gradient overlays */}
           <div
             className="absolute inset-0 rounded-3xl pointer-events-none transition-opacity duration-500"
             style={{
@@ -180,6 +204,37 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
               ))}
             </motion.div>
 
+            {/* Auth mode tabs */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.6 }}
+              className="flex gap-2 mb-6 justify-center"
+            >
+              <button
+                type="button"
+                onClick={() => { setMode('register'); setError(''); }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  mode === 'register'
+                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                    : 'text-foreground-tertiary hover:text-foreground-secondary'
+                }`}
+              >
+                Create Account
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('login'); setError(''); }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  mode === 'login'
+                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                    : 'text-foreground-tertiary hover:text-foreground-secondary'
+                }`}
+              >
+                Sign In
+              </button>
+            </motion.div>
+
             {/* Form */}
             <motion.form
               initial={{ opacity: 0, y: 10 }}
@@ -188,40 +243,57 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
               onSubmit={handleSubmit}
               className="space-y-4"
             >
-              <div className="flex flex-col sm:flex-row gap-3">
+              {mode === 'register' && (
                 <Input
-                  type="email"
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    setError('');
-                  }}
+                  type="text"
+                  placeholder="Your name"
+                  value={name}
+                  onChange={(e) => { setName(e.target.value); setError(''); }}
                   onFocus={() => setIsInputFocused(true)}
                   onBlur={() => setIsInputFocused(false)}
-                  error={error}
-                  className="flex-1 text-lg"
+                  className="text-lg"
                 />
+              )}
 
-                <Button
-                  type="submit"
-                  size="lg"
-                  disabled={isChecking}
-                  className="sm:w-auto w-full whitespace-nowrap group"
-                >
-                  {isChecking ? (
-                    <>
-                      <span>Checking...</span>
-                      <Loader2 className="w-4 h-4 ml-2 animate-spin" />
-                    </>
-                  ) : (
-                    <>
-                      <span>Start Now</span>
-                      <Zap className="w-4 h-4 ml-2 group-hover:scale-110 transition-transform" />
-                    </>
-                  )}
-                </Button>
-              </div>
+              <Input
+                type="email"
+                placeholder="your@email.com"
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
+                className="text-lg"
+              />
+
+              <Input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                onFocus={() => setIsInputFocused(true)}
+                onBlur={() => setIsInputFocused(false)}
+                error={error}
+                className="text-lg"
+              />
+
+              <Button
+                type="submit"
+                size="lg"
+                disabled={isLoading}
+                className="w-full group"
+              >
+                {isLoading ? (
+                  <>
+                    <span>{mode === 'register' ? 'Creating account...' : 'Signing in...'}</span>
+                    <Loader2 className="w-4 h-4 ml-2 animate-spin" />
+                  </>
+                ) : (
+                  <>
+                    <span>{mode === 'register' ? 'Create Account & Start' : 'Sign In & Start'}</span>
+                    <Zap className="w-4 h-4 ml-2 group-hover:scale-110 transition-transform" />
+                  </>
+                )}
+              </Button>
             </motion.form>
 
             {/* Trust signals */}

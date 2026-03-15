@@ -4,10 +4,13 @@ LiveKit router for generating room tokens and managing voice agent connections
 import os
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from livekit import api
 import secrets
+
+from auth.security import get_current_user
+from db.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -15,8 +18,7 @@ router = APIRouter()
 
 
 class TokenRequest(BaseModel):
-    """Request model for LiveKit token generation"""
-    email: EmailStr
+    """Optional request body — only the name field is used (email comes from auth)."""
     name: Optional[str] = None
 
 
@@ -28,17 +30,18 @@ class TokenResponse(BaseModel):
 
 
 @router.post("/token", response_model=TokenResponse)
-async def create_room_token(request: TokenRequest):
+async def create_room_token(
+    request: TokenRequest = TokenRequest(),
+    current_user: User = Depends(get_current_user),
+):
     """
     Generate a LiveKit room token for the website voice agent.
 
-    This endpoint:
-    1. Generates a unique room name
-    2. Creates a LiveKit access token
-    3. Includes the user's email in room metadata for the agent to access
+    Requires authentication.  The user's email is taken from the
+    authenticated session — not from the request body.
 
     Args:
-        request: TokenRequest with user's email (and optional name)
+        request: Optional TokenRequest with a display name override
 
     Returns:
         TokenResponse with token, LiveKit URL, and room name
@@ -56,12 +59,14 @@ async def create_room_token(request: TokenRequest):
                 detail="LiveKit configuration missing"
             )
 
+        # Use authenticated user's email
+        email = current_user.email
+
         # Generate a unique room name for this session
-        # Format: website-{random_id}
         room_name = f"website-{secrets.token_urlsafe(8)}"
 
         # Create access token
-        identity = request.name if request.name else request.email.split("@")[0]
+        identity = request.name if request.name else current_user.name or email.split("@")[0]
 
         token = (
             api.AccessToken(livekit_api_key, livekit_api_secret)
@@ -76,13 +81,13 @@ async def create_room_token(request: TokenRequest):
                     can_publish_data=True,
                 )
             )
-            .with_metadata(f'{{"email": "{request.email}"}}')
+            .with_metadata(f'{{"email": "{email}"}}')
         )
 
         # Generate the JWT token
         jwt_token = token.to_jwt()
 
-        logger.info(f"Generated LiveKit token for {request.email} in room {room_name}")
+        logger.info(f"Generated LiveKit token for {email} in room {room_name}")
 
         return TokenResponse(
             token=jwt_token,

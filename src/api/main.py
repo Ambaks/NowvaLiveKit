@@ -2,12 +2,16 @@
 Nowva FastAPI Backend
 Main application entry point for program generation API
 """
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
-from .routers import programs, health, livekit
+from dotenv import load_dotenv
+from .routers import programs, health, livekit, auth, workouts
+
+load_dotenv()
 
 app = FastAPI(
     title="Nowva Program Generator API",
@@ -17,18 +21,24 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS middleware for local development
+# CORS middleware — origins from ALLOWED_ORIGINS env var (comma-separated)
+allowed_origins = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this to specific origins
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Include routers
 app.include_router(health.router, prefix="/api", tags=["health"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(programs.router, prefix="/api/programs", tags=["programs"])
+app.include_router(workouts.router, prefix="/api", tags=["workouts"])
 app.include_router(livekit.router, prefix="/api/livekit", tags=["livekit"])
 
 # Serve frontend static files

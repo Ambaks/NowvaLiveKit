@@ -18,6 +18,11 @@ from db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+
+def _service_headers() -> dict:
+    """Headers for authenticated service-to-service API calls."""
+    return {"X-Service-Key": os.getenv("SERVICE_API_KEY", "")}
+
 # Context summarization constants
 MAX_CONTEXT_TOKENS = 28672
 SUMMARY_TRIGGER_RATIO = 0.70
@@ -824,6 +829,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                 response = await client.post(
                     f"{fastapi_url}/api/programs/generate",
                     json=params,
+                    headers=_service_headers(),
                     timeout=10.0
                 )
                 data = response.json()
@@ -865,6 +871,7 @@ class ProgramCreationAgent(BaseNovaAgent):
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"{fastapi_url}/api/programs/status/{job_id}",
+                    headers=_service_headers(),
                     timeout=5.0
                 )
                 data = response.json()
@@ -1114,6 +1121,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                         "weight_kg": user_profile["weight_kg"],
                         "fitness_level": user_profile["fitness_level"]
                     },
+                    headers=_service_headers(),
                     timeout=10.0
                 )
                 data = response.json()
@@ -1147,6 +1155,7 @@ class ProgramCreationAgent(BaseNovaAgent):
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"{fastapi_url}/api/programs/update-status/{job_id}",
+                    headers=_service_headers(),
                     timeout=5.0
                 )
                 data = response.json()

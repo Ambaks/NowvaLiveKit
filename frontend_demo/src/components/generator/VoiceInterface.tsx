@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, Phone, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
+import { authFetch } from '@/api/client';
 import {
   LiveKitRoom,
   useVoiceAssistant,
@@ -42,12 +43,9 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
     setError(null);
 
     try {
-      const response = await fetch(`${apiUrl}/api/livekit/token`, {
+      const response = await authFetch(`${apiUrl}/api/livekit/token`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({}),
       });
 
       if (!response.ok) {
