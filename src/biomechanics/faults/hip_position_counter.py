@@ -1,12 +1,15 @@
 """
-Hip-Position Rep Counter — Causal Real-Time Version of the Post-Hoc Segmenter
+Signal-Based Rep Counter — Causal Real-Time 4-State Machine
 
-Counts reps using hip vertical position (cm, relative to ankle) and its
-causal velocity.  Uses the same signal and thresholds as the post-hoc
-``rep_segmenter`` but in a 4-state machine that operates frame-by-frame
-without any look-ahead.
+Counts reps using a configurable signal and its causal velocity in a
+4-state machine that operates frame-by-frame without any look-ahead.
 
-Coordinate convention (same as segmenter):
+The signal is exercise-specific and provided by the active ExerciseProfile:
+    - Squats:    hip vertical position (cm, relative to ankle)
+    - Deadlifts: trunk flexion angle
+    - Bench:     elbow flexion angle
+
+For squats (default signal):
     hip_position_cm = (hip_mid_y - ankle_mid_y) * 100
     More negative  → standing (hip far above ankle)
     Less negative  → squat bottom (hip close to ankle)
@@ -147,30 +150,40 @@ class HipPositionRepCounter:
 
     def update(
         self,
-        hip_position_cm: float,
-        timestamp: float,
+        signal_value: float = None,
+        timestamp: float = None,
         angles: Optional[JointAngles] = None,
         faults: Optional[List[FaultEvent]] = None,
+        *,
+        hip_position_cm: float = None,
     ) -> Tuple[Optional[RepData], Optional[str]]:
         """
         Process one frame.
 
         Args:
-            hip_position_cm: (hip_mid_y - ankle_mid_y) * 100 from skeleton.
+            signal_value: Rep counting signal from the exercise profile.
+                For squats this is (hip_mid_y - ankle_mid_y) * 100.
+                Other exercises feed different signals (trunk flexion, etc.).
             timestamp: Wall-clock time for this frame.
             angles: JointAngles for metric tracking (knee depth, asymmetry).
             faults: Faults detected this frame.
+            hip_position_cm: Deprecated alias for signal_value (backward compat).
 
         Returns:
             (RepData, None) when a rep completes.
             (None, "go_deeper") when a rep ends but depth was insufficient.
             (None, None) otherwise.
         """
+        # Backward compatibility: accept hip_position_cm as alias
+        if signal_value is None and hip_position_cm is not None:
+            signal_value = hip_position_cm
+        elif signal_value is None:
+            raise ValueError("signal_value (or hip_position_cm) is required")
         if faults:
             self._current_faults.extend(faults)
 
         # ---- smooth position & compute causal velocity ----
-        smoothed_pos = self._pos_filter.filter(hip_position_cm, timestamp)
+        smoothed_pos = self._pos_filter.filter(signal_value, timestamp)
 
         velocity = 0.0
         if self._prev_position is not None and self._prev_timestamp is not None:

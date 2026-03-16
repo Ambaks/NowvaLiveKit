@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Directory where pre-generated cue files live
 CUES_DIR = Path(__file__).parent.parent / "assets" / "cues"
 CUES_WAV_DIR = CUES_DIR / "wav"
+REP_SOUND_PATH = CUES_DIR / "validation_sound.wav"
 
 # Fallback TTS configuration (only used if pre-generated files are missing)
 TTS_MODEL = "gpt-4o-mini-tts"
@@ -99,9 +100,37 @@ class AudioCueService:
         self._fallback_cache: Dict[str, bytes] = {}
         self._client: Optional[AsyncOpenAI] = None
         self._disk_loaded: bool = False
+        # Single rep sound (replaces per-number TTS variants)
+        self._rep_sound_frames: Optional[List[rtc.AudioFrame]] = None
 
         # Eagerly load and pre-read all WAV cues into memory
+        self._load_rep_sound()
         self._load_from_disk()
+
+    def _load_rep_sound(self) -> None:
+        """Load the single rep validation sound into memory."""
+        if not REP_SOUND_PATH.exists():
+            logger.warning(f"[AUDIO CUE] Rep sound not found: {REP_SOUND_PATH}")
+            return
+        try:
+            bytes_per_sample = 2  # int16
+            chunk_bytes = SAMPLES_PER_CHUNK * NUM_CHANNELS * bytes_per_sample
+            with wave.open(str(REP_SOUND_PATH), "rb") as wf:
+                pcm_data = wf.readframes(wf.getnframes())
+            frames = []
+            for offset in range(0, len(pcm_data), chunk_bytes):
+                chunk = pcm_data[offset:offset + chunk_bytes]
+                samples = len(chunk) // (NUM_CHANNELS * bytes_per_sample)
+                frames.append(rtc.AudioFrame(
+                    data=chunk,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
+                    samples_per_channel=samples,
+                ))
+            self._rep_sound_frames = frames
+            logger.info(f"[AUDIO CUE] Loaded rep sound from {REP_SOUND_PATH} ({len(frames)} chunks)")
+        except Exception as e:
+            logger.error(f"[AUDIO CUE] Failed to load rep sound: {e}")
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
@@ -180,9 +209,13 @@ class AudioCueService:
         self._load_from_disk()
 
         # Find cues that need runtime generation (no disk files)
+        # Skip rep cues — they use the single validation sound
         keys_to_generate = [
             k for k in cues
-            if k in CUE_TEXT_MAP and k not in self._disk_cache and k not in self._fallback_cache
+            if k in CUE_TEXT_MAP
+            and not k.startswith("rep_")
+            and k not in self._disk_cache
+            and k not in self._fallback_cache
         ]
 
         if not keys_to_generate:
@@ -219,11 +252,24 @@ class AudioCueService:
     def has_cue(self, cue_key: str) -> bool:
         """Check whether audio is available for a cue key."""
         self._load_from_disk()
+        if cue_key.startswith("rep_") and self._rep_sound_frames:
+            return True
         return cue_key in self._memory_cache or cue_key in self._disk_cache or cue_key in self._fallback_cache
 
     async def play_cue(self, cue_key: str) -> None:
         """Play a cue through LiveKit's session.say()."""
         self._load_from_disk()
+
+        # Rep cues use the single validation sound
+        if cue_key.startswith("rep_") and self._rep_sound_frames:
+            handle = self._session.say(
+                "",
+                audio=self._frames_to_async_gen(self._rep_sound_frames),
+                allow_interruptions=False,
+                add_to_chat_ctx=False,
+            )
+            await handle.join()
+            return
 
         # Prefer in-memory pre-loaded frames (zero disk I/O)
         mem_variants = self._memory_cache.get(cue_key)

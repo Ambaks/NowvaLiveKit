@@ -152,7 +152,7 @@ def run_biomechanics_pipeline(
 
     # Initialize pipeline
     try:
-        pipeline = BiomechanicsPipeline(config)
+        pipeline = BiomechanicsPipeline(config, exercise_name=exercise_name)
         bridge = IPCBridge(ipc_client)
         session_tracker = SessionTracker(bridge, config=config.coaching)
 

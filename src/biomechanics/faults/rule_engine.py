@@ -41,6 +41,7 @@ class RuleEngine:
         self,
         config: Optional[BiomechanicsConfig] = None,
         history_maxlen: int = 90,
+        rules: Optional[List[FaultRule]] = None,
     ):
         """
         Initialize the rule engine.
@@ -48,12 +49,15 @@ class RuleEngine:
         Args:
             config: Pipeline configuration (uses global if not provided)
             history_maxlen: Maximum frames to keep in history (default 90 = ~3s at 30fps)
+            rules: Optional pre-built list of fault rules. When provided,
+                   skips the default _create_rules() call. Used by
+                   ExerciseProfile to inject exercise-specific rules.
         """
         self.config = config or get_config()
         self.history: deque = deque(maxlen=history_maxlen)
 
-        # Initialize all rules with config thresholds
-        self.rules: List[FaultRule] = self._create_rules()
+        # Use injected rules if provided, otherwise build defaults
+        self.rules: List[FaultRule] = rules if rules is not None else self._create_rules()
 
         # Deduplication tracking
         self._last_faults: Dict[str, int] = {}  # fault_type -> last frame
@@ -340,16 +344,18 @@ class RuleEngine:
         """
         faults: List[FaultEvent] = []
 
-        # Find and evaluate depth rule
+        # Find and evaluate depth rule (use fault_type check so any
+        # profile's depth rule works, not just the squat DepthRule class)
         for rule in self.rules:
-            if isinstance(rule, DepthRule):
-                fault = rule.evaluate_max_depth(
-                    max_knee_flexion=max_depth_angle,
-                    angles=angles,
-                    rep_number=rep_number,
-                )
-                if fault is not None:
-                    faults.append(fault)
+            if rule.fault_type == FaultType.DEPTH:
+                if hasattr(rule, "evaluate_max_depth"):
+                    fault = rule.evaluate_max_depth(
+                        max_knee_flexion=max_depth_angle,
+                        angles=angles,
+                        rep_number=rep_number,
+                    )
+                    if fault is not None:
+                        faults.append(fault)
                 break
 
         return faults

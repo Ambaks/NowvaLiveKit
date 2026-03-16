@@ -19,6 +19,7 @@ from biomechanics.config import BiomechanicsConfig, load_pipeline_config
 from biomechanics.pose.mediapipe_fallback import MediaPipePoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
 from biomechanics.faults import RuleEngine, HipPositionRepCounter
+from biomechanics.profiles import get_profile
 from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, FaultEvent, CocoKeypoints, DEPTH_CLASS_NAMES
 from biomechanics.utils.filters import JointAngleFilter
 from biomechanics.utils.derivatives import DerivativeTracker
@@ -39,9 +40,16 @@ class BiomechanicsPipeline:
     returns a PipelineFrame with all results and per-layer timing.
     """
 
-    def __init__(self, config: Optional[BiomechanicsConfig] = None):
+    def __init__(
+        self,
+        config: Optional[BiomechanicsConfig] = None,
+        exercise_name: str = "Barbell Back Squat",
+    ):
         self.config = config or BiomechanicsConfig()
         self._frame_index = 0
+
+        # Load exercise profile (bundles fault rules, rep signal, cues)
+        self._profile = get_profile(exercise_name)
 
         # Optional pre-IK filtering (off by default, enable via .env)
         self._preik_enabled = os.getenv("ENABLE_PREIK_FILTERS", "true").lower() == "true"
@@ -146,11 +154,13 @@ class BiomechanicsPipeline:
                 max_extrapolation_deg=self.config.predictive_state.max_extrapolation_deg,
             )
 
-        # Layer 4: Fault detection
-        self._rule_engine = RuleEngine()
+        # Layer 4: Fault detection (rules provided by exercise profile)
+        profile_rules = self._profile.create_fault_rules(self.config)
+        self._rule_engine = RuleEngine(rules=profile_rules)
 
-        # Layer 5: Rep counting (hip-position-based, mirrors post-hoc segmenter)
-        self._rep_counter = HipPositionRepCounter(config=self.config.hip_counter)
+        # Layer 5: Rep counting (signal source determined by exercise profile)
+        rep_counter_config = self._profile.create_rep_counter_config(self.config)
+        self._rep_counter = HipPositionRepCounter(config=rep_counter_config)
 
         # Layer 6 (optional): BiLSTM rep counting
         self._bilstm = None
@@ -311,11 +321,8 @@ class BiomechanicsPipeline:
                 self._ik_solver.set_body_proportions(proportions)
                 self._proportions_applied = True
 
-        # --- Compute hip position for rep counting ---
-        kpts = skeleton_3d.to_numpy()  # (17, 3)
-        hip_mid_y = (kpts[CocoKeypoints.LEFT_HIP][1] + kpts[CocoKeypoints.RIGHT_HIP][1]) / 2
-        ankle_mid_y = (kpts[CocoKeypoints.LEFT_ANKLE][1] + kpts[CocoKeypoints.RIGHT_ANKLE][1]) / 2
-        hip_position_cm = (hip_mid_y - ankle_mid_y) * 100.0
+        # --- Compute rep signal (exercise-specific, from profile) ---
+        rep_signal = self._profile.get_rep_signal(skeleton_3d)
 
         # --- IK solve ---
         t0 = time.perf_counter()
@@ -348,9 +355,9 @@ class BiomechanicsPipeline:
         if not self._rule_engine.calibrated and self._rep_counter.in_rep:
             self._rule_engine.record_frame_for_calibration(angles)
 
-        # Rep counter uses hip position for state, angles for metrics
+        # Rep counter uses profile-provided signal for state, angles for metrics
         rep_data, feedback = self._rep_counter.update(
-            hip_position_cm=hip_position_cm,
+            signal_value=rep_signal,
             timestamp=now,
             angles=angles,
             faults=faults,
