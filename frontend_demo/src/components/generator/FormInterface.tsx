@@ -3,8 +3,7 @@ import { motion } from 'framer-motion';
 import { Onboarding } from './onboarding/Onboarding';
 import type { OnboardingData } from './onboarding/Onboarding';
 import { ProgramGenerationStatus } from './ProgramGenerationStatus';
-import { programsApi, generateUserId } from '@/api/programs';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { programsApi } from '@/api/programs';
 
 type FormState = 'form' | 'generating' | 'complete';
 
@@ -13,11 +12,16 @@ export const FormInterface = () => {
   const [jobId, setJobId] = useState<string | null>(null);
   const [programId, setProgramId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [userId] = useLocalStorage('nowva_user_id', generateUserId());
 
   const handleFormComplete = async (data: OnboardingData) => {
     try {
       setError(null);
+
+      const userId = localStorage.getItem('nowva_user_id');
+      if (!userId) {
+        setError('User session not found. Please refresh and enter your email again.');
+        return;
+      }
 
       const requestData = {
         user_id: userId,
@@ -37,6 +41,7 @@ export const FormInterface = () => {
         specific_sport: data.specific_sport || 'none',
         has_vbt_capability: data.has_vbt_capability,
         user_notes: data.user_notes || '',
+        send_email: true,
       };
 
       const response = await programsApi.generateProgram(requestData);
@@ -81,18 +86,9 @@ export const FormInterface = () => {
         <Onboarding onComplete={handleFormComplete} />
       )}
 
-      {state === 'generating' && jobId && (
+      {(state === 'generating' || state === 'complete') && jobId && (
         <ProgramGenerationStatus
           jobId={jobId}
-          onComplete={handleGenerationComplete}
-          onError={handleGenerationError}
-          onReset={handleReset}
-        />
-      )}
-
-      {state === 'complete' && programId && (
-        <ProgramGenerationStatus
-          jobId={jobId!}
           onComplete={handleGenerationComplete}
           onError={handleGenerationError}
           onReset={handleReset}

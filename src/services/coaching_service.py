@@ -237,8 +237,6 @@ class CoachingService:
                 logger.info("[COACHING SERVICE] set_complete from pipeline (ignored — orchestrator handles via rep count)")
             elif msg_type == "rest_complete":
                 logger.info("[COACHING SERVICE] REST COMPLETE — firing LLM prompt for next set")
-                if self._coaching_orchestrator:
-                    self._coaching_orchestrator.on_rest_complete()
 
                 # Get set numbers from workout session
                 completed_set, next_set, total_sets = self._get_set_numbers()
@@ -253,6 +251,12 @@ class CoachingService:
                 logger.info("[COACHING SERVICE] → Calling coaching LLM for rest_complete")
                 await self._coaching_llm_reply(instructions)
                 logger.info("[COACHING SERVICE] ✓ Coaching LLM returned for rest_complete")
+
+                # Resume rep/fault processing AFTER the announcement finishes.
+                # Keeping _resting=True during speech prevents the orchestrator
+                # from dispatching cached cues that collide with the announcement.
+                if self._coaching_orchestrator:
+                    self._coaching_orchestrator.on_rest_complete()
             elif msg_type == "calibration_rep":
                 rep = message.get("rep_number", 0)
                 total = message.get("total_required", 5)

@@ -48,11 +48,11 @@ CUE_DISPLAY_LABELS: Dict[str, str] = {
 class CuePriority(enum.IntEnum):
     """Lower number = higher priority."""
     FAULT_CUE = 1
-    REP_COUNT_CUE = 2
-    POSITIVE_CUE = 3
-    LLM_MOTIVATION = 10
-    LLM_SET_RECAP = 20
-    LLM_EXERCISE_RECAP = 25
+    LLM_MOTIVATION = 2
+    LLM_SET_RECAP = 3
+    LLM_EXERCISE_RECAP = 4
+    REP_COUNT_CUE = 5
+    POSITIVE_CUE = 6
 
 
 # =============================================================================
@@ -164,7 +164,12 @@ class CoachingOrchestrator:
         """Stop the queue processor and generate any pending set reports."""
         self._processing = False
         if self._processor_task:
-            self._processor_task.cancel()
+            # Avoid cancelling ourselves when stop() is called from within a
+            # callback running inside the processor task.  Setting _processing
+            # to False is enough — the loop will exit on its own.
+            current = asyncio.current_task()
+            if self._processor_task is not current:
+                self._processor_task.cancel()
             self._processor_task = None
         self._generate_pending_reports()
         logger.info("[ORCHESTRATOR] Stopped")
@@ -348,7 +353,7 @@ class CoachingOrchestrator:
             return  # Set complete — skip motivation/positive cues
 
         # Positive reinforcement for clean reps
-        if is_clean and self._positive_cue_keys:
+        if is_clean and self._positive_cue_keys and random.random() < 0.3:
             positive_key = random.choice(self._positive_cue_keys)
             if self._get_cue_audio(positive_key):
                 await self._queue.put(CoachingEvent(
@@ -479,27 +484,11 @@ class CoachingOrchestrator:
     # ------------------------------------------------------------------
 
     def _should_trigger_motivation(self, rep_number: int) -> bool:
-        """Deterministic logic for when to trigger LLM motivation."""
-        if rep_number <= 1:
+        """Fire LLM motivation at the midpoint of the set."""
+        if not self._set_target_reps or self._set_target_reps <= 3:
             return False
-        if rep_number - self._last_motivation_rep < self._motivation_interval:
-            return False
-
-        reps_remaining = None
-        if self._set_target_reps:
-            reps_remaining = self._set_target_reps - rep_number
-
-        # Every N reps
-        if rep_number % self._motivation_interval == 0:
-            return True
-        # Last 2 reps of the set
-        if reps_remaining is not None and 0 < reps_remaining <= 2:
-            return True
-        # After 3+ consecutive clean reps (fire every 3rd clean rep)
-        if self._clean_streak >= 3 and self._clean_streak % 3 == 0:
-            return True
-
-        return False
+        midpoint = self._set_target_reps // 2
+        return rep_number == midpoint
 
     def _build_motivation_context(self, rep_number: int, depth: str, is_clean: bool) -> dict:
         """Build context dict for LLM motivation call."""

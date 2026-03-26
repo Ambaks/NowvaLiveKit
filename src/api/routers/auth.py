@@ -4,6 +4,7 @@ Login, registration, and current-user endpoints.
 """
 
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -33,9 +34,14 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+class EmailStartRequest(BaseModel):
+    email: EmailStr
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user_id: Optional[UUID] = None
 
 
 class UserProfile(BaseModel):
@@ -96,6 +102,36 @@ async def login(
 
     token = create_access_token(data={"sub": user.email})
     return TokenResponse(access_token=token)
+
+
+@router.post("/email-start", response_model=TokenResponse)
+async def email_start(request: EmailStartRequest, db: Session = Depends(get_db)):
+    """
+    Passwordless entry point.
+
+    Finds an existing user by email or creates a new one, then returns a JWT
+    along with the user's database ID so the frontend can reference it.
+    Used by the simplified email-only gate on the frontend.
+    """
+    import secrets
+
+    user = db.query(User).filter(User.email == request.email).first()
+
+    if not user:
+        name = request.email.split("@")[0]
+        username = generate_username(name, db)
+        user = User(
+            username=username,
+            name=name,
+            email=request.email,
+            password_hash=hash_password(secrets.token_hex(32)),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    token = create_access_token(data={"sub": user.email})
+    return TokenResponse(access_token=token, user_id=user.id)
 
 
 @router.get("/me", response_model=UserProfile)

@@ -42,7 +42,7 @@ class ScheduleMaintenanceAgent(BaseNovaAgent):
         self.state.switch_mode("main_menu")
         self.state.save_state()
 
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         await self._truncate_context_for_handoff()
 
         self._log_function_call("back_to_main_menu", {}, "handoff to MainMenuAgent")

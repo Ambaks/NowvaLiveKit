@@ -9,13 +9,8 @@ interface EmailGateProps {
   onSubmit: (email: string) => void;
 }
 
-type AuthMode = 'register' | 'login';
-
 export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
-  const [mode, setMode] = useState<AuthMode>('register');
-  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
@@ -48,35 +43,17 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
       return;
     }
 
-    if (!password) {
-      setError('Please enter a password');
-      return;
-    }
-
-    if (mode === 'register' && !name.trim()) {
-      setError('Please enter your name');
-      return;
-    }
-
     setIsLoading(true);
     setError('');
 
     try {
-      if (mode === 'register') {
-        await authApi.register(name.trim(), email, password);
-        await authApi.login(email, password);
-      } else {
-        await authApi.login(email, password);
-      }
-
-      // Check eligibility (still public endpoint, no auth needed)
       await checkEligibility(email);
-
+      await authApi.emailStart(email);
       localStorage.setItem('nowva_user_email', email);
       onSubmit(email);
     } catch (err) {
-      console.error('Auth failed:', err);
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      console.error('Email submission failed:', err);
+      setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setIsLoading(false);
     }
@@ -85,7 +62,7 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
   const benefits = [
     'Personalized to your goals & experience',
     'Evidence-based programming',
-    'Large discounts and premium acces to future products'
+    'Large discounts and premium access to future products'
   ];
 
   return (
@@ -204,57 +181,14 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
               ))}
             </motion.div>
 
-            {/* Auth mode tabs */}
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 }}
-              className="flex gap-2 mb-6 justify-center"
-            >
-              <button
-                type="button"
-                onClick={() => { setMode('register'); setError(''); }}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  mode === 'register'
-                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                    : 'text-foreground-tertiary hover:text-foreground-secondary'
-                }`}
-              >
-                Create Account
-              </button>
-              <button
-                type="button"
-                onClick={() => { setMode('login'); setError(''); }}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  mode === 'login'
-                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                    : 'text-foreground-tertiary hover:text-foreground-secondary'
-                }`}
-              >
-                Sign In
-              </button>
-            </motion.div>
-
             {/* Form */}
             <motion.form
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.7 }}
+              transition={{ delay: 0.6 }}
               onSubmit={handleSubmit}
-              className="space-y-4"
+              className="flex gap-3"
             >
-              {mode === 'register' && (
-                <Input
-                  type="text"
-                  placeholder="Your name"
-                  value={name}
-                  onChange={(e) => { setName(e.target.value); setError(''); }}
-                  onFocus={() => setIsInputFocused(true)}
-                  onBlur={() => setIsInputFocused(false)}
-                  className="text-lg"
-                />
-              )}
-
               <Input
                 type="email"
                 placeholder="your@email.com"
@@ -262,34 +196,24 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
                 onChange={(e) => { setEmail(e.target.value); setError(''); }}
                 onFocus={() => setIsInputFocused(true)}
                 onBlur={() => setIsInputFocused(false)}
-                className="text-lg"
-              />
-
-              <Input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                onFocus={() => setIsInputFocused(true)}
-                onBlur={() => setIsInputFocused(false)}
                 error={error}
-                className="text-lg"
+                className="text-lg flex-1"
               />
 
               <Button
                 type="submit"
                 size="lg"
                 disabled={isLoading}
-                className="w-full group"
+                className="group shrink-0"
               >
                 {isLoading ? (
                   <>
-                    <span>{mode === 'register' ? 'Creating account...' : 'Signing in...'}</span>
+                    <span>Starting...</span>
                     <Loader2 className="w-4 h-4 ml-2 animate-spin" />
                   </>
                 ) : (
                   <>
-                    <span>{mode === 'register' ? 'Create Account & Start' : 'Sign In & Start'}</span>
+                    <span>Get Started</span>
                     <Zap className="w-4 h-4 ml-2 group-hover:scale-110 transition-transform" />
                   </>
                 )}

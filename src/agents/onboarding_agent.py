@@ -168,7 +168,7 @@ class OnboardingAgent(BaseNovaAgent):
         print(f"ONBOARDING_COMPLETE")
 
         # Handoff to MainMenuAgent
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         from agents.main_menu_agent import MainMenuAgent
         return MainMenuAgent(state=self.state, userdata=self.userdata)
 

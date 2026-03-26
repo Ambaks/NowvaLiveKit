@@ -2,6 +2,7 @@
 Base agent class with shared properties and helpers for all Nova agents.
 """
 
+import asyncio
 import logging
 from livekit.agents import Agent
 from openai.types.beta.realtime.session import TurnDetection
@@ -28,16 +29,35 @@ class BaseNovaAgent(Agent):
         """Get current user name from state, defaults to 'there'"""
         return self.state.get_user().get("name", "there")
 
-    def _suppress_turn_detection(self):
-        """Suppress auto-responses and interruptions on the Realtime session."""
-        self.session.llm.update_options(
-            turn_detection=TurnDetection(
-                type="semantic_vad",
-                eagerness="low",
-                create_response=False,
-                interrupt_response=False,
+    async def _suppress_turn_detection(self):
+        """Suppress auto-responses and interruptions on the Realtime session.
+
+        Waits for the server to acknowledge the session update before returning,
+        preventing a race where generate_reply() fires before the new turn
+        detection settings take effect (which lets ambient noise interrupt speech).
+        """
+        confirmed = asyncio.Event()
+
+        def _on_server_event(ev):
+            if getattr(ev, "type", None) == "session.updated":
+                confirmed.set()
+
+        rt_session = self.realtime_llm_session
+        rt_session.on("openai_server_event_received", _on_server_event)
+        try:
+            self.session.llm.update_options(
+                turn_detection=TurnDetection(
+                    type="semantic_vad",
+                    eagerness="low",
+                    create_response=False,
+                    interrupt_response=False,
+                )
             )
-        )
+            await asyncio.wait_for(confirmed.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("[TURN DETECTION] Timed out waiting for session.updated confirmation")
+        finally:
+            rt_session.off("openai_server_event_received", _on_server_event)
 
     def _restore_turn_detection(self):
         """Restore normal conversational turn detection."""
@@ -61,7 +81,7 @@ class BaseNovaAgent(Agent):
             wait: If True, block until speech finishes playing.
             restore: If True, restore normal turn detection after playout.
         """
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         handle = self.session.generate_reply(
             instructions=instructions,
             tool_choice="none",

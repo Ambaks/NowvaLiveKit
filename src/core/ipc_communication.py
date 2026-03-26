@@ -189,6 +189,12 @@ class IPCClient:
             except (ConnectionError, ValueError) as e:
                 logger.error(f"Error in IPC client: {e}")
                 break
+            except OSError:
+                # Expected during shutdown — socket was closed via disconnect()
+                if not self.running:
+                    break
+                logger.error("Unexpected OS error in IPC client")
+                break
             except Exception as e:
                 logger.error(f"Unexpected error in IPC client: {e}")
                 break
@@ -208,5 +214,11 @@ class IPCClient:
         """Disconnect from server."""
         self.running = False
         if self.client_socket:
+            try:
+                # Shut down the socket first to unblock any recv() calls
+                # in the listener thread, preventing "Bad file descriptor".
+                self.client_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             self.client_socket.close()
         logger.info("IPC Client disconnected")

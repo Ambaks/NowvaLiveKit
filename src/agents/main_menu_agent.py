@@ -26,8 +26,7 @@ class MainMenuAgent(BaseNovaAgent):
         super().__init__(state=state, userdata=userdata, instructions=get_main_menu_prompt())
 
     async def on_enter(self):
-        """Generate main menu greeting."""
-        # Check if this is the first time arriving at main menu (from onboarding)
+        """Generate main menu greeting only on first visit or first login; silent otherwise."""
         if self.state.is_first_time_main_menu():
             self.state.mark_main_menu_visited()
             self.state.save_state()
@@ -36,12 +35,16 @@ class MainMenuAgent(BaseNovaAgent):
                 f"Tell them about their options: start a workout, create or update a program, "
                 f"check their progress, or update their profile. Keep it friendly and conversational."
             )
-        else:
+        elif not self.state.get("session.main_menu_greeted", False):
+            self.state.set("session.main_menu_greeted", True)
+            self.state.save_state()
             await self._say(
-                f"The user, is back at the main menu. Welcome them back and tell them "
+                f"The user is back at the main menu. Welcome them back and tell them "
                 f"about their options which are to start a workout, create or update a program, "
                 f"check their progress, or update their profile. Keep it friendly and conversational."
             )
+        else:
+            self._restore_turn_detection()
 
     # ===== WORKOUT START TOOLS =====
 
@@ -102,7 +105,7 @@ class MainMenuAgent(BaseNovaAgent):
             self._log_function_call("start_workout", {}, "handoff to WorkoutAgent")
 
             # Handoff to WorkoutAgent
-            self._suppress_turn_detection()
+            await self._suppress_turn_detection()
             from agents.workout_agent import WorkoutAgent
             return WorkoutAgent(state=self.state, userdata=self.userdata)
 
@@ -254,7 +257,7 @@ class MainMenuAgent(BaseNovaAgent):
         }, "handoff to WorkoutAgent")
 
         # Handoff to WorkoutAgent
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         from agents.workout_agent import WorkoutAgent
         return WorkoutAgent(state=self.state, userdata=self.userdata)
 
@@ -426,7 +429,7 @@ class MainMenuAgent(BaseNovaAgent):
             await self._enter_program_creation_mode(db, user_id, name, extracted_params, user_request)
 
             # Handoff to ProgramCreationAgent
-            self._suppress_turn_detection()
+            await self._suppress_turn_detection()
             from agents.program_creation_agent import ProgramCreationAgent
             return ProgramCreationAgent(state=self.state, userdata=self.userdata)
 
@@ -462,7 +465,7 @@ class MainMenuAgent(BaseNovaAgent):
                 logger.info(f"[PROGRAM UPDATE] User has 1 program: {program['name']} (ID: {program['id']})")
 
                 # Handoff to ProgramCreationAgent (which handles updates too)
-                self._suppress_turn_detection()
+                await self._suppress_turn_detection()
                 from agents.program_creation_agent import ProgramCreationAgent
                 return ProgramCreationAgent(state=self.state, userdata=self.userdata)
             else:
@@ -472,7 +475,7 @@ class MainMenuAgent(BaseNovaAgent):
 
                 logger.info(f"[PROGRAM UPDATE] User has {len(programs)} programs")
 
-                self._suppress_turn_detection()
+                await self._suppress_turn_detection()
                 from agents.program_creation_agent import ProgramCreationAgent
                 return ProgramCreationAgent(state=self.state, userdata=self.userdata)
 
@@ -622,7 +625,7 @@ class MainMenuAgent(BaseNovaAgent):
         self.state.switch_mode("schedule")
         self.state.save_state()
 
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         await self._truncate_context_for_handoff()
 
         self._log_function_call("manage_schedule", {"user_request": user_request, "intent": intent}, "handoff to ScheduleMaintenanceAgent")

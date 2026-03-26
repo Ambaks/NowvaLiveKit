@@ -30,6 +30,7 @@ from openai.types.beta.realtime.session import TurnDetection
 # Imports
 from agents.prompts.website_agent_prompt import get_website_agent_prompt
 from agents.shared.unit_conversion import normalize_height_to_cm, normalize_weight_to_kg, categorize_goal
+from auth.security import hash_password
 from db.database import SessionLocal
 from db.models import User
 import httpx
@@ -776,8 +777,8 @@ async def entrypoint(ctx: agents.JobContext):
             random_suffix = secrets.randbelow(10000)
             username = f"{email_prefix}_{random_suffix:04d}"
 
-            # Generate random password hash
-            password_hash = secrets.token_urlsafe(32)
+            # Generate random password (bcrypt-hashed)
+            password_hash = hash_password(secrets.token_urlsafe(32))
 
             # Create new user (name will be updated later)
             new_user = User(

@@ -912,7 +912,7 @@ class ProgramCreationAgent(BaseNovaAgent):
         logger.info("[STATE] Returned to main_menu mode")
 
         # Handoff to MainMenuAgent
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         await self._truncate_context_for_handoff()
         from agents.main_menu_agent import MainMenuAgent
         return MainMenuAgent(state=self.state, userdata=self.userdata)
@@ -985,7 +985,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                     # Handoff back to MainMenuAgent after simple update
                     self.state.switch_mode("main_menu")
                     self.state.save_state()
-                    self._suppress_turn_detection()
+                    await self._suppress_turn_detection()
                     await self._truncate_context_for_handoff()
                     from agents.main_menu_agent import MainMenuAgent
                     return MainMenuAgent(state=self.state, userdata=self.userdata)
@@ -1091,7 +1091,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                 self.state.set("program_update", None)
                 self.state.switch_mode("main_menu")
                 self.state.save_state()
-                self._suppress_turn_detection()
+                await self._suppress_turn_detection()
                 await self._truncate_context_for_handoff()
                 from agents.main_menu_agent import MainMenuAgent
                 return MainMenuAgent(state=self.state, userdata=self.userdata)
@@ -1179,7 +1179,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                 # Handoff back to MainMenuAgent
                 self.state.switch_mode("main_menu")
                 self.state.save_state()
-                self._suppress_turn_detection()
+                await self._suppress_turn_detection()
                 await self._truncate_context_for_handoff()
                 from agents.main_menu_agent import MainMenuAgent
                 return MainMenuAgent(state=self.state, userdata=self.userdata)

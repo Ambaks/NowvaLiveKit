@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -21,26 +21,39 @@ export const ProgramGenerationStatus = ({
 }: ProgramGenerationStatusProps) => {
   const [status, setStatus] = useState<JobStatusResponse | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const doneRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+
+  // Keep refs up to date without re-triggering the effect
+  onCompleteRef.current = onComplete;
+  onErrorRef.current = onError;
 
   useEffect(() => {
+    doneRef.current = false;
     let intervalId: number;
 
     const checkStatus = async () => {
+      if (doneRef.current) return;
+
       try {
         const statusData = await programsApi.getJobStatus(jobId);
         setStatus(statusData);
 
         if (statusData.status === 'completed' && statusData.program_id) {
+          doneRef.current = true;
           clearInterval(intervalId);
-          onComplete(statusData.program_id);
+          onCompleteRef.current(statusData.program_id);
         } else if (statusData.status === 'failed') {
+          doneRef.current = true;
           clearInterval(intervalId);
-          onError(statusData.error_message || 'Program generation failed');
+          onErrorRef.current(statusData.error_message || 'Program generation failed');
         }
       } catch (error) {
         console.error('Error checking status:', error);
+        doneRef.current = true;
         clearInterval(intervalId);
-        onError('Failed to check generation status');
+        onErrorRef.current('Failed to check generation status');
       }
     };
 
@@ -55,7 +68,7 @@ export const ProgramGenerationStatus = ({
         clearInterval(intervalId);
       }
     };
-  }, [jobId, onComplete, onError]);
+  }, [jobId]);
 
   const handleDownload = async () => {
     if (!status?.program_id) return;

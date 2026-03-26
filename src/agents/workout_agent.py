@@ -109,13 +109,12 @@ class WorkoutAgent(BaseNovaAgent):
         logger.info(f"[COACHING] Set complete: {set_summary}")
 
         if set_summary.get("workout_complete"):
-            logger.info("[COACHING] Workout complete — running cleanup")
-            await self._cleanup_workout()
-            await self._truncate_context_for_handoff()
-            # Handoff back to MainMenuAgent via session.update_agent (callback, not function tool)
-            from agents.main_menu_agent import MainMenuAgent
-            new_agent = MainMenuAgent(state=self.state, userdata=self.userdata)
-            self.session.update_agent(new_agent)
+            # Schedule cleanup in a separate task so the orchestrator's
+            # processor task can finish cleanly before we tear it down.
+            # Without this, stop() cancels the task we're running inside,
+            # causing CancelledError and InvalidStateError cascades.
+            logger.info("[COACHING] Workout complete — scheduling cleanup")
+            asyncio.create_task(self._handle_workout_complete())
             return
 
     async def _on_calibration_complete(self):
@@ -124,6 +123,17 @@ class WorkoutAgent(BaseNovaAgent):
         """
         logger.info("[CALIBRATION] Calibration complete — starting wake word system")
         await self._start_wake_word_system()
+
+    async def _handle_workout_complete(self):
+        """Run cleanup and agent handoff outside the orchestrator's task."""
+        await self._cleanup_workout()
+        # Let the realtime model finish processing pending conversation events
+        # from the exercise recap before we delete/re-add items via truncation.
+        await asyncio.sleep(0.5)
+        await self._truncate_context_for_handoff()
+        from agents.main_menu_agent import MainMenuAgent
+        new_agent = MainMenuAgent(state=self.state, userdata=self.userdata)
+        self.session.update_agent(new_agent)
 
     async def _cleanup_workout(self):
         """Shared cleanup for ending a workout (DB logging, state clearing)."""
@@ -429,7 +439,7 @@ class WorkoutAgent(BaseNovaAgent):
         await self._cleanup_workout()
 
         # Handoff to MainMenuAgent
-        self._suppress_turn_detection()
+        await self._suppress_turn_detection()
         await self._truncate_context_for_handoff()
         from agents.main_menu_agent import MainMenuAgent
         return MainMenuAgent(state=self.state, userdata=self.userdata)

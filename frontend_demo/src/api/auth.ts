@@ -3,6 +3,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export interface AuthTokens {
   access_token: string;
   token_type: string;
+  user_id?: string;
 }
 
 export interface UserProfile {
@@ -48,6 +49,26 @@ export const authApi = {
 
     const tokens: AuthTokens = await response.json();
     this.setToken(tokens.access_token);
+    return tokens;
+  },
+
+  async emailStart(email: string): Promise<AuthTokens> {
+    const response = await fetch(`${API_BASE_URL}/api/auth/email-start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to start session');
+    }
+
+    const tokens: AuthTokens = await response.json();
+    this.setToken(tokens.access_token);
+    if (tokens.user_id) {
+      localStorage.setItem('nowva_user_id', tokens.user_id);
+    }
     return tokens;
   },
 
