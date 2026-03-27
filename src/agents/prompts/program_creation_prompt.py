@@ -154,15 +154,30 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
         optional=True
     )
 
+    # V6: Training season (only if sport athlete)
+    training_season_q = f"""
+{n+5}. **Question {n+5} (OPTIONAL — ONLY if they said a sport)**: Ask what part of the season they're in
+   → "Are you in-season, off-season, pre-season, or post-season right now?"
+   → Call `capture_training_season(season)` with "off_season", "pre_season", "in_season", or "post_season"
+   → If they said "none" for sport, SKIP this and call `capture_training_season("off_season")`
+"""
+
+    # V6: Games per week (only if in-season)
+    games_q = f"""
+{n+6}. **Question {n+6} (OPTIONAL — ONLY if in-season)**: Ask how many games/competitions per week
+   → Call `capture_games_per_week(number)`
+   → If NOT in-season, SKIP this entirely
+"""
+
     notes_q = _build_precaptured_or_ask(
-        n+5, "Notes", pc.get("notes"),
+        n+7, "Notes", pc.get("notes"),
         "Mention you noted: {value}. Ask if there's anything else",
         f'capture_user_notes("{pc.get("notes", "notes")}")',
         "Ask if there's anything else to know (exercise preferences, etc.) → Call `capture_user_notes(notes)`",
         optional=True
     )
 
-    final_q_num = n + 6
+    final_q_num = n + 8
 
     return f"""
 # COLLECTING DATA FOR {name.upper()} — FOLLOW THIS EXACT ORDER
@@ -177,6 +192,8 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
 {session_q}
 {injury_q}
 {sport_q}
+{training_season_q}
+{games_q}
 {notes_q}
 
 {final_q_num}. **FINAL**: Ask if beginner, intermediate, or advanced lifter
@@ -220,5 +237,5 @@ User answers → Call capture function → Get signal → IMMEDIATELY ask next q
 Every response = function call + next question. Sound natural, not robotic.
 
 # Function Reference
-capture_height_weight("5'10\\"", "175 lbs") | capture_age_sex(28, "male") | capture_goal("build muscle") | capture_program_duration(12) | capture_training_frequency(4) | capture_session_duration(90) | capture_injury_history("none") | capture_specific_sport("basketball") | capture_user_notes("Prefers RDLs") | capture_fitness_level("intermediate") | set_vbt_capability(true/false) | generate_workout_program() | check_program_status() | finish_program_creation()
+capture_height_weight("5'10\\"", "175 lbs") | capture_age_sex(28, "male") | capture_goal("build muscle") | capture_program_duration(12) | capture_training_frequency(4) | capture_session_duration(90) | capture_injury_history("none") | capture_specific_sport("basketball") | capture_training_season("in_season") | capture_games_per_week(2) | capture_user_notes("Prefers RDLs") | capture_fitness_level("intermediate") | set_vbt_capability(true/false) | generate_workout_program() | check_program_status() | finish_program_creation()
 """

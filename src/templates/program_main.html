@@ -311,6 +311,92 @@
           border-radius: 0 3pt 3pt 0;
         }
 
+        /* Warm-Up Protocol */
+        .warmup-section {
+          background: #ECFDF5;
+          border: 1px solid #A7F3D0;
+          border-radius: 6pt;
+          padding: 12pt;
+          margin-bottom: 12pt;
+          page-break-inside: avoid;
+        }
+
+        .warmup-title {
+          font-size: 10pt;
+          font-weight: 700;
+          color: #065F46;
+          margin-bottom: 8pt;
+        }
+
+        .warmup-subsection {
+          margin-bottom: 6pt;
+        }
+
+        .warmup-subsection-title {
+          font-size: 8pt;
+          font-weight: 700;
+          color: #047857;
+          text-transform: uppercase;
+          letter-spacing: 0.3pt;
+          margin-bottom: 2pt;
+        }
+
+        .warmup-subsection p,
+        .warmup-subsection li {
+          font-size: 8pt;
+          color: #374151;
+          margin-bottom: 1pt;
+          line-height: 1.4;
+        }
+
+        .warmup-subsection ul {
+          list-style: disc;
+          padding-left: 14pt;
+          margin: 0;
+        }
+
+        .warmup-ramp-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 8pt;
+          margin-top: 4pt;
+        }
+
+        .warmup-ramp-table th {
+          background: #D1FAE5;
+          padding: 4pt 6pt;
+          text-align: left;
+          font-weight: 600;
+          color: #065F46;
+          font-size: 7pt;
+        }
+
+        .warmup-ramp-table td {
+          padding: 3pt 6pt;
+          border-bottom: 1px solid #A7F3D0;
+        }
+
+        /* Set Type Badges */
+        .set-type-badge {
+          display: inline-block;
+          padding: 1pt 5pt;
+          border-radius: 6pt;
+          font-size: 6pt;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.3pt;
+          margin-left: 4pt;
+          vertical-align: middle;
+        }
+
+        .badge-cluster { background: #DBEAFE; color: #1E40AF; }
+        .badge-rest-pause { background: #FEE2E2; color: #991B1B; }
+        .badge-myo-rep { background: #F3E8FF; color: #6B21A8; }
+        .badge-drop-set { background: #FEF3C7; color: #92400E; }
+        .badge-back-off { background: #E0E7FF; color: #3730A3; }
+        .badge-amrap { background: #DCFCE7; color: #166534; }
+        .badge-wave { background: #FFE4E6; color: #9F1239; }
+
         .stats-section {
           page-break-inside: avoid;
           page-break-after: always;
@@ -454,6 +540,74 @@
                 <p class="workout-description">{{ workout.description }}</p>
             </div>
 
+            {% if workout.warmup_protocol %}
+            <div class="warmup-section">
+                <div class="warmup-title">Warm-Up Protocol</div>
+
+                {% if workout.warmup_protocol.general_warmup %}
+                <div class="warmup-subsection">
+                    <div class="warmup-subsection-title">General Warm-Up</div>
+                    <ul>
+                    {% for item in workout.warmup_protocol.general_warmup %}
+                        <li>{{ item }}</li>
+                    {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if workout.warmup_protocol.dynamic_stretches %}
+                <div class="warmup-subsection">
+                    <div class="warmup-subsection-title">Dynamic Stretches</div>
+                    <ul>
+                    {% for stretch in workout.warmup_protocol.dynamic_stretches %}
+                        <li>{{ stretch }}</li>
+                    {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if workout.warmup_protocol.activation_exercises %}
+                <div class="warmup-subsection">
+                    <div class="warmup-subsection-title">Activation</div>
+                    <ul>
+                    {% for activation in workout.warmup_protocol.activation_exercises %}
+                        <li>{{ activation }}</li>
+                    {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if workout.warmup_protocol.warmup_sets %}
+                <div class="warmup-subsection">
+                    <div class="warmup-subsection-title">Ramping Warm-Up Sets — {{ workout.warmup_protocol.warmup_sets[0].exercise_name }}</div>
+                    <table class="warmup-ramp-table">
+                        <thead>
+                            <tr>
+                                <th>Set</th>
+                                <th>Load</th>
+                                <th>Reps</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for ws in workout.warmup_protocol.warmup_sets %}
+                            <tr>
+                                <td>{{ loop.index }}</td>
+                                <td>{{ ws.notes }}</td>
+                                <td>{{ ws.reps }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+            {% elif workout.warmup_notes %}
+            <div class="warmup-section">
+                <div class="warmup-title">Warm-Up</div>
+                <p style="font-size: 8pt; color: #374151;">{{ workout.warmup_notes }}</p>
+            </div>
+            {% endif %}
+
             <table class="exercise-table">
                 <thead>
                     <tr>
@@ -473,7 +627,13 @@
                     <tr>
                         <td>{{ exercise.order }}</td>
                         <td>
-                            <div class="exercise-name">{{ exercise.exercise_name }}</div>
+                            <div class="exercise-name">
+                                {{ exercise.exercise_name }}
+                                {% if exercise.sets|length > 0 and exercise.sets[0].set_type and exercise.sets[0].set_type != 'standard' %}
+                                    {% set st = exercise.sets[0].set_type %}
+                                    <span class="set-type-badge badge-{{ st|replace('_', '-') }}">{{ st|replace('_', ' ') }}</span>
+                                {% endif %}
+                            </div>
                             <div class="text-small">{{ exercise.muscle_group }}</div>
                         </td>
                         <td>{{ exercise.sets|length }}</td>

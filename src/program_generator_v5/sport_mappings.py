@@ -34,6 +34,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "nordic_curl",            # Hamstring injury prevention
             "single_leg_calf_raise",  # Ankle stability
         ],
+        "interference_level": "moderate",
     },
 
     # ── Football — skill positions (WR, DB, RB, QB) ─────────────────────────
@@ -48,6 +49,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "nordic_curl",
             "copenhagen_plank",
         ],
+        "interference_level": "low",
     },
 
     # ── Football — linemen ────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "neck_harness_flexion",    # Neck strength for impact
             "farmers_carry",           # Grip and trap strength
         ],
+        "interference_level": "low",
     },
 
     # ── Rugby ─────────────────────────────────────────────────────────────────
@@ -76,6 +79,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "nordic_curl",
             "copenhagen_plank",
         ],
+        "interference_level": "moderate",
     },
 
     # ── Wrestling ─────────────────────────────────────────────────────────────
@@ -90,6 +94,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "neck_harness_flexion",
             "barbell_shrug",
         ],
+        "interference_level": "low",
     },
 
     # ── Soccer ────────────────────────────────────────────────────────────────
@@ -105,6 +110,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "copenhagen_plank",     # Groin/adductor health
             "single_leg_rdl",       # Hip stability
         ],
+        "interference_level": "moderate",
     },
 
     # ── Volleyball ────────────────────────────────────────────────────────────
@@ -119,6 +125,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "band_external_rotation",  # Shoulder health
             "single_leg_calf_raise",
         ],
+        "interference_level": "moderate",
     },
 
     # ── Boxing ────────────────────────────────────────────────────────────────
@@ -133,6 +140,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "band_external_rotation",
             "face_pull",             # Shoulder prehab
         ],
+        "interference_level": "low",
     },
 
     # ── MMA / Martial Arts ────────────────────────────────────────────────────
@@ -154,6 +162,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "nordic_curl",
             "copenhagen_plank",
         ],
+        "interference_level": "low",
     },
 
     # ── Swimming ─────────────────────────────────────────────────────────────
@@ -171,6 +180,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "band_pull_apart",
             "face_pull",
         ],
+        "interference_level": "high",
     },
 
     # ── Running ───────────────────────────────────────────────────────────────
@@ -187,6 +197,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "copenhagen_plank",          # Adductor health
             "calf_raise",
         ],
+        "interference_level": "high",
     },
 
     # ── Cycling ───────────────────────────────────────────────────────────────
@@ -202,6 +213,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "glute_bridge",
             "copenhagen_plank",
         ],
+        "interference_level": "high",
     },
 
     # ── Endurance (general) ───────────────────────────────────────────────────
@@ -217,6 +229,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "single_leg_rdl",
             "calf_raise",
         ],
+        "interference_level": "high",
     },
 
     # ── Baseball ─────────────────────────────────────────────────────────────
@@ -236,6 +249,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "face_pull",
             "nordic_curl",
         ],
+        "interference_level": "low",
     },
 
     # ── Tennis ────────────────────────────────────────────────────────────────
@@ -253,6 +267,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "band_pull_apart",
             "face_pull",
         ],
+        "interference_level": "moderate",
     },
 
     # ── Golf ──────────────────────────────────────────────────────────────────
@@ -268,6 +283,7 @@ SPORT_MAPPINGS: dict[str, dict] = {
             "hip_flexor_stretch_exercise",
             "face_pull",
         ],
+        "interference_level": "low",
     },
 
     # ── General Athleticism ───────────────────────────────────────────────────
@@ -283,6 +299,211 @@ SPORT_MAPPINGS: dict[str, dict] = {
         ],
         "forbidden_exercises": [],
         "injury_prevention_additions": [],
+        "interference_level": "low",
+    },
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # V6 NEW SPORTS
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # ── Ice Hockey ──────────────────────────────────────────────────────────
+    "hockey": {
+        "base_goal": "power",
+        "volume_modifier": 0.85,
+        "emphasis_muscles": ["adductors", "glutes", "upper_back", "traps", "hamstrings"],
+        "deemphasis_muscles": [],
+        "mandatory_movement_patterns": ["squat", "hip_hinge", "power_lower", "horizontal_pull"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_clamshell",          # Hip adductor/abductor ratio (prevent strain)
+            "nordic_curl",             # Hamstring injury prevention
+            "band_external_rotation",  # Shoulder health
+        ],
+        "interference_level": "moderate",
+        "in_season_config": {
+            "max_sessions_per_week": 2,
+            "max_session_duration": 40,
+            "max_exercises_per_session": 5,
+            "avoid_high_eccentric": True,
+            "priority_patterns": ["squat", "hip_hinge", "horizontal_push"],
+        },
+    },
+
+    # ── Lacrosse ────────────────────────────────────────────────────────────
+    "lacrosse": {
+        "base_goal": "power",
+        "volume_modifier": 0.85,
+        "emphasis_muscles": ["glutes", "hamstrings", "obliques", "upper_back", "rear_delts"],
+        "deemphasis_muscles": [],
+        "mandatory_movement_patterns": ["power_lower", "rotation", "horizontal_push", "hip_hinge"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_external_rotation",  # Shoulder stability (checking/stick work)
+            "band_pallof_press",       # Anti-rotation core
+            "nordic_curl",
+        ],
+        "interference_level": "moderate",
+        "in_season_config": {
+            "max_sessions_per_week": 2,
+            "max_session_duration": 40,
+            "max_exercises_per_session": 5,
+            "avoid_high_eccentric": True,
+            "priority_patterns": ["squat", "hip_hinge", "horizontal_push"],
+        },
+    },
+
+    # ── Rowing / Crew ───────────────────────────────────────────────────────
+    "rowing": {
+        "base_goal": "strength",
+        "volume_modifier": 0.80,
+        "emphasis_muscles": ["lats", "upper_back", "glutes", "hamstrings", "quads"],
+        "deemphasis_muscles": ["biceps", "side_delts"],
+        "mandatory_movement_patterns": ["squat", "hip_hinge", "horizontal_pull"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_external_rotation",  # Shoulder health
+            "dead_bug",                # Core stability / low back protection
+        ],
+        "interference_level": "high",   # Endurance sport — high concurrent training interference
+        "in_season_config": {
+            "max_sessions_per_week": 2,
+            "max_session_duration": 45,
+            "max_exercises_per_session": 5,
+            "avoid_high_eccentric": False,
+            "priority_patterns": ["squat", "hip_hinge"],
+        },
+    },
+
+    # ── Track & Field — Sprints ─────────────────────────────────────────────
+    "track_sprints": {
+        "base_goal": "power",
+        "volume_modifier": 0.80,
+        "emphasis_muscles": ["glutes", "hamstrings", "quads", "calves"],
+        "deemphasis_muscles": ["chest", "triceps", "biceps"],
+        "mandatory_movement_patterns": ["power_lower", "hip_hinge", "lunge"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "nordic_curl",          # #1 hamstring injury prevention for sprinters
+            "dumbbell_single_leg_rdl",  # Pre-sprint warm-up staple
+        ],
+        "interference_level": "low",
+        "in_season_config": {
+            "max_sessions_per_week": 2,
+            "max_session_duration": 40,
+            "max_exercises_per_session": 5,
+            "avoid_high_eccentric": True,
+            "priority_patterns": ["squat", "hip_hinge", "power_lower"],
+        },
+    },
+
+    # ── Track & Field — Throws ──────────────────────────────────────────────
+    "track_throws": {
+        "base_goal": "power",
+        "volume_modifier": 0.90,
+        "emphasis_muscles": ["obliques", "traps", "glutes", "upper_back", "front_delts"],
+        "deemphasis_muscles": [],
+        "mandatory_movement_patterns": ["rotation", "power_upper", "squat", "hip_hinge"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_external_rotation",
+            "band_pallof_press",
+        ],
+        "interference_level": "low",
+    },
+
+    # ── Track & Field — Jumps ───────────────────────────────────────────────
+    "track_jumps": {
+        "base_goal": "power",
+        "volume_modifier": 0.80,
+        "emphasis_muscles": ["quads", "glutes", "calves", "hamstrings"],
+        "deemphasis_muscles": ["chest", "triceps"],
+        "mandatory_movement_patterns": ["squat", "power_lower", "lunge"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "nordic_curl",
+            "dumbbell_single_leg_rdl",
+        ],
+        "interference_level": "low",
+    },
+
+    # ── Track & Field — Middle Distance ─────────────────────────────────────
+    "track_middle_distance": {
+        "base_goal": "strength",
+        "volume_modifier": 0.70,
+        "emphasis_muscles": ["glutes", "hamstrings", "calves", "abs"],
+        "deemphasis_muscles": ["chest", "triceps", "biceps"],
+        "mandatory_movement_patterns": ["hip_hinge", "lunge", "squat"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "nordic_curl",
+            "calf_raise",
+        ],
+        "interference_level": "high",
+    },
+
+    # ── Powerlifting ────────────────────────────────────────────────────────
+    "powerlifting": {
+        "base_goal": "strength",
+        "volume_modifier": 1.0,
+        "emphasis_muscles": ["quads", "glutes", "hamstrings", "chest", "triceps", "upper_back"],
+        "deemphasis_muscles": ["side_delts", "rear_delts", "biceps"],
+        "mandatory_movement_patterns": ["squat", "horizontal_push", "hip_hinge"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_pull_apart",       # Shoulder health for bench
+            "band_external_rotation",
+        ],
+        "interference_level": "low",
+    },
+
+    # ── Olympic Weightlifting ───────────────────────────────────────────────
+    "olympic_weightlifting": {
+        "base_goal": "power",
+        "volume_modifier": 1.0,
+        "emphasis_muscles": ["quads", "glutes", "traps", "upper_back", "front_delts"],
+        "deemphasis_muscles": ["chest", "biceps"],
+        "mandatory_movement_patterns": ["squat", "power_upper", "power_lower", "vertical_push"],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_external_rotation",
+            "band_pull_apart",
+        ],
+        "interference_level": "low",
+    },
+
+    # ── CrossFit ────────────────────────────────────────────────────────────
+    "crossfit": {
+        "base_goal": "power",
+        "volume_modifier": 0.90,
+        "emphasis_muscles": [],            # GPP — balanced across all patterns
+        "deemphasis_muscles": [],
+        "mandatory_movement_patterns": [
+            "squat", "hip_hinge", "power_upper", "power_lower",
+            "horizontal_push", "vertical_pull",
+        ],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_external_rotation",
+            "band_pull_apart",
+        ],
+        "interference_level": "moderate",
+    },
+
+    # ── Gymnastics / Calisthenics ───────────────────────────────────────────
+    "gymnastics": {
+        "base_goal": "strength",
+        "volume_modifier": 0.75,
+        "emphasis_muscles": ["lats", "upper_back", "abs", "triceps", "front_delts", "biceps"],
+        "deemphasis_muscles": ["quads"],
+        "mandatory_movement_patterns": [
+            "vertical_pull", "horizontal_push", "vertical_push", "core",
+        ],
+        "forbidden_exercises": [],
+        "injury_prevention_additions": [
+            "band_external_rotation",  # Shoulder health — extreme ROM demands
+            "band_pull_apart",
+        ],
+        "interference_level": "low",
     },
 }
 
@@ -325,6 +546,27 @@ def get_sport_adjustments(sport: str) -> dict | None:
         "volleyball_beach": "volleyball",
         "general":          "general_athleticism",
         "sport":            "general_athleticism",
+        # V6 new aliases
+        "ice_hockey":       "hockey",
+        "field_hockey":     "hockey",
+        "crew":             "rowing",
+        "sprints":          "track_sprints",
+        "sprinting":        "track_sprints",
+        "throwing":         "track_throws",
+        "shot_put":         "track_throws",
+        "discus":           "track_throws",
+        "javelin":          "track_throws",
+        "high_jump":        "track_jumps",
+        "long_jump":        "track_jumps",
+        "pole_vault":       "track_jumps",
+        "triple_jump":      "track_jumps",
+        "800m":             "track_middle_distance",
+        "1500m":            "track_middle_distance",
+        "mile":             "track_middle_distance",
+        "weightlifting":    "olympic_weightlifting",
+        "oly_lifting":      "olympic_weightlifting",
+        "calisthenics":     "gymnastics",
+        "bodyweight":       "gymnastics",
     }
 
     resolved_key = _ALIASES.get(key, key)

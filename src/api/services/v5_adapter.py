@@ -60,7 +60,7 @@ def convert_request_to_v5_input(request: ProgramGenerationRequest) -> Dict[str, 
         "program_duration_weeks": request.duration_weeks,
         "training_days_per_week": request.days_per_week,
         "session_duration_minutes": request.session_duration or 60,
-        "equipment_tier": 2,  # Default to Tier 2 (dumbbells available)
+        "equipment_tier": getattr(request, 'equipment_tier', 2) or 2,
         "injuries": injuries,
         "exercises_to_avoid": [],
         "exercises_to_include": [],
@@ -68,6 +68,10 @@ def convert_request_to_v5_input(request: ProgramGenerationRequest) -> Dict[str, 
         "weak_points": [],
         "sport": sport,
         "vbt_capability": getattr(request, 'has_vbt_capability', False),
+        # V6 fields
+        "training_season": getattr(request, 'training_season', None),
+        "games_per_week": getattr(request, 'games_per_week', 0) or 0,
+        "competition_date": getattr(request, 'competition_date', None),
     }
 
 
@@ -115,10 +119,16 @@ def convert_v5_output_to_html_format(
         }
 
         for workout in week.get("workouts", []):
+            # V6: Extract warm-up protocol if present
+            warmup_protocol = workout.get("warmup_protocol")
+            warmup_notes = workout.get("warmup_notes", "")
+
             workout_dict = {
                 "day_number": workout.get("day_number", 1),
                 "name": workout.get("day_label", "Workout"),
                 "description": f"Estimated duration: {workout.get('estimated_duration_minutes', 60)} minutes",
+                "warmup_notes": warmup_notes,
+                "warmup_protocol": warmup_protocol,
                 "exercises": [],
             }
 
@@ -162,6 +172,7 @@ def convert_v5_output_to_html_format(
                         "rest_seconds": set_data.get("rest_seconds", 90),
                         "tempo": set_data.get("tempo", ""),
                         "notes": set_data.get("notes", ""),
+                        "set_type": set_data.get("set_type", "standard"),
                         "velocity_target": set_data.get("velocity_target"),
                         "velocity_min": set_data.get("velocity_min"),
                         "velocity_max": set_data.get("velocity_max"),

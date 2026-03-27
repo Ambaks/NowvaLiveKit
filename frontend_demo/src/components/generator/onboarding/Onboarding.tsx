@@ -26,6 +26,8 @@ export interface OnboardingData {
   goal_category: string;
   goal_raw: string;
   specific_sport: string;
+  training_season: string;
+  games_per_week: string;
   // Experience
   fitness_level: string;
   injury_history: string;
@@ -36,6 +38,7 @@ export interface OnboardingData {
   // Advanced
   has_vbt_capability: boolean;
   user_notes: string;
+  equipment_tier: string;
 }
 
 const STEP_LABELS = ['Personal', 'Goals', 'Experience', 'Schedule', 'Advanced'];
@@ -54,6 +57,8 @@ export const Onboarding = ({ onComplete }: OnboardingProps) => {
     goal_category: '',
     goal_raw: '',
     specific_sport: 'none',
+    training_season: '',
+    games_per_week: '0',
     fitness_level: '',
     injury_history: 'none',
     days_per_week: '',
@@ -61,6 +66,7 @@ export const Onboarding = ({ onComplete }: OnboardingProps) => {
     duration_weeks: '12',
     has_vbt_capability: false,
     user_notes: '',
+    equipment_tier: '2',
   });
 
   const handleChange = (field: string, value: string | boolean) => {

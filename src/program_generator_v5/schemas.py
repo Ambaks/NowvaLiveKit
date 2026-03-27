@@ -1,5 +1,5 @@
 """
-V5 Program Generator — All Pydantic models and enums.
+V6 Program Generator — All Pydantic models and enums.
 Every other file in this package imports from here.
 """
 
@@ -25,6 +25,30 @@ class MuscleRole(str, Enum):
     PRIMARY = "primary"
     SECONDARY = "secondary"
     STABILIZER = "stabilizer"
+
+
+class EccentricStress(str, Enum):
+    LOW = "low"           # Step-ups, carries, concentric-emphasis
+    MODERATE = "moderate"  # Standard squats, bench, rows
+    HIGH = "high"          # Bulgarian split squats, RDLs, Nordic curls, walking lunges
+
+
+class SetType(str, Enum):
+    STANDARD = "standard"
+    CLUSTER = "cluster"
+    REST_PAUSE = "rest_pause"
+    MYO_REP = "myo_rep"
+    DROP_SET = "drop_set"
+    BACK_OFF = "back_off"
+    AMRAP = "amrap"
+    WAVE = "wave"
+
+
+class TrainingSeason(str, Enum):
+    OFF_SEASON = "off_season"
+    PRE_SEASON = "pre_season"
+    IN_SEASON = "in_season"
+    POST_SEASON = "post_season"
 
 
 class ExerciseType(str, Enum):
@@ -133,6 +157,12 @@ class Exercise(BaseModel):
     rotation_group: str                         # Interchangeable exercises share group
     variation_tags: list[str] = []             # ["incline", "close_grip", "pause"]
 
+    # V6: Stretch-mediated hypertrophy (2024 research)
+    trains_at_long_length: bool = False        # Loads muscle at stretched position
+
+    # V6: Eccentric stress management (for in-season DOMS control)
+    eccentric_stress: EccentricStress = EccentricStress.MODERATE
+
     # VBT (Velocity-Based Training)
     vbt_eligible: bool = False                 # Has measurable bar path for velocity tracking
 
@@ -155,6 +185,11 @@ class AthleteProfile(BaseModel):
     sport: Optional[str] = None                 # "basketball", "mma", etc.
     training_level: str                         # "beginner", "intermediate", "advanced"
     training_age_years: Optional[float] = None
+
+    # V6: Season & competition awareness
+    training_season: Optional[TrainingSeason] = None  # off_season, pre_season, in_season, post_season
+    games_per_week: int = 0                     # Number of games/competitions per week (in-season)
+    competition_date: Optional[str] = None      # ISO date for peaking (block periodization timing)
 
     # Program parameters
     program_duration_weeks: int
@@ -219,12 +254,18 @@ class WeekProfile(BaseModel):
     rir_range: tuple[int, int]
     is_deload: bool = False
     notes: str = ""
+    # V6: DUP session emphasis (per-session within this week)
+    session_emphases: list[str] = []            # ["heavy", "moderate", "light"] for DUP
+    # V6: Block periodization phase
+    block_phase: Optional[str] = None           # "accumulation", "transmutation", "realization"
+    # V6: Deload type
+    deload_type: Optional[str] = None           # "volume", "intensity", "active_rest"
 
 
 class ProgramStrategy(BaseModel):
     split: SplitTemplate
     week_profiles: list[WeekProfile]
-    periodization_model: str                    # "volume_ramp", "linear_intensity", "concurrent"
+    periodization_model: str                    # "volume_ramp", "linear_intensity", "concurrent", "dup", "block", "maintenance"
     volume_modifier: float = 1.0               # Global scaling from sport adjustments
     emphasis_muscles: list[MuscleGroup] = []
     deemphasis_muscles: list[MuscleGroup] = []
@@ -270,10 +311,26 @@ class PrescribedSet(BaseModel):
     rest_seconds: int
     tempo: Optional[str] = None
     notes: str = ""
+    # V6: Advanced set scheme
+    set_type: SetType = SetType.STANDARD
     # VBT fields
     velocity_target: Optional[float] = None    # Target bar velocity in m/s
     velocity_min: Optional[float] = None       # Stop set if velocity drops below
     velocity_max: Optional[float] = None       # Upper bound for velocity
+
+
+class WarmUpSet(BaseModel):
+    exercise_name: str
+    percent_of_working: Optional[float] = None  # e.g. 0.50 for 50% of working weight
+    reps: int
+    notes: str = ""                              # "empty bar", "focus on bracing", etc.
+
+
+class WarmUpProtocol(BaseModel):
+    general_warmup: list[str] = []               # 5-min general (jump rope, light jog, etc.)
+    dynamic_stretches: list[str] = []            # Movement-specific dynamic stretches
+    activation_exercises: list[str] = []         # Band work, glute bridges, etc.
+    warmup_sets: list[WarmUpSet] = []            # Ramping sets to working weight
 
 
 class PrescribedExercise(BaseModel):
@@ -300,6 +357,7 @@ class BuiltWorkout(BaseModel):
     volume_check: dict[str, float]
     volume_delivered: dict[str, float] = {}     # Alias: same as volume_check
     warmup_notes: str = ""
+    warmup_protocol: Optional[WarmUpProtocol] = None  # V6: Structured warm-up
 
 
 class BuiltWeek(BaseModel):
@@ -311,6 +369,9 @@ class BuiltWeek(BaseModel):
     weekly_volume_actual: dict[str, float]
     weekly_volume_target: dict[str, float] = {}
     volume_adherence: dict[str, float] = {}     # actual/target ratio
+    # V6: Weekly summary
+    week_focus: str = ""                         # "Accumulation — high volume, moderate intensity"
+    recovery_notes: str = ""                     # "Prioritize sleep and nutrition this week"
 
 
 class MutationLog(BaseModel):

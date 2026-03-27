@@ -15,6 +15,7 @@ from .schemas import (
     MuscleGroup,
     PrescribedSet,
     PrescribedExercise,
+    SetType,
     WeekProfile,
 )
 
@@ -280,6 +281,110 @@ def calculate_intensity_percent_simple(
     return round(max(40, min(95, intensity)), 1)
 
 
+def _select_set_type(
+    exercise: Exercise,
+    set_index: int,
+    total_sets: int,
+    program_goal: str,
+    training_level: str,
+    week_profile: WeekProfile,
+    session_duration_limited: bool = False,
+) -> SetType:
+    """
+    Select the appropriate set type based on athlete level, goal, phase, and exercise type.
+
+    Rules:
+    - Beginners: STANDARD only
+    - Intermediate: STANDARD + BACK_OFF on compounds after heavy sets + AMRAP on final set
+    - Advanced: All techniques available, auto-selected by goal/phase
+
+    Time-constrained sessions prefer MYO_REP and REST_PAUSE (more stimulus per minute).
+    Deload weeks always use STANDARD.
+    """
+    ex_type = exercise.exercise_type.value
+
+    # Deload = always standard
+    if week_profile.is_deload:
+        return SetType.STANDARD
+
+    # Beginners = always standard
+    if training_level == "beginner":
+        return SetType.STANDARD
+
+    # Power/plyometric exercises = always standard (technique-focused)
+    if ex_type in ("power", "plyometric"):
+        return SetType.STANDARD
+
+    # ── Intermediate logic ──
+    if training_level == "intermediate":
+        # AMRAP on final set of heavy compounds (strength/hypertrophy)
+        if (set_index == total_sets - 1
+                and ex_type == "heavy_compound"
+                and program_goal in ("strength", "hypertrophy")
+                and week_profile.week_in_mesocycle >= 2):
+            return SetType.AMRAP
+
+        # Back-off sets after top sets on compounds (strength programs)
+        if (program_goal == "strength"
+                and ex_type == "heavy_compound"
+                and total_sets >= 4
+                and set_index >= total_sets - 1):
+            return SetType.BACK_OFF
+
+        return SetType.STANDARD
+
+    # ── Advanced logic ──
+
+    # Time-constrained sessions: prefer time-efficient techniques on isolations
+    if session_duration_limited and ex_type == "isolation":
+        # Myo-reps for isolation exercises (70% time reduction)
+        if program_goal == "hypertrophy" and set_index == 0 and total_sets >= 3:
+            return SetType.MYO_REP
+        # Rest-pause as alternative (35% time savings)
+        if set_index == 0 and total_sets >= 3:
+            return SetType.REST_PAUSE
+
+    # Goal-specific advanced techniques
+    if program_goal == "strength":
+        # AMRAP on final set of compounds
+        if ex_type == "heavy_compound" and set_index == total_sets - 1:
+            return SetType.AMRAP
+        # Wave loading in peak weeks (week_in_mesocycle == 3)
+        if (ex_type == "heavy_compound"
+                and week_profile.week_in_mesocycle == 3
+                and total_sets >= 3):
+            return SetType.WAVE
+        # Back-off sets on compounds
+        if (ex_type == "heavy_compound"
+                and total_sets >= 4
+                and set_index == total_sets - 1):
+            return SetType.BACK_OFF
+
+    elif program_goal == "hypertrophy":
+        # Drop set on final set of last isolation in overreaching week
+        if (ex_type == "isolation"
+                and set_index == total_sets - 1
+                and week_profile.week_in_mesocycle == 3):
+            return SetType.DROP_SET
+        # Myo-reps for isolation exercises in building/overreaching weeks
+        if (ex_type == "isolation"
+                and set_index == 0
+                and total_sets >= 3
+                and week_profile.week_in_mesocycle >= 2):
+            return SetType.MYO_REP
+        # AMRAP on final set of compounds
+        if ex_type == "heavy_compound" and set_index == total_sets - 1:
+            return SetType.AMRAP
+
+    elif program_goal == "power":
+        # Cluster sets for heavy compounds (better velocity maintenance)
+        if (ex_type == "heavy_compound"
+                and week_profile.week_in_mesocycle >= 2):
+            return SetType.CLUSTER
+
+    return SetType.STANDARD
+
+
 def prescribe_exercise(
     exercise: Exercise,
     total_sets: int,
@@ -288,6 +393,8 @@ def prescribe_exercise(
     is_last_set_to_failure: bool = False,
     vbt_enabled: bool = False,
     vbt_protocol: str = "",
+    training_level: str = "intermediate",
+    session_duration_limited: bool = False,
 ) -> list[PrescribedSet]:
     """
     Prescribe sets, reps, RPE, RIR, rest, tempo, and notes for an exercise
@@ -396,16 +503,66 @@ def prescribe_exercise(
                     vbt_note = f"Velocity check: expect ~{velocity_target} m/s"
                 set_notes = f"{set_notes}. {vbt_note}" if set_notes else vbt_note
 
+        # ── 8. Set type selection ─────────────────────────────────────────
+        set_type = _select_set_type(
+            exercise=exercise,
+            set_index=i,
+            total_sets=total_sets,
+            program_goal=program_goal,
+            training_level=training_level,
+            week_profile=week_profile,
+            session_duration_limited=session_duration_limited,
+        )
+
+        # Add set-type-specific notes and adjust prescription
+        set_rest = rest
+        set_reps = reps
+        if set_type == SetType.AMRAP:
+            set_notes = f"{set_notes}. AMRAP — as many reps as possible" if set_notes else "AMRAP — as many reps as possible"
+            set_rpe = 9.5
+            set_rir = 0
+            set_reps = reps  # Target reps as minimum
+        elif set_type == SetType.BACK_OFF:
+            set_notes = f"{set_notes}. Back-off set at ~80% of working weight" if set_notes else "Back-off set — reduce weight 20%, focus on bar speed"
+            set_reps = reps + 2  # More reps at lighter weight
+            set_rir = 3
+            set_rpe = round(set_rpe - 1.5, 1)
+        elif set_type == SetType.MYO_REP:
+            set_notes = f"{set_notes}. Myo-rep: activation set to near failure, then 3-5 mini-sets of 3-5 reps with 5-10s rest" if set_notes else "Myo-rep: activation set to near failure, then 3-5 mini-sets of 3-5 reps with 5-10s rest"
+            set_reps = max(reps, 12)  # Activation set needs higher reps
+            set_rpe = 9.0
+            set_rir = 1
+            set_rest = 10  # Short intra-set rest
+        elif set_type == SetType.REST_PAUSE:
+            set_notes = f"{set_notes}. Rest-pause: to near failure, rest 10-30s, repeat for target reps" if set_notes else "Rest-pause: to near failure, rest 10-30s, repeat for target total reps"
+            set_rpe = 9.0
+            set_rir = 1
+        elif set_type == SetType.DROP_SET:
+            set_notes = f"{set_notes}. Drop set: after failure, reduce weight 20-25% and continue for 1-2 drops" if set_notes else "Drop set: after failure, reduce weight 20-25% and continue for 1-2 drops"
+            set_rpe = 10.0
+            set_rir = 0
+        elif set_type == SetType.CLUSTER:
+            set_notes = f"{set_notes}. Cluster: {set_reps} total reps as singles with 15-30s intra-set rest" if set_notes else f"Cluster: {set_reps} total reps as singles with 15-30s intra-set rest"
+            set_rest = 30  # Intra-set rest
+        elif set_type == SetType.WAVE:
+            # Wave loading: 3/2/1 pattern within the set sequence
+            wave_reps = [3, 2, 1]
+            wave_idx = i % len(wave_reps)
+            set_reps = wave_reps[wave_idx]
+            set_notes = f"{set_notes}. Wave loading: {set_reps} reps, increase weight each wave" if set_notes else f"Wave loading: {set_reps} reps, increase weight each wave"
+            set_rir = max(1, set_rir)
+
         sets.append(
             PrescribedSet(
                 set_number=i + 1,
-                reps=reps,
+                reps=set_reps,
                 rpe=set_rpe,
                 rir=set_rir,
                 intensity_percent=intensity_pct,
-                rest_seconds=rest,
+                rest_seconds=set_rest,
                 tempo=tempo,
                 notes=set_notes,
+                set_type=set_type,
                 velocity_target=velocity_target,
                 velocity_min=velocity_min,
                 velocity_max=velocity_max,

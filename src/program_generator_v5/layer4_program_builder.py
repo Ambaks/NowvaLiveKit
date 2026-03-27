@@ -30,6 +30,9 @@ from .schemas import (
     MovementPattern,
     MuscleGroup,
     MuscleRole,
+    WarmUpProtocol,
+    WarmUpSet,
+    TrainingSeason,
 )
 from .exercise_library import EXERCISE_LIBRARY
 from .scoring import compute_exercise_score
@@ -457,6 +460,7 @@ def _build_session(
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
+                    is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
                 )
 
                 # BUG 1 FIX: Add compound priority bonuses for Phase 1
@@ -666,6 +670,7 @@ def _build_session(
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
+                    is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
                 )
 
                 # FIX 2: Apply same-week variety penalty
@@ -775,6 +780,7 @@ def _build_session(
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
+                    is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -857,6 +863,7 @@ def _build_session(
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
+                    is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -981,6 +988,7 @@ def _build_session(
                 user_preferences=profile.exercises_to_include,
                 vbt_enabled=strategy.vbt_enabled,
                 training_level=profile.training_level,
+                is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
             )
             score += get_week_variety_penalty(ex)
 
@@ -1097,6 +1105,7 @@ def _build_session(
                     user_preferences=profile.exercises_to_include,
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
+                    is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
                 )
                 # FIX 2: Apply same-week variety penalty
                 score += get_week_variety_penalty(ex)
@@ -1164,6 +1173,12 @@ def _build_session(
                             remaining_volume[muscle_key] = remaining_volume.get(muscle_key, 0) - credit
                         break
 
+    # Detect if session is time-constrained (for set type selection)
+    session_time_limited = (
+        profile.session_duration_minutes <= 45
+        or (profile.training_season == TrainingSeason.IN_SEASON)
+    )
+
     # Prescribe exercises
     prescribed_exercises = []
     for idx, (exercise, sets) in enumerate(selected_exercises):
@@ -1174,6 +1189,8 @@ def _build_session(
             program_goal=profile.training_goal,
             vbt_enabled=strategy.vbt_enabled,
             vbt_protocol=strategy.vbt_protocol,
+            training_level=profile.training_level,
+            session_duration_limited=session_time_limited,
         )
 
         # Calculate muscle contributions
@@ -1227,6 +1244,13 @@ def _build_session(
         for muscle, contribution in ex.muscle_contributions.items():
             volume_delivered[muscle] = volume_delivered.get(muscle, 0) + contribution
 
+    # V6: Generate structured warm-up protocol
+    warmup_protocol = _generate_warmup_protocol(
+        prescribed_exercises=prescribed_exercises,
+        session_template=session_template,
+        profile=profile,
+    )
+
     return BuiltWorkout(
         day_number=day_number,
         day_label=session_template.day_label,
@@ -1236,8 +1260,187 @@ def _build_session(
         estimated_duration_minutes=estimated_duration,
         volume_check=volume_delivered,
         volume_delivered=volume_delivered,
-        warmup_notes="5-10 min general warmup: light cardio, dynamic stretching, mobility work",
+        warmup_notes=_warmup_protocol_to_notes(warmup_protocol),
+        warmup_protocol=warmup_protocol,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6: WARM-UP PROTOCOL GENERATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Dynamic stretches mapped by movement pattern
+_DYNAMIC_STRETCHES_BY_PATTERN = {
+    MovementPattern.SQUAT: [
+        "Bodyweight squats × 10",
+        "Hip circles × 10 each direction",
+        "Walking knee hugs × 8 each leg",
+    ],
+    MovementPattern.HIP_HINGE: [
+        "Hip hinges with dowel × 10",
+        "Leg swings (front-back) × 10 each leg",
+        "Inchworms × 6",
+    ],
+    MovementPattern.HORIZONTAL_PUSH: [
+        "Arm circles × 10 each direction",
+        "Band pull-aparts × 15",
+        "Push-up to downward dog × 6",
+    ],
+    MovementPattern.HORIZONTAL_PULL: [
+        "Band pull-aparts × 15",
+        "Cat-cow stretches × 8",
+        "Scapular push-ups × 10",
+    ],
+    MovementPattern.VERTICAL_PUSH: [
+        "Arm circles × 10 each direction",
+        "Wall slides × 10",
+        "Band dislocates × 10",
+    ],
+    MovementPattern.VERTICAL_PULL: [
+        "Dead hangs × 15-20 seconds",
+        "Scapular pull-ups × 8",
+        "Band pull-aparts × 15",
+    ],
+    MovementPattern.LUNGE: [
+        "Walking lunges (bodyweight) × 8 each leg",
+        "Lateral lunges × 6 each side",
+        "Hip flexor stretch (dynamic) × 8 each leg",
+    ],
+    MovementPattern.POWER_LOWER: [
+        "Pogo hops × 15",
+        "Bodyweight squat jumps × 6",
+        "Ankle bounces × 15",
+    ],
+    MovementPattern.POWER_UPPER: [
+        "Medicine ball slams (or explosive push-ups) × 6",
+        "Arm circles (fast) × 15 each direction",
+    ],
+    MovementPattern.CORE: [
+        "Dead bugs × 8 each side",
+        "Bird dogs × 8 each side",
+    ],
+}
+
+# Activation exercises by muscle group
+_ACTIVATION_BY_MUSCLE = {
+    MuscleGroup.GLUTES: "Glute bridges × 12",
+    MuscleGroup.QUADS: "Bodyweight squats × 10",
+    MuscleGroup.HAMSTRINGS: "Single-leg RDL (bodyweight) × 8 each",
+    MuscleGroup.LATS: "Band straight-arm pulldown × 12",
+    MuscleGroup.UPPER_BACK: "Band face pulls × 15",
+    MuscleGroup.CHEST: "Band chest fly × 12",
+    MuscleGroup.SIDE_DELTS: "Band lateral raises × 12",
+    MuscleGroup.REAR_DELTS: "Band pull-aparts × 15",
+    MuscleGroup.ABS: "Dead bugs × 8 each side",
+}
+
+
+def _generate_warmup_protocol(
+    prescribed_exercises: list[PrescribedExercise],
+    session_template,
+    profile: AthleteProfile,
+) -> WarmUpProtocol:
+    """
+    Generate a structured warm-up protocol based on session content and athlete profile.
+
+    Components:
+    1. General warm-up (cardio) — 5 min standard, 8-10 min for 40+
+    2. Dynamic stretches — based on movement patterns in session
+    3. Activation exercises — based on target muscles
+    4. Warm-up sets — ramping sets for the first heavy compound
+    """
+    age = profile.age
+
+    # 1. General warm-up
+    general_warmup = ["5 minutes: jump rope, light jog, or rowing"]
+    if age is not None and age >= 40:
+        general_warmup = ["8-10 minutes: light cardio (bike, row, or brisk walk)"]
+        if age >= 55:
+            general_warmup.append("Joint mobility: wrist circles, ankle circles, shoulder circles × 10 each")
+
+    # 2. Dynamic stretches — collect unique stretches based on session's movement patterns
+    seen_stretches: set[str] = set()
+    dynamic_stretches: list[str] = []
+
+    for pattern in session_template.required_movement_patterns:
+        for stretch in _DYNAMIC_STRETCHES_BY_PATTERN.get(pattern, []):
+            if stretch not in seen_stretches:
+                seen_stretches.add(stretch)
+                dynamic_stretches.append(stretch)
+                if len(dynamic_stretches) >= 5:
+                    break
+        if len(dynamic_stretches) >= 5:
+            break
+
+    # 3. Activation exercises — pick 2-3 based on primary muscles in session
+    activation_exercises: list[str] = []
+    seen_activations: set[str] = set()
+    for muscle in session_template.muscle_groups[:6]:
+        activation = _ACTIVATION_BY_MUSCLE.get(muscle)
+        if activation and activation not in seen_activations:
+            seen_activations.add(activation)
+            activation_exercises.append(activation)
+            if len(activation_exercises) >= 3:
+                break
+
+    # 4. Warm-up sets for the first heavy compound
+    warmup_sets: list[WarmUpSet] = []
+    first_compound = None
+    for ex in prescribed_exercises:
+        if ex.exercise_type in (ExerciseType.HEAVY_COMPOUND, ExerciseType.POWER):
+            first_compound = ex
+            break
+
+    if first_compound:
+        # Ramping warm-up: bar → 50% → 65% → 80% → working weight
+        warmup_sets = [
+            WarmUpSet(
+                exercise_name=first_compound.exercise_name,
+                percent_of_working=None,
+                reps=10,
+                notes="Empty bar — focus on movement quality",
+            ),
+            WarmUpSet(
+                exercise_name=first_compound.exercise_name,
+                percent_of_working=0.50,
+                reps=5,
+                notes="50% of working weight",
+            ),
+            WarmUpSet(
+                exercise_name=first_compound.exercise_name,
+                percent_of_working=0.65,
+                reps=3,
+                notes="65% of working weight",
+            ),
+            WarmUpSet(
+                exercise_name=first_compound.exercise_name,
+                percent_of_working=0.80,
+                reps=1,
+                notes="80% of working weight — final warm-up",
+            ),
+        ]
+
+    return WarmUpProtocol(
+        general_warmup=general_warmup,
+        dynamic_stretches=dynamic_stretches,
+        activation_exercises=activation_exercises,
+        warmup_sets=warmup_sets,
+    )
+
+
+def _warmup_protocol_to_notes(protocol: WarmUpProtocol) -> str:
+    """Convert a WarmUpProtocol to a human-readable warmup_notes string."""
+    parts = []
+    if protocol.general_warmup:
+        parts.append("General: " + "; ".join(protocol.general_warmup))
+    if protocol.dynamic_stretches:
+        parts.append("Dynamic stretches: " + ", ".join(protocol.dynamic_stretches[:3]))
+    if protocol.activation_exercises:
+        parts.append("Activation: " + ", ".join(protocol.activation_exercises[:2]))
+    if protocol.warmup_sets:
+        compound = protocol.warmup_sets[0].exercise_name
+        parts.append(f"Ramp-up sets for {compound}: bar → 50% × 5 → 65% × 3 → 80% × 1")
+    return ". ".join(parts) if parts else "5-10 min general warmup"
 
 
 def _update_recently_used(built_week: BuiltWeek, recently_used: dict[str, list]):

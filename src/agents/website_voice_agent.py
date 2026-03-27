@@ -419,13 +419,81 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Specific sport: {sport_name}")
 
-            result = None, "Captured. Now immediately ask Question 9 about additional notes (optional)."
+            result = None, "Captured. Now immediately ask Question 9 about training season (only if they named a sport, otherwise skip to Question 11 about additional notes)."
             self._log_function_call(function_name, parameters, result)
             return result
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to capture specific sport: {e}")
             result = None, "Error capturing sport. Please tell me the sport again."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+    @function_tool
+    async def capture_training_season(self, context: RunContext, training_season: str):
+        """
+        Call this when the user specifies their current training season.
+        Only ask this if the user plays a sport — skip for general fitness.
+
+        Args:
+            training_season: "off_season", "pre_season", "in_season", or "post_season"
+        """
+        function_name = "capture_training_season"
+        parameters = {"training_season": training_season}
+
+        try:
+            season = training_season.lower().strip().replace(" ", "_").replace("-", "_")
+            valid_seasons = {"off_season", "pre_season", "in_season", "post_season"}
+            if season not in valid_seasons:
+                season = "off_season"
+
+            if "program_creation" not in self.state:
+                self.state["program_creation"] = {}
+            self.state["program_creation"]["training_season"] = season
+
+            logger.info(f"[PROGRAM] Training season: {season}")
+
+            if season == "in_season":
+                result = None, "Captured. Now immediately ask Question 10 about how many games or competitions per week."
+            else:
+                result = None, "Captured. Now immediately ask Question 11 about additional notes (optional)."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to capture training season: {e}")
+            result = None, "Error capturing training season. Please tell me your season again."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+    @function_tool
+    async def capture_games_per_week(self, context: RunContext, games_per_week: int):
+        """
+        Call this when the user specifies how many games or competitions they have per week.
+        Only ask this if the user is in-season. Skip otherwise.
+
+        Args:
+            games_per_week: Number of games/competitions per week (0-7)
+        """
+        function_name = "capture_games_per_week"
+        parameters = {"games_per_week": games_per_week}
+
+        try:
+            games = max(0, min(7, games_per_week))
+
+            if "program_creation" not in self.state:
+                self.state["program_creation"] = {}
+            self.state["program_creation"]["games_per_week"] = games
+
+            logger.info(f"[PROGRAM] Games per week: {games}")
+
+            result = None, "Captured. Now immediately ask Question 11 about additional notes (optional)."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to capture games per week: {e}")
+            result = None, "Error capturing games per week. Please tell me the number again."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -448,13 +516,46 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] User notes: {notes}")
 
-            result = None, "Captured. Now immediately ask Question 10 about fitness level (LAST QUESTION)."
+            result = None, "Captured. Now immediately ask Question 12 about equipment access (home gym, full gym, or specialty facility)."
             self._log_function_call(function_name, parameters, result)
             return result
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to capture user notes: {e}")
             result = None, "Error capturing notes. Please tell me your preferences again."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+    @function_tool
+    async def capture_equipment_tier(self, context: RunContext, equipment_tier: int):
+        """
+        Call this when the user describes their gym equipment access.
+        1 = basic/home gym (barbell, rack, bench)
+        2 = full gym (machines + free weights)
+        3 = specialty facility (competition equipment, specialty bars)
+
+        Args:
+            equipment_tier: 1, 2, or 3
+        """
+        function_name = "capture_equipment_tier"
+        parameters = {"equipment_tier": equipment_tier}
+
+        try:
+            tier = max(1, min(3, equipment_tier))
+
+            if "program_creation" not in self.state:
+                self.state["program_creation"] = {}
+            self.state["program_creation"]["equipment_tier"] = tier
+
+            logger.info(f"[PROGRAM] Equipment tier: {tier}")
+
+            result = None, "Captured. Now immediately ask the LAST question about fitness level (beginner, intermediate, or advanced)."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to capture equipment tier: {e}")
+            result = None, "Error capturing equipment tier. Please tell me again."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -620,7 +721,11 @@ class WebsiteVoiceAgent(Agent):
                 "user_notes": program_params.get("user_notes", None),
                 "fitness_level": program_params["fitness_level"],
                 "has_vbt_capability": program_params.get("has_vbt_capability", False),
-                "send_email": True  # Website users always get email
+                "send_email": True,  # Website users always get email
+                # V6 fields
+                "training_season": program_params.get("training_season"),
+                "games_per_week": program_params.get("games_per_week", 0),
+                "equipment_tier": program_params.get("equipment_tier", 2),
             }
 
             # Call FastAPI endpoint

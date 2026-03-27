@@ -42,6 +42,9 @@ export const FormInterface = () => {
         has_vbt_capability: data.has_vbt_capability,
         user_notes: data.user_notes || '',
         send_email: true,
+        training_season: data.training_season || undefined,
+        games_per_week: data.games_per_week ? parseInt(data.games_per_week) : 0,
+        equipment_tier: data.equipment_tier ? parseInt(data.equipment_tier) : 2,
       };
 
       const response = await programsApi.generateProgram(requestData);

@@ -9,7 +9,7 @@ def get_website_agent_prompt() -> str:
     This agent:
     1. Greets the user and asks for their name
     2. Creates their account
-    3. Collects fitness parameters (10 questions)
+    3. Collects fitness parameters (up to 13 questions, some conditional)
     4. Submits program for generation
     5. Ends conversation (program sent via email later)
 
@@ -76,7 +76,7 @@ When the conversation starts:
    - Example: "Perfect! S-K-Y-L-A, Skyla. Got it!"
 - Once name is confirmed, flow to Question 1 in the SAME turn
 
-### STEP 2: PROGRAM PARAMETERS (10 QUESTIONS)
+### STEP 2: PROGRAM PARAMETERS (up to 13 QUESTIONS, some conditional)
 
 **CRITICAL RULES:**
 1. After EACH function call, the tool returns a "Captured" message telling you what to do next
@@ -128,14 +128,30 @@ When the conversation starts:
 8. **Specific Sport** (OPTIONAL):
    "Are you training for a specific sport, or is this general fitness?"
    - Call `capture_specific_sport(sport_name)`
-   - Returns: "Captured. Now immediately ask Question 9 about user notes."
+   - Returns: "Captured. Now ask about training season (if sport) or skip to notes."
 
-9. **Additional Notes** (OPTIONAL):
+9. **Training Season** (OPTIONAL — ONLY if they named a sport):
+   "What part of the season are you in? Off-season, pre-season, in-season, or post-season?"
+   - Call `capture_training_season(season)` with "off_season", "pre_season", "in_season", or "post_season"
+   - If they said "none" for sport, SKIP this question entirely
+   - Returns: If in-season, asks about games per week next. Otherwise, skips to notes.
+
+10. **Games Per Week** (OPTIONAL — ONLY if in-season):
+    "How many games or competitions do you have per week?"
+    - Call `capture_games_per_week(number)`
+    - If NOT in-season, SKIP this question entirely
+
+11. **Additional Notes** (OPTIONAL):
    Ask if they have any other preferences or requirements. Mention that the program is designed for barbell training, so if they have other equipment like dumbbells, resistance bands, or anything else they want included, they should let you know now.
    - Call `capture_user_notes(notes)`
-   - Returns: "Captured. Now immediately ask Question 10 about fitness level."
+   - Returns: "Captured. Now ask about equipment access."
 
-10. **Fitness Level**:
+12. **Equipment Access**:
+    "What kind of gym setup do you have? A basic home gym with a barbell and rack, a full commercial gym, or a specialty training facility?"
+    - Call `capture_equipment_tier(tier)` with 1 (basic/home), 2 (full gym), or 3 (specialty facility)
+    - Returns: "Captured. Now ask the LAST question about fitness level."
+
+13. **Fitness Level**:
     "Last question! How would you describe your fitness level? Beginner, intermediate, or advanced?"
     - Call `capture_fitness_level(fitness_level)`
     - Returns: "All parameters collected! Now immediately call update_user_profile() to save their info to the database, then generate the program."
@@ -190,6 +206,9 @@ After `generate_workout_program()` returns success:
 - Fitness level: "beginner", "intermediate", "advanced"
 - Duration: 2-52 weeks
 - Frequency: 1-7 days per week
+- Training season: "off_season", "pre_season", "in_season", "post_season"
+- Games per week: 0-7
+- Equipment tier: 1 (basic/home), 2 (full gym), 3 (specialty)
 
 **Response Guidelines:**
 

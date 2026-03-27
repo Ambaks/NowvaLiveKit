@@ -1,5 +1,5 @@
 """
-V5 Layer 1: Profile Builder
+V6 Layer 1: Profile Builder
 
 Two input paths:
 A) Structured input (from API/form) → deterministic profile construction. No LLM.
@@ -8,8 +8,13 @@ B) Natural language input (from voice agent) → LLM extraction.
 Computes derived fields:
 - effective_goal (after sport mapping)
 - sport_adjustments (volume_modifier, emphasis_muscles, etc.)
-- available_exercises (filtered by tier, avoiding injuries)
+- available_exercises (filtered by tier, age, avoiding injuries)
 - exercise_coverage_warnings (muscles with sparse options)
+
+V6 additions:
+- Age-tiered difficulty caps (youth safety, senior joint-friendliness)
+- Training season processing
+- Sex-aware profile construction
 """
 
 from __future__ import annotations
@@ -17,10 +22,35 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from .schemas import AthleteProfile, EquipmentTier, MuscleGroup
+from .schemas import AthleteProfile, EquipmentTier, MuscleGroup, TrainingSeason
 from .exercise_library import EXERCISE_LIBRARY
 from .sport_mappings import get_sport_adjustments
 from .prompts import format_profile_extraction_prompt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6: AGE-TIERED DIFFICULTY CAPS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maps (age_low, age_high) → max exercise difficulty allowed
+_AGE_DIFFICULTY_CAPS: dict[tuple[int, int], int] = {
+    (10, 13): 2,   # Prepubescent: bodyweight focus, movement literacy
+    (14, 15): 3,   # Early pubescent: light loads, technique emphasis
+    (16, 17): 4,   # Late pubescent: full loading with proper technique
+    (18, 54): 5,   # Standard adult: no cap
+    (55, 64): 4,   # Older masters: avoid highest-difficulty exercises
+    (65, 100): 3,  # Seniors: joint-friendly, lower complexity
+}
+
+
+def _get_age_difficulty_cap(age: int | None) -> int:
+    """Return the max exercise difficulty for a given age. Defaults to 5 (no cap)."""
+    if age is None:
+        return 5
+    for (lo, hi), cap in _AGE_DIFFICULTY_CAPS.items():
+        if lo <= age <= hi:
+            return cap
+    return 5
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,6 +128,23 @@ def build_profile_from_structured(data: dict) -> AthleteProfile:
     sport = data.get("sport")
     vbt_capability = bool(data.get("vbt_capability", False))
 
+    # V6: Training season fields
+    training_season_raw = data.get("training_season")
+    training_season = None
+    if training_season_raw:
+        try:
+            training_season = TrainingSeason(training_season_raw)
+        except ValueError:
+            training_season = None
+
+    games_per_week = int(data.get("games_per_week", 0))
+    competition_date = data.get("competition_date")
+
+    # V6: In-season auto-adjustments
+    if training_season == TrainingSeason.IN_SEASON:
+        # Cap training days: max(2, days - games)
+        training_days_per_week = max(2, min(training_days_per_week, training_days_per_week - games_per_week))
+
     # ── Compute Derived Fields ──────────────────────────────────────────────
 
     # 1. Sport mapping → effective_goal and sport_adjustments
@@ -113,12 +160,13 @@ def build_profile_from_structured(data: dict) -> AthleteProfile:
             forbidden = adj.get("forbidden_exercises", [])
             exercises_to_avoid = list(set(exercises_to_avoid + forbidden))
 
-    # 2. Filter available exercises
+    # 2. Filter available exercises (V6: age-aware filtering)
     available_exercises, coverage_warnings = _filter_exercises_for_profile(
         equipment_tier=equipment_tier,
         training_level=training_level,
         exercises_to_avoid=exercises_to_avoid,
         injuries=injuries,
+        age=age,
     )
 
     return AthleteProfile(
@@ -141,6 +189,10 @@ def build_profile_from_structured(data: dict) -> AthleteProfile:
         recovery_capacity=recovery_capacity,
         weak_points=weak_points,
         vbt_capability=vbt_capability,
+        # V6 fields
+        training_season=training_season,
+        games_per_week=games_per_week,
+        competition_date=competition_date,
         # Derived
         effective_goal=effective_goal,
         sport_adjustments=sport_adjustments,
@@ -209,6 +261,12 @@ async def build_profile_from_natural_language(
         "exercises_to_include": merged.get("exercises_to_include", []),
         "weak_points": merged.get("weak_points", []),
         "recovery_capacity": _map_recovery_notes(merged.get("recovery_notes")),
+        # V6 fields
+        "age": merged.get("age"),
+        "sex": merged.get("sex"),
+        "training_season": merged.get("training_season"),
+        "games_per_week": merged.get("games_per_week", 0),
+        "competition_date": merged.get("competition_date"),
     }
 
     # Use structured path to build the final profile
@@ -249,17 +307,25 @@ def _filter_exercises_for_profile(
     training_level: str,
     exercises_to_avoid: list[str],
     injuries: list[dict],
+    age: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """
-    Filter exercises based on equipment tier, training level, and constraints.
+    Filter exercises based on equipment tier, training level, age, and constraints.
+
+    V6: Age-tiered difficulty caps and youth safety filtering.
 
     Returns:
         (available_exercise_ids, coverage_warnings)
     """
     available = []
 
-    # Difficulty cap by level
-    difficulty_cap = {"beginner": 3, "intermediate": 4, "advanced": 5}.get(training_level, 4)
+    # Difficulty cap: take the LOWER of level-based and age-based caps
+    level_cap = {"beginner": 3, "intermediate": 4, "advanced": 5}.get(training_level, 4)
+    age_cap = _get_age_difficulty_cap(age)
+    difficulty_cap = min(level_cap, age_cap)
+
+    # V6: Block Olympic lifts for youth under 14
+    block_olympic = age is not None and age < 14
 
     # Build set of exercises to avoid from injuries
     injury_avoids = set(exercises_to_avoid)
@@ -282,6 +348,10 @@ def _filter_exercises_for_profile(
 
         # Check proficiency requirement
         if ex.requires_proficiency and training_level == "beginner":
+            continue
+
+        # V6: Block Olympic lifts for youth under 14
+        if block_olympic and ex.requires_proficiency:
             continue
 
         available.append(ex.id)

@@ -1,8 +1,12 @@
 """
-V5 Split Templates — All training split definitions and the selection decision tree.
+V6 Split Templates — All training split definitions and the selection decision tree.
 
 Each SplitTemplate specifies how training days are structured across the week.
 SessionTemplates define which muscle groups and movement patterns each day covers.
+
+V6 additions:
+- In-season 2x template (game-day-aware)
+- Maintenance 2x template for in-season athletes
 """
 
 from .schemas import (
@@ -446,6 +450,54 @@ UPPER_LOWER_2X = SplitTemplate(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# V6: IN-SEASON MAINTENANCE 2x
+# Heavy compounds + power maintenance. 2 sessions max, 30-45 min each.
+# Session 1 (game+1 day): Heavy compounds, 85%+ 1RM, 3-5 reps
+# Session 2 (game-3 day): Moderate/power emphasis, dynamic effort
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MAINTENANCE_HEAVY = SessionTemplate(
+    day_label="Heavy (Game+1)",
+    session_type="maintenance_heavy",
+    muscle_groups=[
+        MG.QUADS, MG.HAMSTRINGS, MG.GLUTES,
+        MG.CHEST, MG.LATS, MG.UPPER_BACK,
+    ],
+    required_movement_patterns=[
+        MP.SQUAT, MP.HIP_HINGE, MP.HORIZONTAL_PUSH,
+    ],
+    optional_movement_patterns=[MP.HORIZONTAL_PULL],
+    max_exercises=5,
+    max_duration_minutes=40,
+    is_primary=True,
+)
+
+_MAINTENANCE_POWER = SessionTemplate(
+    day_label="Power (Game-3)",
+    session_type="maintenance_power",
+    muscle_groups=[
+        MG.QUADS, MG.HAMSTRINGS, MG.GLUTES,
+        MG.CHEST, MG.LATS, MG.UPPER_BACK,
+        MG.SIDE_DELTS, MG.BICEPS, MG.TRICEPS,
+    ],
+    required_movement_patterns=[
+        MP.POWER_LOWER, MP.HORIZONTAL_PUSH, MP.HORIZONTAL_PULL,
+    ],
+    optional_movement_patterns=[MP.ISOLATION_PUSH, MP.ISOLATION_PULL],
+    max_exercises=5,
+    max_duration_minutes=40,
+    is_primary=True,
+)
+
+MAINTENANCE_2X = SplitTemplate(
+    split_id="maintenance_2x",
+    name="In-Season Maintenance 2-Day Split",
+    sessions_per_week=[_MAINTENANCE_HEAVY, _MAINTENANCE_POWER],
+    suitable_levels=["beginner", "intermediate", "advanced"],
+    suitable_goals=["power", "strength", "hypertrophy"],
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # REGISTRY
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -458,6 +510,7 @@ SPLIT_TEMPLATES: dict[str, SplitTemplate] = {
     "full_body_3x":    FULL_BODY_3X,
     "concurrent_4x":   CONCURRENT_4X,
     "concurrent_5x":   CONCURRENT_5X,
+    "maintenance_2x":  MAINTENANCE_2X,
 }
 
 

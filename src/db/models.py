@@ -166,6 +166,9 @@ class Set(Base):
     rpe = Column(DECIMAL(3, 1))
     rest_seconds = Column(Integer)
 
+    # V6: Advanced set type
+    set_type = Column(String(20), nullable=True, default="standard")  # standard, cluster, rest_pause, myo_rep, drop_set, back_off, amrap, wave
+
     # Velocity-Based Training (VBT) fields
     velocity_threshold = Column(DECIMAL(4, 2), nullable=True)  # Target velocity (m/s)
     velocity_min = Column(DECIMAL(4, 2), nullable=True)        # Minimum velocity threshold

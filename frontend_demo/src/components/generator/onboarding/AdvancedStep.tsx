@@ -1,10 +1,11 @@
 import { OnboardingStep } from './OnboardingStep';
-import { Gauge, FileText } from 'lucide-react';
+import { Gauge, FileText, Wrench } from 'lucide-react';
 
 interface AdvancedStepProps {
   data: {
     has_vbt_capability: boolean;
     user_notes: string;
+    equipment_tier: string;
   };
   onChange: (field: string, value: string | boolean) => void;
 }
@@ -48,6 +49,35 @@ export const AdvancedStep = ({ data, onChange }: AdvancedStepProps) => {
           >
             No VBT equipment
           </button>
+        </div>
+      </div>
+
+      <div>
+        <label className="flex items-center text-sm font-medium mb-3">
+          <Wrench className="w-4 h-4 mr-2 text-accent" />
+          What equipment do you have access to?
+        </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {[
+            { value: '1', label: 'Basic / Home Gym', desc: 'Barbell, rack, bench, plates' },
+            { value: '2', label: 'Full Gym', desc: 'Full machine & free weight access' },
+            { value: '3', label: 'Specialty Facility', desc: 'Competition equipment, specialty bars, platforms' },
+          ].map((option) => (
+            <button
+              key={option.value}
+              onClick={() => onChange('equipment_tier', option.value)}
+              className={`
+                p-4 rounded-lg border-2 text-left transition-all
+                ${data.equipment_tier === option.value
+                  ? 'border-accent bg-accent/10'
+                  : 'border-surface-light hover:border-accent/50'
+                }
+              `}
+            >
+              <div className="font-medium text-sm">{option.label}</div>
+              <div className="text-xs text-foreground-tertiary mt-0.5">{option.desc}</div>
+            </button>
+          ))}
         </div>
       </div>
 

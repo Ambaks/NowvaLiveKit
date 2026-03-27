@@ -670,6 +670,44 @@ class ProgramCreationAgent(BaseNovaAgent):
         return None, "Captured. Immediately ask the next question."
 
     @function_tool
+    async def capture_training_season(self, context: RunContext, training_season: str):
+        """
+        Call this when the user specifies their current training season.
+        Only ask this if the user plays a sport — skip for general fitness.
+
+        Args:
+            training_season: "off_season", "pre_season", "in_season", "post_season", or "none"
+        """
+        logger.info(f"[PROGRAM] Capturing training season: {training_season}")
+
+        season = training_season.lower().strip()
+        valid_seasons = {"off_season", "pre_season", "in_season", "post_season"}
+        if season not in valid_seasons:
+            season = None  # Will use off_season behavior by default
+
+        self.state.set("program_creation.training_season", season)
+        logger.info(f"[PROGRAM] Training season set to: {season}")
+
+        return None, "Captured. Immediately ask the next question."
+
+    @function_tool
+    async def capture_games_per_week(self, context: RunContext, games_per_week: int):
+        """
+        Call this when the user specifies how many games or competitions they have per week.
+        Only ask this if the user is in-season. Skip otherwise.
+
+        Args:
+            games_per_week: Number of games/competitions per week (0-7)
+        """
+        logger.info(f"[PROGRAM] Capturing games per week: {games_per_week}")
+
+        games = max(0, min(7, games_per_week))
+        self.state.set("program_creation.games_per_week", games)
+        logger.info(f"[PROGRAM] Games per week set to: {games}")
+
+        return None, "Captured. Immediately ask the next question."
+
+    @function_tool
     async def capture_user_notes(self, context: RunContext, notes: str):
         """
         Call this when the user provides additional notes or preferences.
@@ -786,6 +824,9 @@ class ProgramCreationAgent(BaseNovaAgent):
         user_notes = self.state.get("program_creation.user_notes")
         fitness_level = self.state.get("program_creation.fitness_level")
         has_vbt_capability = self.state.get("program_creation.has_vbt_capability", False)
+        # V6 fields
+        training_season = self.state.get("program_creation.training_season")
+        games_per_week = self.state.get("program_creation.games_per_week", 0)
 
         missing = []
         if not height_cm: missing.append("height_cm")
@@ -821,7 +862,10 @@ class ProgramCreationAgent(BaseNovaAgent):
                 "specific_sport": specific_sport,
                 "user_notes": user_notes,
                 "fitness_level": fitness_level,
-                "has_vbt_capability": has_vbt_capability
+                "has_vbt_capability": has_vbt_capability,
+                # V6 fields
+                "training_season": training_season,
+                "games_per_week": games_per_week or 0,
             }
 
             fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")

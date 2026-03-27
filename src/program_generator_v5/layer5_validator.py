@@ -32,9 +32,11 @@ from .schemas import (
     PrescribedSet,
     Exercise,
     ExerciseType,
+    EccentricStress,
     MovementPattern,
     MuscleGroup,
     MutationResult,
+    TrainingSeason,
 )
 from .volume_tables import get_volume_targets, VOLUME_TABLES
 from .exercise_library import EXERCISE_LIBRARY
@@ -175,6 +177,10 @@ def run_all_validations(
 
     # Movement pattern checks
     issues.extend(_check_movement_patterns(program, strategy))                 # PAT_001
+
+    # V6: Population-specific checks
+    issues.extend(_check_youth_safety(program, profile))                       # AGE_001
+    issues.extend(_check_in_season_limits(program, profile, strategy))         # SEA_001
 
     return issues
 
@@ -1381,3 +1387,124 @@ def _group_by_rule(issues: list[dict]) -> dict[str, int]:
         rule_id = issue.get("rule_id", "unknown")
         counts[rule_id] = counts.get(rule_id, 0) + 1
     return counts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6: POPULATION-SPECIFIC CHECKS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Age-tiered difficulty caps (same as layer1)
+_AGE_DIFFICULTY_CAPS: dict[tuple[int, int], int] = {
+    (10, 13): 2,
+    (14, 15): 3,
+    (16, 17): 4,
+    (18, 54): 5,
+    (55, 64): 4,
+    (65, 100): 3,
+}
+
+
+def _get_age_difficulty_cap(age: int | None) -> int:
+    if age is None:
+        return 5
+    for (lo, hi), cap in _AGE_DIFFICULTY_CAPS.items():
+        if lo <= age <= hi:
+            return cap
+    return 5
+
+
+def _check_youth_safety(
+    program: BuiltProgram,
+    profile: AthleteProfile,
+) -> list[dict]:
+    """AGE_001: Ensure youth athletes don't get exercises exceeding their difficulty cap."""
+    issues = []
+
+    if profile.age is None or profile.age >= 18:
+        return issues
+
+    difficulty_cap = _get_age_difficulty_cap(profile.age)
+
+    for week in program.weeks:
+        for workout_idx, workout in enumerate(week.workouts):
+            for ex in workout.exercises:
+                ex_def = EXERCISE_BY_ID.get(ex.exercise_id)
+                if ex_def and ex_def.difficulty > difficulty_cap:
+                    issues.append(_issue(
+                        rule_id="AGE_001",
+                        severity="critical",
+                        message=(
+                            f"Exercise '{ex.exercise_name}' (difficulty={ex_def.difficulty}) "
+                            f"exceeds youth cap ({difficulty_cap}) for age {profile.age}"
+                        ),
+                        week=week.week_number,
+                        session=workout_idx + 1,
+                        exercise_id=ex.exercise_id,
+                    ))
+
+                # Block Olympic lifts for under-14
+                if profile.age < 14 and ex_def and ex_def.requires_proficiency:
+                    issues.append(_issue(
+                        rule_id="AGE_001",
+                        severity="critical",
+                        message=(
+                            f"Exercise '{ex.exercise_name}' requires proficiency "
+                            f"and is blocked for athletes under 14 (age={profile.age})"
+                        ),
+                        week=week.week_number,
+                        session=workout_idx + 1,
+                        exercise_id=ex.exercise_id,
+                    ))
+
+    return issues
+
+
+def _check_in_season_limits(
+    program: BuiltProgram,
+    profile: AthleteProfile,
+    strategy: ProgramStrategy,
+) -> list[dict]:
+    """SEA_001: Ensure in-season programs respect volume and session limits."""
+    issues = []
+
+    if not (profile.training_season and profile.training_season.value == "in_season"):
+        return issues
+
+    for week in program.weeks:
+        # Check session count (max 2 for in-season + games)
+        workout_count = len(week.workouts)
+        max_sessions = max(2, profile.training_days_per_week)
+        if workout_count > max_sessions:
+            issues.append(_issue(
+                rule_id="SEA_001",
+                severity="major",
+                message=(
+                    f"Week {week.week_number}: {workout_count} sessions exceeds "
+                    f"in-season max of {max_sessions}"
+                ),
+                week=week.week_number,
+            ))
+
+        # Check that high-eccentric exercises are minimized
+        for workout_idx, workout in enumerate(week.workouts):
+            high_eccentric_count = 0
+            for ex in workout.exercises:
+                ex_def = EXERCISE_BY_ID.get(ex.exercise_id)
+                if ex_def and hasattr(ex_def, 'eccentric_stress'):
+                    if ex_def.eccentric_stress == EccentricStress.HIGH:
+                        high_eccentric_count += 1
+
+            if high_eccentric_count > 2:
+                issues.append(_issue(
+                    rule_id="SEA_001",
+                    severity="warning",
+                    message=(
+                        f"Week {week.week_number}, session {workout_idx + 1}: "
+                        f"{high_eccentric_count} high-eccentric exercises may cause "
+                        f"excessive DOMS for in-season athlete"
+                    ),
+                    week=week.week_number,
+                    session=workout_idx + 1,
+                ))
+
+    return issues

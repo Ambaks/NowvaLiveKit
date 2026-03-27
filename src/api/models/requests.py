@@ -40,6 +40,30 @@ class ProgramGenerationRequest(BaseModel):
         default=False,
         description="Whether user has velocity-based training equipment available"
     )
+
+    # V6: Training season & competition awareness
+    training_season: Optional[str] = Field(
+        default=None,
+        pattern="^(off_season|pre_season|in_season|post_season)$",
+        description="Current training season phase (off_season, pre_season, in_season, post_season). Defaults to off_season behavior when null."
+    )
+    games_per_week: Optional[int] = Field(
+        default=0,
+        ge=0,
+        le=7,
+        description="Number of games/competitions per week (relevant for in-season athletes)"
+    )
+    competition_date: Optional[str] = Field(
+        default=None,
+        description="ISO date (YYYY-MM-DD) for target competition/peaking date. Enables block periodization auto-timing."
+    )
+    equipment_tier: Optional[int] = Field(
+        default=1,
+        ge=1,
+        le=3,
+        description="Equipment tier: 1=barbell+rack+bench+pull-up bar, 2=+dumbbells, 3=+bands"
+    )
+
     user_notes: Optional[str] = Field(
         default=None,
         max_length=2000,
@@ -67,7 +91,11 @@ class ProgramGenerationRequest(BaseModel):
                 "injury_history": "previous right shoulder impingement (2 years ago, fully healed)",
                 "specific_sport": "powerlifting",
                 "has_vbt_capability": True,
-                "user_notes": "Prefer front squats over back squats. Available equipment includes competition-spec barbell and calibrated plates. Training for a meet in 12 weeks."
+                "training_season": "off_season",
+                "games_per_week": 0,
+                "competition_date": "2026-06-15",
+                "equipment_tier": 2,
+                "user_notes": "Prefer front squats over back squats. Training for a meet in 12 weeks."
             }
         }
 

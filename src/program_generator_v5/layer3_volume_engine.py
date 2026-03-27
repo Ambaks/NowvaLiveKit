@@ -1,5 +1,5 @@
 """
-V5 Layer 3: Volume Engine
+V6 Layer 3: Volume Engine
 
 100% deterministic. No LLM calls. Pure math.
 
@@ -9,6 +9,13 @@ Calculates weekly volume targets per muscle group based on:
 - Week profile (volume_multiplier, is_deload)
 - Sport adjustments, recovery capacity, weak points
 - Distributes weekly volume across sessions
+
+V6 additions:
+- MV (Maintenance Volume) floor for in-season / deloads
+- Age-tiered volume multipliers (youth safety, senior joint care)
+- Sex-based volume modifier (females +10%)
+- In-season volume reduction (40-60%)
+- Training season awareness
 
 Algorithm from spec § Layer 3.
 """
@@ -26,8 +33,9 @@ from .schemas import (
     SessionVolumeTarget,
     MuscleGroup,
     MovementPattern,
+    TrainingSeason,
 )
-from .volume_tables import get_volume_targets
+from .volume_tables import get_volume_targets, get_age_multiplier, get_sex_modifier
 
 
 def calculate_volume(
@@ -72,15 +80,22 @@ def _calculate_week_volume(
     for muscle in MuscleGroup:
         muscle_key = muscle.value
 
-        # Get base MEV/MAV/MRV from volume tables
+        # Get base MV/MEV/MAV/MRV from volume tables
         targets = get_volume_targets(profile.training_level, muscle_key)
+        mv = targets["mv"]
         mev = targets["mev"]
         mav = targets["mav"]
         mrv = targets["mrv"]
 
+        # V6: Determine if in-season (MV floor instead of MEV floor)
+        is_in_season = (
+            profile.training_season == TrainingSeason.IN_SEASON
+        )
+
         # Calculate prescribed volume based on goal and week profile
         if week_profile.is_deload:
-            prescribed = mev * 0.5
+            # V6: Deload uses MV as floor (maintenance volume)
+            prescribed = max(mv, round(mev * 0.5))
         else:
             # Base calculation depends on goal
             if profile.training_goal == "hypertrophy":
@@ -120,9 +135,11 @@ def _calculate_week_volume(
         elif profile.recovery_capacity == "high":
             prescribed *= 1.10
 
-        # Age adjustment
-        if profile.age and profile.age > 45:
-            prescribed *= 0.85
+        # V6: Age-tiered volume multiplier (replaces old age > 45 check)
+        prescribed *= get_age_multiplier(profile.age)
+
+        # V6: Sex-based volume modifier (females +10% volume tolerance)
+        prescribed *= get_sex_modifier(profile.sex)
 
         # Weak points / emphasis
         if muscle in strategy.emphasis_muscles or muscle_key in profile.weak_points:
@@ -137,16 +154,22 @@ def _calculate_week_volume(
 
         # Clamp to valid range
         if not week_profile.is_deload:
-            # Non-deload weeks: ensure >= MEV and <= MRV
-            if prescribed < mev:
-                prescribed = mev
-                below_mev.append(muscle_key)
+            if is_in_season:
+                # V6: In-season — MV is the floor (not MEV), allow lower volumes
+                if prescribed < mv:
+                    prescribed = mv
+                    below_mev.append(muscle_key)
+            else:
+                # Standard: ensure >= MEV and <= MRV
+                if prescribed < mev:
+                    prescribed = mev
+                    below_mev.append(muscle_key)
             if prescribed > mrv:
                 prescribed = mrv
                 above_mrv.append(muscle_key)
         else:
-            # Deload weeks: minimum 2 sets, no MEV constraint
-            prescribed = max(2, prescribed)
+            # Deload weeks: MV floor, minimum 2 sets
+            prescribed = max(2, max(mv, prescribed))
 
         weekly_totals[muscle_key] = float(prescribed)
 

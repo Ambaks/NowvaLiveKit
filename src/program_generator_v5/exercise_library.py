@@ -11,7 +11,7 @@ All volume_credit values: PRIMARY=1.0, SECONDARY=0.5, STABILIZER=0.0
 
 from .schemas import (
     Exercise, MuscleActivation, EquipmentTier, ExerciseType,
-    MovementPattern, MuscleGroup, MuscleRole
+    MovementPattern, MuscleGroup, MuscleRole, EccentricStress
 )
 
 
@@ -45,6 +45,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Knees caving inward', 'Excessive forward lean', 'Rising on toes at bottom'],
         rotation_group="squat_glutes_quads_heavy_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.HIGH,
         vbt_eligible=True,
     ),
     Exercise(
@@ -76,6 +77,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbows dropping during ascent', 'Excessive forward lean', 'Wrist flexibility limiting rack position'],
         rotation_group="squat_glutes_quads_heavy_compound",
         variation_tags=['front_loaded'],
+        eccentric_stress=EccentricStress.HIGH,
         vbt_eligible=True,
     ),
     Exercise(
@@ -173,6 +175,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Bending knees too much', 'Not hinging enough at hips'],
         rotation_group="hip_hinge_glutes_hamstrings_light_compound",
         variation_tags=['stretch', 'stretch'],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
         vbt_eligible=True,
     ),
     Exercise(
@@ -232,6 +236,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bench angle too steep', 'Flaring elbows excessively', 'Lifting hips off bench'],
         rotation_group="horizontal_push_chest_front_delts_heavy_compound",
         variation_tags=['incline', 'stretch'],
+        trains_at_long_length=True,
         vbt_eligible=True,
     ),
     Exercise(
@@ -387,6 +392,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hyperextending lower back at top', 'Pushing through toes', 'Not achieving full hip extension'],
         rotation_group="hip_hinge_glutes_heavy_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
         vbt_eligible=True,
     ),
     Exercise(
@@ -416,6 +422,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Going too deep', 'Bending too much at knees'],
         rotation_group="hip_hinge_erectors_hamstrings_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="barbell_split_squat",
@@ -445,6 +453,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Front knee caving inward', 'Leaning forward excessively', 'Not going deep enough'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="barbell_bulgarian_split_squat",
@@ -474,6 +483,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Standing too close to bench', 'Front knee caving inward', 'Excessive forward lean'],
         rotation_group="lunge_glutes_quads_heavy_compound",
         variation_tags=[],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="barbell_reverse_lunge",
@@ -503,6 +514,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Stepping too short', 'Front knee traveling past toes excessively', 'Leaning forward'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=['reverse_grip'],
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="barbell_close_grip_bench_press",
@@ -614,6 +626,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbows flaring out', 'Moving upper arms', 'Going too heavy too fast'],
         rotation_group="isolation_push_triceps_isolation",
         variation_tags=['stretch'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="barbell_shrug",
@@ -641,6 +654,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rolling shoulders', 'Using too much momentum', 'Not achieving full elevation'],
         rotation_group="isolation_pull_traps_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="barbell_upright_row",
@@ -842,6 +856,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Bending knees too much', 'Not hinging enough'],
         rotation_group="hip_hinge_glutes_hamstrings_light_compound",
         variation_tags=['stretch', 'stretch'],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="dumbbell_single_leg_rdl",
@@ -870,6 +886,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hips rotating open', 'Rounding lower back', 'Bending standing knee too much'],
         rotation_group="hip_hinge_glutes_hamstrings_light_compound",
         variation_tags=['stretch', 'unilateral', 'stretch'],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="dumbbell_bench_press",
@@ -926,6 +944,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bench angle too steep', 'Flaring elbows excessively', 'Lifting hips'],
         rotation_group="horizontal_push_chest_front_delts_light_compound",
         variation_tags=['incline'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_floor_press",
@@ -1126,6 +1145,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Using too much weight', 'Standing too upright', 'Not controlling the negative'],
         rotation_group="isolation_pull_rear_delts_isolation",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_curl",
@@ -1233,6 +1253,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbows flaring out', 'Moving upper arms', 'Dropping weight too fast'],
         rotation_group="isolation_push_triceps_isolation",
         variation_tags=['stretch'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_split_squat",
@@ -1262,6 +1283,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Knee caving inward', 'Leaning forward', 'Steps too narrow'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_bulgarian_split_squat",
@@ -1291,6 +1313,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Standing too close to bench', 'Front knee caving', 'Excessive forward lean'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="dumbbell_reverse_lunge",
@@ -1320,6 +1344,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Step too short', 'Front knee caving', 'Leaning forward'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=['reverse_grip'],
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="dumbbell_walking_lunge",
@@ -1349,6 +1374,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Steps too short', 'Knees caving inward', 'Losing balance'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="dumbbell_step_up",
@@ -1377,6 +1404,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Using momentum from back leg', 'Box too high', 'Not fully extending hip at top'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=['unilateral'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="dumbbell_lateral_lunge",
@@ -1405,6 +1433,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Not stepping wide enough', 'Knee caving inward', 'Lifting heel off floor'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_hip_thrust",
@@ -1432,6 +1461,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hyperextending lower back', 'Pushing through toes', 'Not achieving full hip extension'],
         rotation_group="hip_hinge_glutes_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="dumbbell_pullover",
@@ -1460,6 +1490,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bending elbows too much', 'Arching lower back excessively', 'Going too far back'],
         rotation_group="vertical_pull_chest_lats_light_compound",
         variation_tags=['stretch'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_shrug",
@@ -1486,6 +1517,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rolling shoulders', 'Using momentum', 'Not holding at top'],
         rotation_group="isolation_pull_traps_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="dumbbell_calf_raise",
@@ -1542,6 +1574,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Leaning to one side', 'Shoulders rounding forward', 'Steps too fast'],
         rotation_group="carry_forearms_traps_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="dumbbell_suitcase_carry",
@@ -1572,6 +1605,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Leaning away from weight', 'Shoulders uneven', 'Rushing the movement'],
         rotation_group="carry_forearms_obliques_light_compound",
         variation_tags=['unilateral'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="dumbbell_renegade_row",
@@ -1689,6 +1723,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bending elbows too much', 'Shrugging shoulders', 'Rushing the movement'],
         rotation_group="isolation_pull_rear_delts_upper_back_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_face_pull",
@@ -1718,6 +1753,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling too low', 'Not externally rotating', 'Using momentum'],
         rotation_group="isolation_pull_rear_delts_upper_back_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_lateral_raise",
@@ -1745,6 +1781,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Raising above shoulder height', 'Using momentum', 'Shrugging shoulders'],
         rotation_group="isolation_push_side_delts_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_chest_press",
@@ -1773,6 +1810,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Letting band snap back', 'Losing shoulder position', 'Not pressing through full range'],
         rotation_group="horizontal_push_chest_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_row",
@@ -1802,6 +1840,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Not achieving full contraction', 'Letting band snap back', 'Using momentum'],
         rotation_group="horizontal_pull_lats_upper_back_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_bicep_curl",
@@ -1829,6 +1868,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Swinging the body', 'Elbows moving forward', 'Not controlling eccentric'],
         rotation_group="isolation_pull_biceps_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_tricep_pushdown",
@@ -1855,6 +1895,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbows moving', 'Not achieving full extension', 'Using momentum'],
         rotation_group="isolation_push_triceps_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_squat",
@@ -1884,6 +1925,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Knees caving inward', 'Not going deep enough', 'Losing band tension at bottom'],
         rotation_group="squat_glutes_quads_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_deadlift",
@@ -1914,6 +1956,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Not hinging enough', 'Using arms to pull'],
         rotation_group="hip_hinge_glutes_hamstrings_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_glute_bridge",
@@ -1941,6 +1984,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hyperextending lower back', 'Not achieving full hip extension', 'Pushing through toes'],
         rotation_group="hip_hinge_glutes_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_clamshell",
@@ -1967,6 +2011,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rolling hips backward', 'Moving too fast', 'Not achieving full range'],
         rotation_group="isolation_pull_glute_medius_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_lateral_walk",
@@ -1994,6 +2039,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Standing too upright', 'Letting knees cave', 'Taking steps too small'],
         rotation_group="isolation_pull_glute_medius_glutes_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_good_morning",
@@ -2021,6 +2067,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Rounding lower back', 'Going too deep', 'Bending knees too much'],
         rotation_group="hip_hinge_erectors_hamstrings_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="band_pallof_press",
@@ -2047,6 +2094,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Allowing rotation', 'Not bracing core', 'Using too light resistance'],
         rotation_group="core_core_obliques_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_overhead_press",
@@ -2075,6 +2123,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Arching lower back', 'Not achieving full lockout', 'Pressing forward not up'],
         rotation_group="vertical_push_front_delts_side_delts_light_compound",
         variation_tags=['overhead'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_external_rotation",
@@ -2101,6 +2150,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbow moving away from body', 'Using too much resistance', 'Moving too fast'],
         rotation_group="isolation_pull_rear_delts_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_internal_rotation",
@@ -2126,6 +2176,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbow moving', 'Using momentum', 'Range of motion too large'],
         rotation_group="isolation_push_front_delts_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="band_hip_flexor_march",
@@ -2152,6 +2203,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Leaning back', 'Not lifting knees high enough', 'Moving too fast'],
         rotation_group="core_hip_flexors_isolation",
         variation_tags=['unilateral'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="box_jump",
@@ -2268,6 +2320,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Spending too long on ground', 'Box too high', 'Not absorbing landing properly'],
         rotation_group="power_lower_glutes_quads_plyometric",
         variation_tags=[],
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="split_squat_jump",
@@ -2529,6 +2582,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bending knees too much', 'Spending too long on ground', 'Not staying on toes'],
         rotation_group="power_lower_calves_plyometric",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="jump_rope",
@@ -2557,6 +2611,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Jumping too high', 'Using arms too much', 'Landing flat-footed'],
         rotation_group="isolation_push_calves_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="push_up",
@@ -2729,6 +2784,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Kipping or swinging', 'Not going through full range', 'Craning neck to get chin over'],
         rotation_group="vertical_pull_biceps_lats_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="chin_up",
@@ -2758,6 +2814,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Kipping', 'Partial range of motion', 'Excessive swinging'],
         rotation_group="vertical_pull_biceps_lats_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dip",
@@ -2785,6 +2842,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Not going deep enough', 'Excessive forward lean', 'Elbows flaring out'],
         rotation_group="vertical_push_chest_triceps_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="bodyweight_squat",
@@ -2842,6 +2900,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Heel rising', 'Losing balance', 'Knee caving inward'],
         rotation_group="squat_glutes_quads_light_compound",
         variation_tags=['unilateral'],
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="lunge",
@@ -2898,6 +2957,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hyperextending lower back', 'Not squeezing at top', 'Pushing through toes'],
         rotation_group="hip_hinge_glutes_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="single_leg_glute_bridge",
@@ -2925,6 +2985,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hips dropping to one side', 'Not achieving full extension', 'Using momentum'],
         rotation_group="hip_hinge_glutes_light_compound",
         variation_tags=['unilateral'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="plank",
@@ -2953,6 +3014,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hips sagging', 'Hips piked up', 'Holding breath'],
         rotation_group="core_core_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="side_plank",
@@ -2981,6 +3043,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hips sagging', 'Rolling forward or backward', 'Holding breath'],
         rotation_group="core_obliques_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="dead_bug",
@@ -3006,6 +3069,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Lower back arching off floor', 'Moving too fast', 'Holding breath'],
         rotation_group="core_core_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="hollow_body_hold",
@@ -3031,6 +3095,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Lower back arching', 'Chin tucked to chest', 'Holding breath'],
         rotation_group="core_core_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="bird_dog",
@@ -3059,6 +3124,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Hips rotating', 'Arching lower back', 'Moving too fast'],
         rotation_group="core_core_erectors_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="superman",
@@ -3088,6 +3154,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Lifting too high and straining', 'Holding breath', 'Jerky movements'],
         rotation_group="core_erectors_glutes_light_compound",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="nordic_curl",
@@ -3115,6 +3182,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bending at hips', 'Descending too fast', 'Not anchoring feet properly'],
         rotation_group="isolation_pull_hamstrings_isolation",
         variation_tags=['stretch'],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="calf_raise",
@@ -3168,6 +3237,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Thighs not parallel', 'Knees past toes', 'Sliding down wall'],
         rotation_group="squat_quads_isolation",
         variation_tags=[],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="archer_push_up",
@@ -3225,6 +3295,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Not going deep enough', 'Heel rising', 'Losing balance'],
         rotation_group="lunge_glutes_quads_light_compound",
         variation_tags=[],
+        trains_at_long_length=True,
+        eccentric_stress=EccentricStress.HIGH,
     ),
     Exercise(
         id="barbell_face_pull",
@@ -3437,6 +3509,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbows flaring out', 'Not going deep enough', 'Using too much weight'],
         rotation_group="isolation_push_triceps_isolation",
         variation_tags=['overhead', 'stretch'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="bodyweight_dip",
@@ -3464,6 +3537,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Going too deep (shoulder impingement)', 'Swinging', 'Not locking out'],
         rotation_group="horizontal_push_chest_triceps_light_compound",
         variation_tags=['bodyweight', 'dip'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="wide_grip_pull_up",
@@ -3492,6 +3566,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Half reps', 'Kipping', 'Not going to full extension'],
         rotation_group="vertical_pull_lats_light_compound",
         variation_tags=['wide_grip'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="commando_pull_up",
@@ -3549,6 +3624,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Half reps', 'Kipping'],
         rotation_group="vertical_pull_lats_light_compound",
         variation_tags=['neutral_grip'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="towel_pull_up",
@@ -3630,6 +3706,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Too much swinging', 'Not targeting obliques (going straight up)'],
         rotation_group="core_obliques_isolation",
         variation_tags=['hanging', 'oblique'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="suitcase_carry",
@@ -3658,6 +3735,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Leaning to one side', 'Holding breath'],
         rotation_group="carry_obliques_isolation",
         variation_tags=['carry', 'unilateral', 'anti_lateral_flexion'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="hanging_leg_raise",
@@ -3684,6 +3762,8 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Swinging', 'Using hip flexors only', 'Not reaching full range'],
         rotation_group="core_abs_isolation",
         variation_tags=['hanging'],
+        eccentric_stress=EccentricStress.LOW,
+        trains_at_long_length=True,
     ),
     Exercise(
         id="barbell_ab_rollout",
@@ -3737,6 +3817,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bench angle too steep', 'Swinging upper arms forward'],
         rotation_group="isolation_pull_biceps_isolation",
         variation_tags=['incline', 'stretch'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_concentration_curl",
@@ -3787,6 +3868,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Elbow flaring', 'Not going deep enough', 'Arching lower back'],
         rotation_group="isolation_push_triceps_isolation",
         variation_tags=['overhead', 'stretch', 'unilateral'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_prone_y_raise",
@@ -3864,6 +3946,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Moving too fast', 'Not enough tension in band'],
         rotation_group="isolation_push_glutes_isolation",
         variation_tags=['band', 'abduction'],
+        eccentric_stress=EccentricStress.LOW,
     ),
     Exercise(
         id="incline_push_up_feet_elevated",
@@ -3892,6 +3975,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Sagging hips', 'Not going deep enough', 'Elbows flaring too wide'],
         rotation_group="horizontal_push_chest_upper_chest_light_compound",
         variation_tags=['decline_push', 'bodyweight', 'upper_chest'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="barbell_wrist_curl",
@@ -3952,6 +4036,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling early with arms', 'Not finishing hip extension', 'Rounding back'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'pull'],
+        eccentric_stress=EccentricStress.LOW,
         vbt_eligible=True,
     ),
     Exercise(
@@ -3984,6 +4069,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Pulling with arms first', 'Not using hips', 'Not getting elbows high'],
         rotation_group="power_lower_glutes_hamstrings_power",
         variation_tags=['olympic', 'explosive', 'hang', 'pull'],
+        eccentric_stress=EccentricStress.LOW,
         vbt_eligible=True,
     ),
     Exercise(
@@ -4138,6 +4224,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Straightening arms (turns into press)', 'Going too deep', 'Losing control'],
         rotation_group="isolation_push_chest_isolation",
         variation_tags=['fly', 'stretch'],
+        trains_at_long_length=True,
     ),
     Exercise(
         id="dumbbell_incline_fly",
@@ -4165,6 +4252,7 @@ EXERCISE_LIBRARY: list[Exercise] = [
         common_mistakes=['Bench too steep', 'Pressing instead of flying'],
         rotation_group="isolation_push_chest_isolation",
         variation_tags=['fly', 'incline', 'stretch'],
+        trains_at_long_length=True,
     ),
 ]
 

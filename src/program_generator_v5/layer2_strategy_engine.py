@@ -1,14 +1,22 @@
 """
-V5 Layer 2: Strategy Engine
+V6 Layer 2: Strategy Engine
 
 Rules engine for split + periodization selection, with LLM fallback for edge cases.
 
 Determines:
-- Split selection (based on days/week, level, goal)
-- Periodization model (volume_ramp, linear_intensity, concurrent)
+- Split selection (based on days/week, level, goal, training season)
+- Periodization model (volume_ramp, linear_intensity, concurrent, dup, block, maintenance)
 - Week profiles (volume_multiplier, intensity_modifier, RPE/RIR ranges)
-- Mesocycle structure
+- Mesocycle structure (with variable deload frequency by age/level)
 - Sport-specific adjustments
+
+V6 additions:
+- DUP (Daily Undulating Periodization) for intermediate+ lifters
+- Block periodization for peaking (pre-season, competition prep)
+- Maintenance periodization for in-season athletes
+- Age-tiered deload frequency
+- Season-aware strategy selection
+- DUP session emphasis patterns
 
 90%+ of cases are handled deterministically; LLM only for conflicting constraints.
 """
@@ -23,6 +31,7 @@ from .schemas import (
     ProgramStrategy,
     WeekProfile,
     MuscleGroup,
+    TrainingSeason,
 )
 from .split_templates import SPLIT_TEMPLATES, get_split_for_config
 from .sport_mappings import get_sport_adjustments
@@ -58,18 +67,32 @@ def build_strategy(
     """
     # ── Step 1: Select split ────────────────────────────────────────────────
     effective_goal = profile.effective_goal or profile.training_goal
-    split_id = get_split_for_config(
-        days_per_week=profile.training_days_per_week,
-        training_level=profile.training_level,
-        goal=effective_goal,
-    )
+
+    # V6: In-season forces maintenance split
+    if profile.training_season == TrainingSeason.IN_SEASON:
+        split_id = "maintenance_2x"
+    else:
+        split_id = get_split_for_config(
+            days_per_week=profile.training_days_per_week,
+            training_level=profile.training_level,
+            goal=effective_goal,
+        )
     split = SPLIT_TEMPLATES[split_id]
 
     # ── Step 2: Select periodization model ──────────────────────────────────
-    periodization_model = _select_periodization_model(effective_goal)
+    periodization_model = _select_periodization_model(
+        goal=effective_goal,
+        training_level=profile.training_level,
+        training_season=profile.training_season,
+        days_per_week=profile.training_days_per_week,
+    )
 
     # ── Step 3: Calculate mesocycle structure ───────────────────────────────
-    mesocycle_length = _get_mesocycle_length(profile.training_level)
+    mesocycle_length = _get_mesocycle_length(
+        training_level=profile.training_level,
+        age=profile.age,
+        training_season=profile.training_season,
+    )
     num_mesocycles = max(1, profile.program_duration_weeks // mesocycle_length)
 
     # Handle programs that don't divide evenly
@@ -84,6 +107,7 @@ def build_strategy(
         mesocycle_length=mesocycle_length,
         periodization_model=periodization_model,
         training_goal=effective_goal,
+        days_per_week=profile.training_days_per_week,
     )
 
     # ── Step 5: Apply sport adjustments ─────────────────────────────────────
@@ -128,7 +152,8 @@ def build_strategy(
                     split = SPLIT_TEMPLATES[new_split_id]
             elif resolution.get("resolution") == "override_periodization":
                 new_periodization = resolution.get("value")
-                if new_periodization in ("volume_ramp", "linear_intensity", "concurrent"):
+                valid_models = ("volume_ramp", "linear_intensity", "concurrent", "dup", "block", "maintenance")
+                if new_periodization in valid_models:
                     periodization_model = new_periodization
                     # Rebuild week profiles with new model
                     week_profiles = _build_week_profiles(
@@ -136,6 +161,7 @@ def build_strategy(
                         mesocycle_length=mesocycle_length,
                         periodization_model=periodization_model,
                         training_goal=effective_goal,
+                        days_per_week=profile.training_days_per_week,
                     )
 
     # ── Step 7: VBT protocol selection ───────────────────────────────────────
@@ -167,17 +193,42 @@ def build_strategy(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _select_periodization_model(goal: str) -> str:
+def _select_periodization_model(
+    goal: str,
+    training_level: str = "intermediate",
+    training_season: TrainingSeason | None = None,
+    days_per_week: int = 4,
+) -> str:
     """
-    Select the appropriate periodization model for the goal.
+    V6: Smart periodization selection based on goal, level, season, and frequency.
 
-    - hypertrophy → volume_ramp (volume increases across weeks, then deload)
-    - strength → linear_intensity (intensity increases, volume moderate-to-lower)
-    - power → concurrent (power + strength trained concurrently)
+    Decision tree:
+    - in_season → "maintenance" (preserve strength, minimize fatigue)
+    - pre_season → "block" (accumulation → transmutation → realization)
+    - hypertrophy + beginner → "volume_ramp" (linear progression)
+    - hypertrophy + intermediate/advanced + 3+ days → "dup" (daily undulating)
+    - strength + beginner → "linear_intensity"
+    - strength + intermediate/advanced → "dup"
+    - power → "concurrent"
     """
+    # Season overrides
+    if training_season == TrainingSeason.IN_SEASON:
+        return "maintenance"
+    if training_season == TrainingSeason.PRE_SEASON:
+        return "block"
+
+    # Goal + level based selection
     if goal == "hypertrophy":
+        if training_level == "beginner":
+            return "volume_ramp"
+        if training_level in ("intermediate", "advanced") and days_per_week >= 3:
+            return "dup"
         return "volume_ramp"
     elif goal == "strength":
+        if training_level == "beginner":
+            return "linear_intensity"
+        if training_level in ("intermediate", "advanced"):
+            return "dup"
         return "linear_intensity"
     elif goal == "power":
         return "concurrent"
@@ -185,16 +236,37 @@ def _select_periodization_model(goal: str) -> str:
         return "volume_ramp"  # Default
 
 
-def _get_mesocycle_length(training_level: str) -> int:
+def _get_mesocycle_length(
+    training_level: str,
+    age: int | None = None,
+    training_season: TrainingSeason | None = None,
+) -> int:
     """
-    Get mesocycle length in weeks based on training level.
+    V6: Variable mesocycle length based on training level, age, and season.
 
-    - Beginners: 3 weeks (recover faster, need frequent deloads)
-    - Intermediate/Advanced: 4 weeks (standard mesocycle)
+    - Beginners: 3 weeks (3:1 load:deload)
+    - Intermediate: 4 weeks (4:1)
+    - Advanced: 4 weeks (can extend to 5-6 with reactive deloads)
+    - Age 55+: 3 weeks (more frequent recovery needed)
+    - In-season: 3 weeks (minimize fatigue accumulation)
     """
+    # In-season: shorter mesocycles
+    if training_season == TrainingSeason.IN_SEASON:
+        return 3
+
+    # Age overrides
+    if age is not None and age >= 55:
+        return 3
+
+    # Level-based
     if training_level == "beginner":
         return 3
-    return 4
+
+    # Age 40+ gets shorter mesocycles
+    if age is not None and age >= 40:
+        return 3
+
+    return 4  # Intermediate/advanced default
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,13 +279,24 @@ def _build_week_profiles(
     mesocycle_length: int,
     periodization_model: str,
     training_goal: str,
+    days_per_week: int = 4,
 ) -> list[WeekProfile]:
     """
     Build WeekProfile for every week in the program.
 
     Each mesocycle follows the pattern appropriate for the periodization model.
     Last week of each mesocycle is deload (except possibly the final week).
+
+    V6: Supports DUP, block, and maintenance models.
     """
+    # V6: Block periodization builds all weeks at once (not per-mesocycle)
+    if periodization_model == "block":
+        return _build_block_periodization_weeks(total_weeks)
+
+    # V6: Maintenance has no deloads — flat structure
+    if periodization_model == "maintenance":
+        return _build_maintenance_weeks(total_weeks)
+
     week_profiles = []
     week_number = 1
     mesocycle_number = 1
@@ -223,24 +306,18 @@ def _build_week_profiles(
         remaining = total_weeks - week_number + 1
 
         # Determine actual mesocycle length for this meso
-        # If remaining weeks < mesocycle_length, it's a partial final mesocycle
         actual_meso_length = min(mesocycle_length, remaining)
 
         # Build weeks for this mesocycle
         for week_in_meso in range(1, actual_meso_length + 1):
-            # Determine if this should be a deload week
             is_last_week_of_meso = (week_in_meso == actual_meso_length)
             is_last_week_of_program = (week_number == total_weeks)
 
-            # Deload on last week of meso, UNLESS:
-            # - It's the last week of the program AND the meso is partial (< full length)
-            # - In that case, we may skip deload to maximize training stimulus
             is_deload = False
             if is_last_week_of_meso:
-                # Skip deload if partial meso at end AND short program
                 if actual_meso_length < mesocycle_length and is_last_week_of_program:
                     if actual_meso_length <= 2:
-                        is_deload = False  # Don't deload on 1-2 week final meso
+                        is_deload = False
                     else:
                         is_deload = True
                 else:
@@ -268,8 +345,15 @@ def _build_week_profiles(
                     week_in_meso=week_in_meso,
                     is_deload=is_deload,
                 )
+            elif periodization_model == "dup":
+                wp = _build_dup_week(
+                    week_number=week_number,
+                    mesocycle_number=mesocycle_number,
+                    week_in_meso=week_in_meso,
+                    is_deload=is_deload,
+                    days_per_week=days_per_week,
+                )
             else:
-                # Fallback
                 wp = _build_volume_ramp_week(
                     week_number=week_number,
                     mesocycle_number=mesocycle_number,
@@ -487,6 +571,210 @@ def _build_concurrent_week(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# V6: DUP (DAILY UNDULATING PERIODIZATION)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _build_dup_week(
+    week_number: int,
+    mesocycle_number: int,
+    week_in_meso: int,
+    is_deload: bool,
+    days_per_week: int = 4,
+) -> WeekProfile:
+    """
+    Build week profile for DUP periodization.
+
+    Within each week, sessions alternate emphasis:
+    - Heavy (85%+ 1RM, 3-5 reps)
+    - Moderate (70-80%, 6-8 reps)
+    - Light/Power (60-70%, 8-12 or explosive)
+
+    Volume ramps across weeks within mesocycle (like volume_ramp),
+    but each session within a week has different intensity.
+    """
+    base_volume_bump = (mesocycle_number - 1) * 0.05
+
+    if is_deload:
+        return WeekProfile(
+            week_number=week_number,
+            mesocycle_number=mesocycle_number,
+            week_in_mesocycle=week_in_meso,
+            phase_name="Deload",
+            volume_multiplier=0.5,
+            intensity_modifier="deload",
+            rpe_range=(5.0, 6.0),
+            rir_range=(4, 6),
+            is_deload=True,
+            notes="Recovery week — light movement quality work",
+            session_emphases=["light"] * days_per_week,
+            deload_type="volume",
+        )
+
+    # Build session emphasis pattern based on days per week
+    if days_per_week >= 4:
+        emphases = ["heavy", "moderate", "light", "moderate"][:days_per_week]
+    elif days_per_week == 3:
+        emphases = ["heavy", "moderate", "light"]
+    else:
+        emphases = ["heavy", "moderate"]
+
+    if week_in_meso == 1:
+        return WeekProfile(
+            week_number=week_number,
+            mesocycle_number=mesocycle_number,
+            week_in_mesocycle=week_in_meso,
+            phase_name="Introduction",
+            volume_multiplier=1.0 + base_volume_bump,
+            intensity_modifier="moderate",
+            rpe_range=(6.5, 7.5),
+            rir_range=(3, 4),
+            is_deload=False,
+            notes="DUP Week 1 — establish patterns across intensity zones",
+            session_emphases=emphases,
+        )
+    elif week_in_meso == 2:
+        return WeekProfile(
+            week_number=week_number,
+            mesocycle_number=mesocycle_number,
+            week_in_mesocycle=week_in_meso,
+            phase_name="Building",
+            volume_multiplier=1.10 + base_volume_bump,
+            intensity_modifier="moderate_heavy",
+            rpe_range=(7.0, 8.0),
+            rir_range=(2, 3),
+            is_deload=False,
+            notes="DUP Week 2 — increase load on heavy days, add reps on light days",
+            session_emphases=emphases,
+        )
+    else:
+        return WeekProfile(
+            week_number=week_number,
+            mesocycle_number=mesocycle_number,
+            week_in_mesocycle=week_in_meso,
+            phase_name="Overreaching",
+            volume_multiplier=1.20 + base_volume_bump,
+            intensity_modifier="heavy",
+            rpe_range=(8.0, 9.0),
+            rir_range=(1, 2),
+            is_deload=False,
+            notes="DUP Week 3 — push all zones, heavy day near max effort",
+            session_emphases=emphases,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6: BLOCK PERIODIZATION (for peaking / pre-season)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _build_block_periodization_weeks(total_weeks: int) -> list[WeekProfile]:
+    """
+    Build block periodization weeks.
+
+    Phases:
+    - Accumulation (40% of weeks): High volume, moderate intensity, hypertrophy focus
+    - Transmutation (35% of weeks): Moderate volume, high intensity, strength focus
+    - Realization (25% of weeks): Low volume, very high intensity, peaking
+    """
+    accum_weeks = max(2, round(total_weeks * 0.40))
+    trans_weeks = max(2, round(total_weeks * 0.35))
+    real_weeks = max(1, total_weeks - accum_weeks - trans_weeks)
+
+    weeks = []
+    week_num = 1
+
+    # Accumulation block
+    for i in range(accum_weeks):
+        ramp = i / max(1, accum_weeks - 1)  # 0.0 → 1.0
+        weeks.append(WeekProfile(
+            week_number=week_num,
+            mesocycle_number=1,
+            week_in_mesocycle=i + 1,
+            phase_name="Accumulation",
+            volume_multiplier=1.0 + ramp * 0.25,  # 1.0 → 1.25
+            intensity_modifier="moderate",
+            rpe_range=(6.5 + ramp, 7.5 + ramp),
+            rir_range=(max(1, 3 - int(ramp * 2)), 4 - int(ramp * 2)),
+            is_deload=False,
+            notes=f"Accumulation block — high volume, hypertrophy focus",
+            block_phase="accumulation",
+        ))
+        week_num += 1
+
+    # Transmutation block
+    for i in range(trans_weeks):
+        ramp = i / max(1, trans_weeks - 1)
+        weeks.append(WeekProfile(
+            week_number=week_num,
+            mesocycle_number=2,
+            week_in_mesocycle=i + 1,
+            phase_name="Transmutation",
+            volume_multiplier=0.85 - ramp * 0.10,  # 0.85 → 0.75
+            intensity_modifier="heavy",
+            rpe_range=(7.5 + ramp * 0.5, 8.5 + ramp * 0.5),
+            rir_range=(max(1, 2 - int(ramp)), 2),
+            is_deload=False,
+            notes=f"Transmutation block — moderate volume, high intensity, strength focus",
+            block_phase="transmutation",
+        ))
+        week_num += 1
+
+    # Realization block
+    for i in range(real_weeks):
+        ramp = i / max(1, real_weeks - 1)
+        weeks.append(WeekProfile(
+            week_number=week_num,
+            mesocycle_number=3,
+            week_in_mesocycle=i + 1,
+            phase_name="Realization",
+            volume_multiplier=0.6 - ramp * 0.15,  # 0.6 → 0.45
+            intensity_modifier="very_heavy",
+            rpe_range=(8.5 + ramp * 0.5, 9.0 + ramp * 0.5),
+            rir_range=(0, 1),
+            is_deload=False,
+            notes=f"Realization block — low volume, peak intensity, competition prep",
+            block_phase="realization",
+        ))
+        week_num += 1
+
+    return weeks
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6: MAINTENANCE PERIODIZATION (for in-season)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _build_maintenance_weeks(total_weeks: int) -> list[WeekProfile]:
+    """
+    Build maintenance periodization for in-season athletes.
+
+    Key principles:
+    - Intensity maintained at 85%+ (critical for strength maintenance)
+    - Volume at 40-60% of off-season
+    - No traditional deloads (competition schedule provides natural recovery)
+    - 2 sessions/week max
+    """
+    weeks = []
+    for i in range(total_weeks):
+        weeks.append(WeekProfile(
+            week_number=i + 1,
+            mesocycle_number=1,
+            week_in_mesocycle=i + 1,
+            phase_name="Maintenance",
+            volume_multiplier=0.50,  # 50% of off-season volume
+            intensity_modifier="heavy",
+            rpe_range=(7.5, 8.5),
+            rir_range=(1, 3),
+            is_deload=False,
+            notes="In-season maintenance — preserve strength, minimize DOMS. "
+                  "Intensity is the critical variable for maintaining strength.",
+        ))
+    return weeks
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CONFLICT DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -569,7 +857,7 @@ def _resolve_conflicts_with_llm(
         "split": current_split,
         "periodization": current_periodization,
         "alternative_splits": [s for s in SPLIT_TEMPLATES.keys() if s != current_split],
-        "alternative_periodizations": ["volume_ramp", "linear_intensity", "concurrent"],
+        "alternative_periodizations": ["volume_ramp", "linear_intensity", "concurrent", "dup", "block", "maintenance"],
         "possible_adjustments": "Reduce training frequency, modify volume targets, etc.",
     }
 
@@ -608,7 +896,7 @@ async def resolve_conflicts_async(
         "split": current_split,
         "periodization": current_periodization,
         "alternative_splits": [s for s in SPLIT_TEMPLATES.keys() if s != current_split],
-        "alternative_periodizations": ["volume_ramp", "linear_intensity", "concurrent"],
+        "alternative_periodizations": ["volume_ramp", "linear_intensity", "concurrent", "dup", "block", "maintenance"],
         "possible_adjustments": "Reduce training frequency, modify volume targets, etc.",
     }
 

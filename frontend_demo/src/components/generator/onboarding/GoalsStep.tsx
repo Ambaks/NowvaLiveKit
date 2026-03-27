@@ -7,6 +7,8 @@ interface GoalsStepProps {
     goal_category: string;
     goal_raw: string;
     specific_sport: string;
+    training_season: string;
+    games_per_week: string;
   };
   onChange: (field: string, value: string) => void;
 }
@@ -94,12 +96,87 @@ export const GoalsStep = ({ data, onChange }: GoalsStepProps) => {
           type="text"
           placeholder="e.g., basketball, powerlifting, or leave blank"
           value={data.specific_sport}
-          onChange={(e) => onChange('specific_sport', e.target.value)}
+          onChange={(e) => {
+            onChange('specific_sport', e.target.value);
+            if (!e.target.value || e.target.value === 'none') {
+              onChange('training_season', '');
+              onChange('games_per_week', '0');
+            }
+          }}
         />
         <p className="text-xs text-foreground-tertiary mt-1">
           Leave blank if training for general fitness
         </p>
       </div>
+
+      {data.specific_sport && data.specific_sport !== 'none' && (
+        <>
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              Training Season
+            </label>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { value: 'off_season', label: 'Off-Season', desc: 'No upcoming competitions' },
+                { value: 'pre_season', label: 'Pre-Season', desc: 'Preparing for season' },
+                { value: 'in_season', label: 'In-Season', desc: 'Currently competing' },
+                { value: 'post_season', label: 'Post-Season', desc: 'Recovery phase' },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => {
+                    onChange('training_season', option.value);
+                    if (option.value !== 'in_season') {
+                      onChange('games_per_week', '0');
+                    }
+                  }}
+                  className={`
+                    p-3 rounded-lg border-2 text-left transition-all text-sm
+                    ${data.training_season === option.value
+                      ? 'border-accent bg-accent/10'
+                      : 'border-surface-light hover:border-accent/50'
+                    }
+                  `}
+                >
+                  <div className="font-medium">{option.label}</div>
+                  <div className="text-xs text-foreground-tertiary mt-0.5">{option.desc}</div>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-foreground-tertiary mt-1">
+              This adjusts training volume and exercise selection for your season
+            </p>
+          </div>
+
+          {data.training_season === 'in_season' && (
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Games / Competitions Per Week
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {['1', '2', '3', '4'].map((num) => (
+                  <button
+                    key={num}
+                    onClick={() => onChange('games_per_week', num)}
+                    className={`
+                      px-4 py-3 rounded-lg border-2 transition-all font-medium text-center
+                      ${data.games_per_week === num
+                        ? 'border-accent bg-accent/10 text-accent'
+                        : 'border-surface-light hover:border-accent/50'
+                      }
+                    `}
+                  >
+                    {num}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-foreground-tertiary mt-1">
+                Training volume is reduced to account for game-day recovery
+              </p>
+            </div>
+          )}
+        </>
+      )}
     </OnboardingStep>
   );
 };

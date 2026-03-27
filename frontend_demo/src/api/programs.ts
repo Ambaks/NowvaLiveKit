@@ -20,6 +20,9 @@ export interface ProgramGenerationRequest {
   specific_sport: string;
   has_vbt_capability: boolean;
   user_notes: string;
+  training_season?: string;
+  games_per_week?: number;
+  equipment_tier?: number;
 }
 
 export interface ProgramGenerationResponse {

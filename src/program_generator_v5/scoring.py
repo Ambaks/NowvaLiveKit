@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .schemas import Exercise, ExerciseType
+from .schemas import Exercise, ExerciseType, EccentricStress
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +103,7 @@ def compute_exercise_score(
     user_preferences: dict = None,             # exercise_id → preference score (or list of ids)
     vbt_enabled: bool = False,
     training_level: str = "intermediate",
+    is_in_season: bool = False,               # V6: penalize high-eccentric exercises in-season
 ) -> float:
     """
     Compute a composite score for an exercise candidate.  Higher = better.
@@ -215,10 +216,20 @@ def compute_exercise_score(
         score += 20
 
     # ── 8. Stretch-Position Bonus (hypertrophy only) ─────────────────────────
-    # Stretch-mediated hypertrophy: exercises that load the muscle at long lengths
-    # produce superior hypertrophic stimulus.  Tagged with "stretch" in variation_tags.
-    if program_goal == "hypertrophy" and "stretch" in exercise.variation_tags:
-        score += 8
+    # V6: 2024-2025 research — training muscles at long lengths produces superior
+    # hypertrophy. Uses trains_at_long_length attribute (replaces variation_tags check).
+    if program_goal == "hypertrophy" and exercise.trains_at_long_length:
+        score += 15
+
+    # ── 8b. Eccentric Stress Penalty (in-season) ──────────────────────────
+    # V6: In-season athletes must minimize DOMS to maintain game/practice readiness.
+    # High eccentric exercises (Bulgarian split squats, RDLs, Nordic curls, walking lunges)
+    # are penalized; low eccentric exercises (step-ups, carries, isometrics) are preferred.
+    if is_in_season:
+        if exercise.eccentric_stress == EccentricStress.HIGH:
+            score -= 25  # Strong penalty — prefer lower-eccentric alternatives
+        elif exercise.eccentric_stress == EccentricStress.LOW:
+            score += 8   # Mild bonus for DOMS-friendly exercises
 
     # ── 9. Power/Plyometric Bonus (power programs only) ─────────────────────
     # Power programs prioritize explosive movements - Olympic lifts and plyometrics

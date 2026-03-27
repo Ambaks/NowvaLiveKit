@@ -202,7 +202,12 @@ async def start_program_generation(
             "specific_sport": request.specific_sport,
             "has_vbt_capability": request.has_vbt_capability,
             "user_notes": request.user_notes,
-            "send_email": request.send_email
+            "send_email": request.send_email,
+            # V6 fields
+            "training_season": request.training_season,
+            "games_per_week": request.games_per_week,
+            "competition_date": request.competition_date,
+            "equipment_tier": request.equipment_tier,
         }
     )
 

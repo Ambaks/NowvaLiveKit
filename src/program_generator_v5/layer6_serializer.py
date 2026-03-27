@@ -184,6 +184,7 @@ def _serialize_workout(workout: BuiltWorkout) -> dict:
         "estimated_duration_minutes": workout.estimated_duration_minutes,
         "total_sets": workout.total_sets,
         "warmup_notes": workout.warmup_notes,
+        "warmup_protocol": workout.warmup_protocol.model_dump() if workout.warmup_protocol else None,
         "exercises": [_serialize_exercise(ex) for ex in workout.exercises],
         "volume_delivered": workout.volume_delivered,
     }
@@ -224,6 +225,7 @@ def _serialize_set(set_obj: PrescribedSet) -> dict:
         "rest_seconds": set_obj.rest_seconds,
         "tempo": set_obj.tempo,
         "notes": set_obj.notes,
+        "set_type": set_obj.set_type.value if set_obj.set_type else "standard",
     }
     # Include VBT fields when present
     if set_obj.velocity_target is not None:

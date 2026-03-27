@@ -84,7 +84,12 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
             specific_sport=params.get("specific_sport", "none"),
             has_vbt_capability=params.get("has_vbt_capability", False),
             user_notes=params.get("user_notes"),
-            send_email=params.get("send_email", False)
+            send_email=params.get("send_email", False),
+            # V6 fields
+            training_season=params.get("training_season"),
+            games_per_week=params.get("games_per_week", 0),
+            competition_date=params.get("competition_date"),
+            equipment_tier=params.get("equipment_tier", 1),
         )
 
         # Convert to V5 input format
