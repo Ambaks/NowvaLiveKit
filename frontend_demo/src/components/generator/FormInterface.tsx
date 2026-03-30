@@ -79,7 +79,7 @@ export const FormInterface = () => {
       animate={{ opacity: 1, scale: 1 }}
     >
       {error && (
-        <div className="max-w-2xl mx-auto mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-600">
+        <div className="max-w-2xl mx-auto mb-6 p-4 bg-danger/10 border border-danger/20 rounded-lg text-danger">
           <p className="font-semibold">Error</p>
           <p className="text-sm">{error}</p>
         </div>

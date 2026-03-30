@@ -1,20 +1,20 @@
+import { Navbar } from '@/components/sections/Navbar';
 import { Hero } from '@/components/sections/Hero';
-import { HowItWorks } from '@/components/sections/HowItWorks';
+import { ProductFeatures } from '@/components/sections/ProductFeatures';
+import { ProductShowcase } from '@/components/sections/ProductShowcase';
 import { SampleProgram } from '@/components/sections/SampleProgram';
-import { ValueProposition } from '@/components/sections/ValueProposition';
 import { ProgramGenerator } from '@/components/sections/ProgramGenerator';
-import { TheFuture } from '@/components/sections/TheFuture';
 import { Footer } from '@/components/sections/Footer';
 
 function App() {
   return (
     <div className="min-h-screen bg-background">
+      <Navbar />
       <Hero />
-      <HowItWorks />
+      <ProductFeatures />
+      <ProductShowcase />
       <SampleProgram />
-      <ValueProposition />
       <ProgramGenerator />
-      <TheFuture />
       <Footer />
     </div>
   );

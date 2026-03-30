@@ -100,16 +100,16 @@ export const WorkoutCard: React.FC<WorkoutCardProps> = ({ workout, showFullWorko
               ))}
             </div>
 
-            {/* Conversion overlay - more subtle */}
+            {/* Conversion overlay */}
             <div className="absolute inset-0 flex items-center justify-center" style={{
-              background: 'linear-gradient(to top, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.3))'
+              background: 'linear-gradient(to top, rgba(10, 10, 11, 0.95), rgba(10, 10, 11, 0.7), rgba(10, 10, 11, 0.3))'
             }}>
-              <div className="text-center px-4 py-6 bg-background/80 backdrop-blur-sm rounded-2xl border border-purple-500/20">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-linear-to-br from-purple-500 to-pink-500 mb-3">
-                  <Lock className="w-6 h-6 text-white" />
+              <div className="text-center px-4 py-6 bg-surface/90 backdrop-blur-sm rounded-2xl border border-accent/20">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-accent/10 border border-accent/20 mb-3">
+                  <Lock className="w-6 h-6 text-accent" />
                 </div>
                 <p className="text-sm font-semibold text-foreground mb-1 flex items-center justify-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-500" />
+                  <Sparkles className="w-4 h-4 text-accent" />
                   {totalExercises - 1} More Exercises
                 </p>
                 <p className="text-xs text-foreground-tertiary">

@@ -18,9 +18,11 @@ export const ProgramGenerator = () => {
 
   return (
     <section id="program-generator" className="relative py-24 md:py-32 overflow-hidden">
-      {/* Stunning gradient background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-50 opacity-50" />
-      <div className="absolute inset-0 bg-gradient-radial from-transparent via-background/20 to-background/40" />
+      {/* Subtle amber-tinted background to signal conversion zone */}
+      <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-background" />
+      <div className="absolute inset-0 opacity-30" style={{
+        backgroundImage: 'radial-gradient(ellipse at 50% 0%, rgba(255, 184, 0, 0.06), transparent 60%)'
+      }} />
 
       <div className="section-container relative z-10">
 

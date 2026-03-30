@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Syne:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,11 +6,12 @@
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: #2A2A2E;
   }
 
   body {
-    @apply bg-background text-foreground;
+    background-color: #0A0A0B;
+    color: #F5F5F7;
     font-feature-settings: 'rlig' 1, 'calt' 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -21,7 +22,8 @@
   }
 
   ::selection {
-    @apply bg-accent/20 text-accent-dark;
+    background: rgba(0, 229, 255, 0.2);
+    color: #F5F5F7;
   }
 }
 
@@ -31,19 +33,112 @@
   }
 
   .gradient-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#8B5CF6] via-[#3B82F6] to-[#A78BFA];
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    background-image: linear-gradient(135deg, #00E5FF 0%, #67FFFF 50%, #00B8D4 100%);
+  }
+
+  .gradient-text-amber {
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    background-image: linear-gradient(135deg, #FFB800 0%, #FFCA28 50%, #FFA000 100%);
   }
 
   .glass-card {
-    @apply bg-background-tertiary/50 backdrop-blur-sm border border-border rounded-2xl;
+    background-color: rgba(20, 20, 22, 0.6);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+    border: 1px solid #2A2A2E;
+    border-radius: 1.5rem;
   }
 
   .button-primary {
-    @apply bg-gradient-to-r from-[#8B5CF6] to-[#3B82F6] hover:from-[#7C3AED] hover:to-[#2563EB] text-white font-medium px-6 py-3 rounded-xl transition-all duration-200 hover:scale-105 active:scale-95 hover:shadow-glow-gradient;
+    background-color: #FFB800;
+    color: #0A0A0B;
+    font-weight: 600;
+    padding: 1rem 2rem;
+    border-radius: 0.75rem;
+    transition: all 0.3s;
+  }
+  .button-primary:hover {
+    background-color: #FFA000;
+    box-shadow: 0 0 20px rgba(255, 184, 0, 0.25);
+  }
+  .button-primary:active {
+    transform: scale(0.95);
+  }
+  .button-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .button-secondary {
-    @apply bg-background-tertiary hover:bg-background-secondary text-foreground font-medium px-6 py-3 rounded-xl border border-border hover:border-border-light transition-all duration-200;
+    background-color: transparent;
+    color: #F5F5F7;
+    font-weight: 500;
+    padding: 1rem 2rem;
+    border-radius: 0.75rem;
+    border: 1px solid #2A2A2E;
+    transition: all 0.3s;
+  }
+  .button-secondary:hover {
+    background-color: #1E1E22;
+    border-color: rgba(0, 229, 255, 0.3);
+  }
+
+  .button-ghost {
+    background-color: transparent;
+    color: #8E8E93;
+    font-weight: 500;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    transition: all 0.2s;
+  }
+  .button-ghost:hover {
+    color: #F5F5F7;
+  }
+
+  /* Noise texture overlay */
+  .noise-overlay::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.025;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 256px 256px;
+  }
+
+  /* CV scan grid effect */
+  .cv-grid-overlay {
+    background-image:
+      linear-gradient(rgba(0, 229, 255, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 229, 255, 0.06) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* Thin separator line */
+  .separator {
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(to right, transparent, #3A3A3E, transparent);
+  }
+
+  /* Eyebrow text style */
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.2;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #00E5FF;
   }
 }
 

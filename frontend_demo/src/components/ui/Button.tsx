@@ -17,9 +17,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           'focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background',
           'disabled:opacity-50 disabled:cursor-not-allowed',
           {
-            'bg-accent hover:bg-accent-hover text-white hover:scale-105 active:scale-95 hover:shadow-glow': variant === 'primary',
-            'bg-background-tertiary hover:bg-background-secondary text-foreground border border-border hover:border-border-light': variant === 'secondary',
-            'hover:bg-background-secondary text-foreground': variant === 'ghost',
+            'bg-cta hover:bg-cta-hover text-background font-semibold hover:shadow-glow-amber active:scale-95': variant === 'primary',
+            'bg-surface hover:bg-surface-light text-foreground border border-border hover:border-accent/30': variant === 'secondary',
+            'hover:bg-surface text-foreground-secondary hover:text-foreground': variant === 'ghost',
             'px-4 py-2 text-sm': size === 'sm',
             'px-6 py-3 text-base': size === 'md',
             'px-8 py-4 text-lg': size === 'lg',

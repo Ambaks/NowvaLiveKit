@@ -5,32 +5,87 @@ import { WorkWithUs } from './WorkWithUs';
 export const Footer = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  const handleCTAClick = () => {
+    document.getElementById('program-generator')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
     <>
-      <footer className="py-12 border-t border-border">
-        <div className="section-container">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-            <div className="text-foreground-secondary text-sm">
-              © 2025 Nowva. All rights reserved.
-            </div>
+      <footer className="relative border-t border-border">
+        {/* Gradient top border accent */}
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-accent/20 to-transparent" />
 
-            <div className="flex gap-6">
-              <a href="#" className="text-foreground-secondary hover:text-foreground transition-colors">
-                Privacy
-              </a>
-              <a href="#" className="text-foreground-secondary hover:text-foreground transition-colors">
-                Terms
-              </a>
-              <a href="mailto:contact@nowva.ai" className="text-foreground-secondary hover:text-foreground transition-colors">
-                Contact
-              </a>
-              <button
-                onClick={() => setIsModalOpen(true)}
-                className="text-foreground-secondary hover:text-foreground transition-colors"
-              >
-                Work With Us
-              </button>
+        <div className="section-container py-16 md:py-20">
+          {/* Top row: brand + CTA */}
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 mb-16">
+            <div>
+              <h2 className="font-display font-bold text-2xl md:text-3xl tracking-wider text-foreground mb-2">
+                NOWVA AI
+              </h2>
+              <p className="text-foreground-secondary text-body-md">
+                Train with intelligence.
+              </p>
             </div>
+            <button
+              onClick={handleCTAClick}
+              className="button-primary"
+            >
+              Get Your Free Program
+            </button>
+          </div>
+
+          {/* Separator */}
+          <div className="separator mb-12" />
+
+          {/* Link columns */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-16">
+            <div>
+              <h4 className="text-caption uppercase tracking-widest text-foreground-tertiary mb-4 font-semibold">Product</h4>
+              <div className="space-y-3">
+                <a href="#the-rack" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
+                  The Rack
+                </a>
+                <a href="#sample-program" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
+                  Free Program
+                </a>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-caption uppercase tracking-widest text-foreground-tertiary mb-4 font-semibold">Company</h4>
+              <div className="space-y-3">
+                <a href="mailto:contact@nowva.ai" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
+                  Contact
+                </a>
+                <button
+                  onClick={() => setIsModalOpen(true)}
+                  className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors"
+                >
+                  Work With Us
+                </button>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-caption uppercase tracking-widest text-foreground-tertiary mb-4 font-semibold">Legal</h4>
+              <div className="space-y-3">
+                <a href="#" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
+                  Privacy Policy
+                </a>
+                <a href="#" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
+                  Terms of Service
+                </a>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom bar */}
+          <div className="separator mb-8" />
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+            <p className="text-foreground-tertiary text-body-sm">
+              &copy; 2026 Nowva. All rights reserved.
+            </p>
+            <p className="text-foreground-tertiary text-caption">
+              Precision intelligence for human performance.
+            </p>
           </div>
         </div>
       </footer>
