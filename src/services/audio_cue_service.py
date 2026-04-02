@@ -102,6 +102,9 @@ class AudioCueService:
         self._disk_loaded: bool = False
         # Single rep sound (replaces per-number TTS variants)
         self._rep_sound_frames: Optional[List[rtc.AudioFrame]] = None
+        # Separate audio track for rep sounds (plays independently of agent speech)
+        self._rep_audio_source: Optional[rtc.AudioSource] = None
+        self._rep_track_ready: bool = False
 
         # Eagerly load and pre-read all WAV cues into memory
         self._load_rep_sound()
@@ -131,6 +134,49 @@ class AudioCueService:
             logger.info(f"[AUDIO CUE] Loaded rep sound from {REP_SOUND_PATH} ({len(frames)} chunks)")
         except Exception as e:
             logger.error(f"[AUDIO CUE] Failed to load rep sound: {e}")
+
+    async def setup_rep_track(self, room) -> None:
+        """Publish a dedicated audio track for rep validation sounds.
+
+        This track is independent of the agent's main speech track so rep
+        sounds can play concurrently without blocking or being blocked.
+        """
+        if self._rep_track_ready or self._rep_sound_frames is None:
+            return
+        try:
+            self._rep_audio_source = rtc.AudioSource(
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+            )
+            track = rtc.LocalAudioTrack.create_audio_track(
+                "rep_sound", self._rep_audio_source,
+            )
+            await room.local_participant.publish_track(track)
+            self._rep_track_ready = True
+            logger.info("[AUDIO CUE] Published separate rep sound track")
+        except Exception as e:
+            logger.error(f"[AUDIO CUE] Failed to publish rep sound track: {e}")
+            self._rep_audio_source = None
+
+    async def play_rep_sound(self) -> None:
+        """Play the rep validation sound on the dedicated track (non-blocking
+        relative to the main agent audio)."""
+        if not self._rep_track_ready or not self._rep_audio_source or not self._rep_sound_frames:
+            # Fall back to session.say() if the separate track isn't set up
+            if self._rep_sound_frames:
+                handle = self._session.say(
+                    "",
+                    audio=self._frames_to_async_gen(self._rep_sound_frames),
+                    allow_interruptions=False,
+                    add_to_chat_ctx=False,
+                )
+                await handle.wait_for_playout()
+            return
+        try:
+            for frame in self._rep_sound_frames:
+                await self._rep_audio_source.capture_frame(frame)
+        except Exception as e:
+            logger.error(f"[AUDIO CUE] Rep sound playback failed: {e}")
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
@@ -260,15 +306,9 @@ class AudioCueService:
         """Play a cue through LiveKit's session.say()."""
         self._load_from_disk()
 
-        # Rep cues use the single validation sound
+        # Rep cues use the single validation sound on a separate track
         if cue_key.startswith("rep_") and self._rep_sound_frames:
-            handle = self._session.say(
-                "",
-                audio=self._frames_to_async_gen(self._rep_sound_frames),
-                allow_interruptions=False,
-                add_to_chat_ctx=False,
-            )
-            await handle.join()
+            await self.play_rep_sound()
             return
 
         # Prefer in-memory pre-loaded frames (zero disk I/O)
@@ -281,7 +321,7 @@ class AudioCueService:
                 allow_interruptions=False,
                 add_to_chat_ctx=False,
             )
-            await handle.join()
+            await handle.wait_for_playout()
             return
 
         # Fall back to disk-based WAV variants (if memory pre-load failed)
@@ -297,7 +337,7 @@ class AudioCueService:
                 allow_interruptions=False,
                 add_to_chat_ctx=False,
             )
-            await handle.join()
+            await handle.wait_for_playout()
             return
 
         # Fall back to runtime-generated PCM cache
@@ -310,7 +350,7 @@ class AudioCueService:
                 allow_interruptions=False,
                 add_to_chat_ctx=False,
             )
-            await handle.join()
+            await handle.wait_for_playout()
             return
 
         logger.warning(f"[AUDIO CUE] No audio available for cue: {cue_key}")

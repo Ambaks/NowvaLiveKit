@@ -193,8 +193,8 @@ def calculate_intensity_percent(
     Returns:
         Intensity as percentage of 1RM, or None for bodyweight exercises
     """
-    # Plyometric exercises don't use %1RM - display as "BW"
-    if exercise_type == "plyometric":
+    # Plyometric and bodyweight exercises don't use %1RM
+    if exercise_type in ("plyometric", "bodyweight"):
         return None
 
     # ── 1. Get base intensity range from intensity_modifier ──────────────────
@@ -407,6 +407,21 @@ def prescribe_exercise(
 
     ex_type = exercise.exercise_type.value
 
+    # FIX 4A: Detect bodyweight exercises (no external load → no %1RM)
+    is_bodyweight = (
+        "bodyweight" in exercise.id.lower()
+        or "bodyweight" in exercise.name.lower()
+        or exercise.id in (
+            "chin_up", "pull_up", "wide_grip_pull_up", "neutral_grip_pull_up",
+            "inverted_row", "wide_grip_inverted_row", "decline_push_up",
+            "push_up", "diamond_push_up", "pike_push_up",
+            "pistol_squat", "lunge", "cossack_squat", "superman",
+            "dead_bug", "bird_dog", "plank", "side_plank",
+            "hollow_body_hold", "hanging_leg_raise", "hanging_oblique_knee_raise",
+            "glute_bridge", "single_leg_glute_bridge",
+        )
+    )
+
     # ── 1. Determine rep range ──────────────────────────────────────────────
     min_rep, max_rep = REP_RANGES[program_goal][ex_type]
 
@@ -480,7 +495,7 @@ def prescribe_exercise(
         intensity_pct = calculate_intensity_percent(
             reps=reps,
             rir=set_rir,
-            exercise_type=ex_type,
+            exercise_type="bodyweight" if is_bodyweight else ex_type,
             week_profile=week_profile,
             program_goal=program_goal,
         )

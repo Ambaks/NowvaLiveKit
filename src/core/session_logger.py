@@ -171,16 +171,14 @@ class SessionLogger:
 
         cost = calculate_cost(
             input_tokens, output_tokens,
-            "gpt-4o-realtime-preview",
-            is_audio_input=True,
-            is_audio_output=True
+            "gpt-4o-mini",
         )
 
         event = LogEvent(
             timestamp=datetime.now().isoformat(),
             event_type="conversation",
-            component="realtime_api",
-            model="gpt-4o-realtime-preview",
+            component="cascade_pipeline",
+            model="gpt-4o-mini",
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,

@@ -18,8 +18,8 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import openai, noise_cancellation
-from openai.types.beta.realtime.session import TurnDetection
+from livekit.plugins import deepgram, groq, cartesia, silero, noise_cancellation
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from core.agent_state import AgentState
 from agents.onboarding_agent import OnboardingAgent
@@ -29,6 +29,7 @@ from agents.program_creation_agent import ProgramCreationAgent
 from agents.schedule_agent import ScheduleMaintenanceAgent
 from agents.shared.userdata import UserData
 from core.latency_tracker import LatencyTracker
+from services.compaction_service import CompactionService
 
 logger = logging.getLogger(__name__)
 
@@ -63,28 +64,49 @@ async def entrypoint(ctx: agents.JobContext):
     # Create shared userdata
     userdata = UserData(state=state, room=ctx.room)
 
-    # Initialize OpenAI Realtime API model
-    logger.info("[NOVA] Initializing OpenAI Realtime model...")
-    realtime_model = openai.realtime.RealtimeModel(
-        voice=os.getenv("REALTIME_VOICE", "alloy"),
-        turn_detection=TurnDetection(
-            type="semantic_vad",
-            eagerness="low",
-            create_response=True,
-            interrupt_response=True,
-        ),
-        modalities=["audio", "text"],
+    # Initialize cascade pipeline components (STT + LLM + TTS)
+    logger.info("[NOVA] Initializing cascade pipeline...")
+    stt = deepgram.STT(
+        model="nova-3",
+        language="en",
+        keyterm=[
+            "Barbell Back Squat", "Romanian Deadlift", "Barbell Bench Press",
+            "Barbell Overhead Press", "Barbell Front Squat", "Goblet Squat",
+            "Sumo Deadlift", "Barbell Deadlift",
+            "reps", "sets", "RPE", "deload", "hypertrophy",
+        ],
     )
-    logger.info("[NOVA] Realtime model initialized")
 
-    # Create agent session
+    llm = groq.LLM(
+        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+    )
+
+    tts = cartesia.TTS(
+        model="sonic-3",
+        voice=os.getenv("CARTESIA_VOICE_ID", "default"),
+    )
+    logger.info("[NOVA] Cascade pipeline initialized")
+
+    # Create agent session with cascade pipeline
     logger.info("[NOVA] Creating agent session...")
     session = AgentSession(
-        llm=realtime_model,
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        vad=silero.VAD.load(),
+        turn_handling={"turn_detection": MultilingualModel()},
         userdata=userdata,
         preemptive_generation=True,
     )
     logger.info("[NOVA] Agent session created")
+
+    # Initialize compaction service for rolling context summarization
+    compaction_service = CompactionService(
+        session=session,
+        state=state,
+        user_id=user_id or "guest",
+    )
+    userdata.compaction_service = compaction_service
 
     # Select agent based on persisted mode
     mode = state.get_mode()
@@ -175,6 +197,20 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"[SESSION] Session closed — reason={ev.reason.value}, error={ev.error}")
         # Log final latency summary
         latency_tracker.log_summary()
+
+        # Stop compaction service
+        try:
+            compaction = userdata.compaction_service
+            if compaction:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(compaction.stop(), loop)
+                userdata.compaction_service = None
+                logger.info("[SESSION] Compaction service stopped on close")
+        except Exception as e:
+            logger.error(f"[SESSION] Failed to stop compaction service: {e}")
+
         # Graceful cleanup if session closes during workout
         if state.get_mode() == "workout":
             logger.info("[SESSION] Session closed during workout — saving state")
@@ -200,6 +236,11 @@ async def entrypoint(ctx: agents.JobContext):
             pre_connect_audio_timeout=5.0,
         ),
     )
+
+    # Start compaction service after session is live
+    if userdata.compaction_service:
+        await userdata.compaction_service.start()
+        logger.info("[NOVA] Compaction service started")
 
     logger.info(f"Nova voice agent started in room: {ctx.room.name}")
 

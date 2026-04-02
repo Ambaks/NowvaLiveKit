@@ -33,11 +33,13 @@ class CoachingService:
         self,
         session,          # AgentSession — for generate_reply, output.audio
         state,            # AgentState — for reading/writing WorkoutSession
+        room=None,        # rtc.Room — for publishing separate audio tracks
         on_set_complete: Optional[Callable] = None,
         on_calibration_complete: Optional[Callable] = None,
     ):
         self._session = session
         self._state = state
+        self._room = room
         self._on_set_complete_callback = on_set_complete
         self._on_calibration_complete_callback = on_calibration_complete
 
@@ -281,6 +283,8 @@ class CoachingService:
 
         if self._audio_cue_service is None:
             self._audio_cue_service = AudioCueService(session=self._session)
+            if self._room:
+                await self._audio_cue_service.setup_rep_track(self._room)
 
         cues = message.get("cues", {})
         exercise = message.get("exercise_name", "unknown")
@@ -545,11 +549,11 @@ class CoachingService:
     # LLM & Audio Ducking
     # ------------------------------------------------------------------
 
-    async def _prune_conversation_context(self, max_items: int = 6):
-        """Prune old conversation items to prevent progressive latency degradation.
+    async def _prune_conversation_context(self, max_items: int = 20):
+        """Prune old conversation items, injecting compaction summary.
 
-        gpt-realtime-1.5 has a known latency increase in long sessions.
-        Keeping only the last N items helps mitigate this.
+        If a CompactionService is active, injects its pre-built summary
+        so historical context is preserved. Falls back to simple truncation.
         """
         try:
             agent = self._session.current_agent
@@ -558,30 +562,73 @@ class CoachingService:
             ctx = agent.chat_ctx
             if len(ctx.items) <= max_items:
                 return
+
             old_count = len(ctx.items)
-            new_ctx = ctx.copy()
-            new_ctx.truncate(max_items=max_items)
+
+            # Try to get compaction summary via agent's userdata
+            summary_text = ""
+            userdata = getattr(agent, 'userdata', None)
+            if userdata:
+                compaction = getattr(userdata, 'compaction_service', None)
+                if compaction:
+                    summary_text = compaction.get_summary()
+
+            if not summary_text:
+                # Fallback: simple truncation (original behavior)
+                new_ctx = ctx.copy()
+                new_ctx.truncate(max_items=max_items)
+                await agent.update_chat_ctx(new_ctx)
+                logger.info(
+                    f"[COACHING SERVICE] Pruned context: "
+                    f"{old_count} → {len(new_ctx.items)} items (no summary)"
+                )
+                return
+
+            # Summary-aware pruning: system items + summary + recent items
+            from livekit.agents import llm
+
+            items = list(ctx.items)
+            system_items = [i for i in items if hasattr(i, 'role') and i.role in ("system", "developer")]
+            non_system = [i for i in items if not (hasattr(i, 'role') and i.role in ("system", "developer"))]
+            recent_items = non_system[-max_items:] if len(non_system) > max_items else non_system
+
+            new_ctx = llm.ChatContext.empty()
+            for item in system_items:
+                new_ctx.items.append(item)
+
+            summary_message = llm.ChatMessage(
+                role="system",
+                content=[f"[CONVERSATION SUMMARY]\n{summary_text}"],
+            )
+            new_ctx.items.append(summary_message)
+
+            for item in recent_items:
+                new_ctx.items.append(item)
+
             await agent.update_chat_ctx(new_ctx)
             logger.info(
-                f"[COACHING SERVICE] Pruned conversation context: "
-                f"{old_count} → {len(new_ctx.items)} items"
+                f"[COACHING SERVICE] Pruned context with summary: "
+                f"{old_count} → {len(new_ctx.items)} items "
+                f"({len(system_items)} system + 1 summary + {len(recent_items)} recent)"
             )
+            logger.info("[COMPACTION:SWAP] Summary injected into context on prune")
         except Exception as e:
             logger.warning(f"[COACHING SERVICE] Context pruning failed: {e}")
 
     async def _coaching_llm_reply(self, instructions: str):
         """Generate coaching speech via generate_reply with SpeechHandle tracking.
 
-        Prepends the coaching persona to the instructions and plays the reply
-        non-interruptibly. Blocks until playout completes so callers can
-        safely proceed with phase transitions after this returns.
+        Sends the coaching persona as system instructions and the coaching
+        task as user_input so the LLM has a clear user-role message to
+        respond to (Llama models may generate near-empty responses when
+        only system instructions are provided with no user turn).
         """
-        full_instructions = f"{_COACHING_PERSONA}\n\n{instructions}"
         logger.info(f"[COACHING SERVICE] → Coaching LLM | instructions[:80]={instructions[:80]}...")
         self.is_coaching_speaking = True
         try:
             handle = self._session.generate_reply(
-                instructions=full_instructions,
+                instructions=_COACHING_PERSONA,
+                user_input=instructions,
                 tool_choice="none",
                 allow_interruptions=False,
             )

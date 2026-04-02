@@ -195,6 +195,9 @@ def _build_week(
             mrv_limits=mrv_limits,
             mav_limits=mav_limits,
             weekly_volume_delivered=weekly_volume_delivered,
+            session_index=day_idx,
+            total_sessions=len(strategy.split.sessions_per_week),
+            weekly_volume_targets=dict(volume_week.weekly_totals),
         )
 
         workouts.append(workout)
@@ -231,8 +234,12 @@ def _build_week(
             volume_adherence[muscle_key] = 1.0 if actual == 0 else 0.0
 
     # Validate volume adherence for non-deload weeks
+    # FIX 4B: Skip muscles with MEV=0 (not independently tracked, e.g., front_delts)
+    mev_table = {m: v["mev"] for m, v in VOLUME_TABLES[profile.training_level].items()}
     if not week_profile.is_deload:
         for muscle_key, actual in weekly_volume_actual.items():
+            if mev_table.get(muscle_key, 0) == 0:
+                continue  # Not tracked — suppress warning
             target = weekly_volume_target.get(muscle_key, 0)
             diff = abs(actual - target)
             if diff > 2 and target > 0:
@@ -264,6 +271,9 @@ def _build_session(
     mrv_limits: dict[str, int] = None,
     mav_limits: dict[str, int] = None,
     weekly_volume_delivered: dict[str, float] = None,
+    session_index: int = 0,
+    total_sessions: int = 4,
+    weekly_volume_targets: dict[str, float] = None,
 ) -> BuiltWorkout:
     """
     Build a single session using the 3-phase greedy algorithm.
@@ -280,6 +290,7 @@ def _build_session(
     mrv_limits = mrv_limits or {}
     mav_limits = mav_limits or {}
     weekly_volume_delivered = weekly_volume_delivered or {}
+    weekly_volume_targets = weekly_volume_targets or {}
 
     # BUG 2 FIX: Initialize remaining_volume with ALL muscles at their target
     # or 0 if not targeted. This ensures secondary contributions are tracked.
@@ -326,17 +337,41 @@ def _build_session(
         )
         return bool(exercise_primary_muscles & session_muscle_groups)
 
+    # FIX MRV: Precompute how many sessions target each muscle this week
+    # so we can reserve MRV budget for future sessions.
+    _sessions_targeting_muscle: dict[str, int] = {}
+    for _sidx in range(total_sessions):
+        _tmpl = strategy.split.sessions_per_week[_sidx]
+        for _mg in _tmpl.muscle_groups:
+            _mk = _mg.value
+            _sessions_targeting_muscle[_mk] = _sessions_targeting_muscle.get(_mk, 0) + 1
+
     # FIX MRV: Helper to check if adding sets would exceed MRV
     def would_exceed_mrv(exercise: Exercise, sets: int) -> bool:
         """Check if adding this exercise would cause any muscle to exceed MRV.
         Uses >= to ensure we stay STRICTLY under MRV (not at MRV).
+        Skips muscles with MRV=0 (not independently tracked, e.g., front_delts).
+        Plyometric exercises are excluded from MRV calculations — they are not
+        weightlifting exercises and don't contribute meaningful hypertrophy volume.
+
+        For full-body splits where multiple sessions hit the same muscle, we
+        reserve MRV budget for future sessions by using an effective per-session
+        cap: MRV / sessions_targeting_that_muscle (with generous headroom).
         """
+        # Plyometrics don't count toward MRV
+        if exercise.exercise_type == ExerciseType.PLYOMETRIC:
+            return False
         for ma in exercise.muscle_activations:
             muscle_key = ma.muscle.value
             mrv = mrv_limits.get(muscle_key, 999)
+            if mrv == 0:
+                continue  # MRV=0 means muscle not tracked (clamped from mev=0)
             current_weekly = weekly_volume_delivered.get(muscle_key, 0)
             # Add volume from exercises already selected in this session
+            # (exclude plyometrics from running total)
             for ex, s in selected_exercises:
+                if ex.exercise_type == ExerciseType.PLYOMETRIC:
+                    continue
                 for ma2 in ex.muscle_activations:
                     if ma2.muscle.value == muscle_key:
                         current_weekly += s * ma2.volume_credit
@@ -345,6 +380,15 @@ def _build_session(
             # Use >= to stay strictly UNDER MRV (MRV is the ceiling, not a target)
             if proposed_total >= mrv:
                 return True
+            # For muscles trained across multiple sessions, also enforce a
+            # per-session budget so the first session doesn't consume all MRV.
+            # Budget = MRV / n_sessions + small headroom (2 sets).
+            n_sessions = _sessions_targeting_muscle.get(muscle_key, 1)
+            if n_sessions >= 2:
+                session_volume = proposed_total - weekly_volume_delivered.get(muscle_key, 0)
+                session_budget = (mrv / n_sessions) + 2
+                if session_volume >= session_budget:
+                    return True
         return False
 
     # FIX 2: Helper to compute variety penalty for same-week exercises
@@ -360,6 +404,29 @@ def _build_session(
                 # Same rotation group used this week - penalize to encourage variety
                 penalty -= 30.0
                 break
+        return penalty
+
+    # FIX 3B: Helper to compute overdelivery penalty
+    def get_overdelivery_penalty(exercise: Exercise, sets: int) -> float:
+        """Penalize exercises whose primary muscles are already well above target."""
+        penalty = 0.0
+        for ma in exercise.muscle_activations:
+            if ma.role != MuscleRole.PRIMARY:
+                continue
+            muscle_key = ma.muscle.value
+            target = weekly_volume_targets.get(muscle_key, 0)
+            if target <= 0:
+                continue
+            current_weekly = weekly_volume_delivered.get(muscle_key, 0)
+            # Add volume from already-selected exercises in this session
+            for ex, s in selected_exercises:
+                for ma2 in ex.muscle_activations:
+                    if ma2.muscle.value == muscle_key:
+                        current_weekly += s * ma2.volume_credit
+            over_ratio = current_weekly / target
+            if over_ratio > 1.2:
+                # Already 20%+ over target — penalize proportionally
+                penalty -= (over_ratio - 1.0) * 15
         return penalty
 
     # ── PHASE 1: Fill required movement patterns with COMPOUNDS ──
@@ -461,6 +528,8 @@ def _build_session(
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
                     is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                    weekly_volume_target=weekly_volume_targets,
+                    sessions_remaining_in_week=total_sessions - session_index,
                 )
 
                 # BUG 1 FIX: Add compound priority bonuses for Phase 1
@@ -470,23 +539,27 @@ def _build_session(
                 elif candidate.exercise_type == ExerciseType.LIGHT_COMPOUND:
                     bonus += 20  # Light compounds are still preferred
 
-                # BUG 1 FIX: Bonus for barbell exercises (foundation of serious programs)
-                if "barbell" in candidate.id.lower() or "barbell" in candidate.name.lower():
-                    bonus += 25  # Increased from 15
+                # FIX 2B: Contextual barbell bonus (replaces blanket +25)
+                # Heavy compound barbells get +15; light compounds get no barbell bonus
+                is_barbell = "barbell" in candidate.id.lower() or "barbell" in candidate.name.lower()
+                if is_barbell and candidate.exercise_type == ExerciseType.HEAVY_COMPOUND:
+                    bonus += 15
 
                 # BUG 4 FIX: Penalty for bodyweight-only exercises in Phase 1
-                # We want barbell/weighted compounds, not bodyweight squats or push-ups
-                if "bodyweight" in candidate.id.lower() or "bodyweight" in candidate.name.lower():
-                    bonus -= 35  # Strong penalty to deprioritize
+                is_bodyweight = "bodyweight" in candidate.id.lower() or "bodyweight" in candidate.name.lower()
+                is_foundation = pattern in [
+                    MovementPattern.SQUAT, MovementPattern.HIP_HINGE,
+                    MovementPattern.HORIZONTAL_PUSH, MovementPattern.HORIZONTAL_PULL,
+                ]
+                if is_bodyweight:
+                    bonus -= 30 if is_foundation else -10
 
                 # BUG 4 FIX: Extra bonus for foundation movement patterns
                 # These are the "big 4" movements that should anchor any serious program
                 if pattern in [MovementPattern.SQUAT, MovementPattern.HIP_HINGE]:
-                    # Lower body foundation - prefer barbell squat/deadlift variations
                     if candidate.exercise_type == ExerciseType.HEAVY_COMPOUND:
                         bonus += 20
                 elif pattern in [MovementPattern.HORIZONTAL_PUSH, MovementPattern.HORIZONTAL_PULL]:
-                    # Upper body foundation - prefer bench/row variations
                     if candidate.exercise_type == ExerciseType.HEAVY_COMPOUND:
                         bonus += 15
 
@@ -559,10 +632,12 @@ def _build_session(
             patterns_filled.add(pattern_key)
 
             # BUG 2 FIX: Update remaining volume for ALL muscles (including secondary)
-            for ma in best.muscle_activations:
-                muscle_key = ma.muscle.value
-                credit = sets * ma.volume_credit
-                remaining_volume[muscle_key] = remaining_volume.get(muscle_key, 0) - credit
+            # Plyometrics don't count toward volume landmarks
+            if best.exercise_type != ExerciseType.PLYOMETRIC:
+                for ma in best.muscle_activations:
+                    muscle_key = ma.muscle.value
+                    credit = sets * ma.volume_credit
+                    remaining_volume[muscle_key] = remaining_volume.get(muscle_key, 0) - credit
 
             # Update counters
             if best.is_axial_loading:
@@ -581,6 +656,63 @@ def _build_session(
         print(f"⚠️  PHASE 1 WARNING: Missing required patterns {missing_required} in {session_template.day_label}")
         # Note: We don't assert here because some edge cases may legitimately have
         # no eligible exercises (e.g., equipment limitations). The warning is enough.
+
+    # ── FIX 2C: Push/pull balance enforcement ──
+    # After Phase 1, check if push:pull ratio is severely lopsided.
+    # If < 0.5, force-add the best push compound to rebalance.
+    push_patterns = {MovementPattern.HORIZONTAL_PUSH.value, MovementPattern.VERTICAL_PUSH.value}
+    pull_patterns = {MovementPattern.HORIZONTAL_PULL.value, MovementPattern.VERTICAL_PULL.value}
+    push_count = sum(1 for ex, _ in selected_exercises if ex.movement_pattern.value in push_patterns)
+    pull_count = sum(1 for ex, _ in selected_exercises if ex.movement_pattern.value in pull_patterns)
+
+    if pull_count > 0 and push_count / pull_count < 0.5 and len(selected_exercises) < max_exercises:
+        # Find best push compound that fits this session
+        best_push = None
+        best_push_score = -999999
+        for ex in available_exercises:
+            if ex.movement_pattern.value not in push_patterns:
+                continue
+            if ex.exercise_type not in (ExerciseType.HEAVY_COMPOUND, ExerciseType.LIGHT_COMPOUND):
+                continue
+            if any(s[0].id == ex.id for s in selected_exercises):
+                continue
+            if ex.difficulty > difficulty_cap:
+                continue
+            if not is_exercise_eligible_for_session(ex):
+                continue
+            score = compute_exercise_score(
+                exercise=ex,
+                remaining_volume=remaining_volume,
+                recently_used=recently_used,
+                mesocycle_number=week_profile.mesocycle_number,
+                week_number=week_profile.week_number,
+                session_axial_count=axial_count,
+                session_grip_count=grip_count,
+                program_goal=profile.training_goal,
+                user_preferences=profile.exercises_to_include,
+                vbt_enabled=strategy.vbt_enabled,
+                training_level=profile.training_level,
+                is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                weekly_volume_target=weekly_volume_targets,
+                sessions_remaining_in_week=total_sessions - session_index,
+            )
+            score += get_week_variety_penalty(ex)
+            if score > best_push_score:
+                best_push_score = score
+                best_push = ex
+        if best_push:
+            push_sets = min(best_push.max_sets_per_session, 3)
+            while push_sets > 2 and would_exceed_mrv(best_push, push_sets):
+                push_sets -= 1
+            selected_exercises.append((best_push, push_sets))
+            for ma in best_push.muscle_activations:
+                muscle_key = ma.muscle.value
+                credit = push_sets * ma.volume_credit
+                remaining_volume[muscle_key] = remaining_volume.get(muscle_key, 0) - credit
+            if best_push.is_axial_loading:
+                axial_count += 1
+            if best_push.grip_intensive:
+                grip_count += 1
 
     # ── PHASE 2: Fill remaining volume with isolations/accessories ──
 
@@ -671,10 +803,15 @@ def _build_session(
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
                     is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                    weekly_volume_target=weekly_volume_targets,
+                    sessions_remaining_in_week=total_sessions - session_index,
                 )
 
                 # FIX 2: Apply same-week variety penalty
                 score += get_week_variety_penalty(candidate)
+
+                # FIX 3B: Apply overdelivery penalty
+                score += get_overdelivery_penalty(candidate, 2)
 
                 # FIX MRV: Skip candidates that would exceed MRV
                 if would_exceed_mrv(candidate, 2):
@@ -781,6 +918,8 @@ def _build_session(
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
                     is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                    weekly_volume_target=weekly_volume_targets,
+                    sessions_remaining_in_week=total_sessions - session_index,
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -864,6 +1003,8 @@ def _build_session(
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
                     is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                    weekly_volume_target=weekly_volume_targets,
+                    sessions_remaining_in_week=total_sessions - session_index,
                 )
                 score += get_week_variety_penalty(ex)
 
@@ -989,8 +1130,13 @@ def _build_session(
                 vbt_enabled=strategy.vbt_enabled,
                 training_level=profile.training_level,
                 is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                weekly_volume_target=weekly_volume_targets,
+                sessions_remaining_in_week=total_sessions - session_index,
             )
             score += get_week_variety_penalty(ex)
+
+            # FIX 3B: Apply overdelivery penalty
+            score += get_overdelivery_penalty(ex, 2)
 
             if score > best_score:
                 best_score = score
@@ -1023,21 +1169,39 @@ def _build_session(
         for idx, (ex, sets) in enumerate(selected_exercises):
             if sets >= ex.max_sets_per_session:
                 continue
-            # Check if adding a set would exceed MRV
+            # Check if adding a set would exceed MRV (skip MRV=0, exclude plyometrics)
             test_selected = selected_exercises.copy()
             test_selected[idx] = (ex, sets + 1)
             would_exceed = False
             for ma in ex.muscle_activations:
                 muscle_key = ma.muscle.value
                 mrv = mrv_limits.get(muscle_key, 999)
+                if mrv == 0:
+                    continue  # Not tracked
                 current_weekly = weekly_volume_delivered.get(muscle_key, 0)
                 for tex, ts in test_selected:
+                    if tex.exercise_type == ExerciseType.PLYOMETRIC:
+                        continue
                     for tma in tex.muscle_activations:
                         if tma.muscle.value == muscle_key:
                             current_weekly += ts * tma.volume_credit
-                if current_weekly > mrv:
+                if current_weekly >= mrv:
                     would_exceed = True
                     break
+                # FIX: Per-session budget check (mirrors would_exceed_mrv)
+                n_sessions = _sessions_targeting_muscle.get(muscle_key, 1)
+                if n_sessions >= 2:
+                    session_vol = 0
+                    for tex, ts in test_selected:
+                        if tex.exercise_type == ExerciseType.PLYOMETRIC:
+                            continue
+                        for tma in tex.muscle_activations:
+                            if tma.muscle.value == muscle_key:
+                                session_vol += ts * tma.volume_credit
+                    session_budget = (mrv / n_sessions) + 2
+                    if session_vol >= session_budget:
+                        would_exceed = True
+                        break
             if would_exceed:
                 continue
 
@@ -1056,6 +1220,179 @@ def _build_session(
         ex, sets = selected_exercises[best_idx]
         selected_exercises[best_idx] = (ex, sets + 1)
         current_duration = estimate_current_duration()
+
+    # ── FIX 3A: MEV enforcement (per-muscle last-relevant-session) ──
+    # For each muscle, check if remaining sessions can fill the deficit naturally.
+    # If not (deficit per remaining session > 2), enforce MEV now.
+    mev_limits = {muscle: vals["mev"] for muscle, vals in VOLUME_TABLES[profile.training_level].items()}
+
+    for muscle_key in list(session_muscle_groups):
+        mev = mev_limits.get(muscle_key, 0)
+        if mev == 0:
+            continue  # Not tracked (e.g., front_delts, lower_chest)
+
+        # Count how many future sessions include this muscle
+        sessions_with_muscle_remaining = 0
+        for future_idx in range(session_index + 1, total_sessions):
+            future_template = strategy.split.sessions_per_week[future_idx]
+            if muscle_key in set(mg.value for mg in future_template.muscle_groups):
+                sessions_with_muscle_remaining += 1
+
+        # Calculate current weekly volume for this muscle (exclude plyometrics)
+        pre_check_weekly = weekly_volume_delivered.get(muscle_key, 0)
+        for ex, s in selected_exercises:
+            if ex.exercise_type == ExerciseType.PLYOMETRIC:
+                continue  # Plyos don't count toward volume
+            for ma in ex.muscle_activations:
+                if ma.muscle.value == muscle_key:
+                    pre_check_weekly += s * ma.volume_credit
+
+        if pre_check_weekly >= mev:
+            continue  # Already at or above MEV
+
+        pre_deficit = mev - pre_check_weekly
+
+        # If future sessions can realistically fill the deficit, skip enforcement.
+        # Use a tiered threshold: small muscles (MEV <= 4) get enforced more
+        # aggressively because their low targets are easily missed.
+        enforcement_threshold = 0.75 if mev <= 4 else 1.5
+        if sessions_with_muscle_remaining > 0:
+            per_session_deficit = pre_deficit / (sessions_with_muscle_remaining + 1)
+            if per_session_deficit <= enforcement_threshold:
+                continue  # Can be filled naturally
+
+        # This is the LAST session for this muscle this week.
+        # Loop until deficit is resolved or all options exhausted.
+        for _mev_attempt in range(5):  # safety cap
+            current_weekly = weekly_volume_delivered.get(muscle_key, 0)
+            for ex, s in selected_exercises:
+                if ex.exercise_type == ExerciseType.PLYOMETRIC:
+                    continue  # Plyos don't count toward volume
+                for ma in ex.muscle_activations:
+                    if ma.muscle.value == muscle_key:
+                        current_weekly += s * ma.volume_credit
+
+            if current_weekly >= mev:
+                break  # Deficit resolved
+
+            deficit = mev - current_weekly
+
+            # Strategy 1: Add sets to existing exercises that hit this muscle
+            # Skip plyometrics — they don't count toward volume landmarks.
+            patched = False
+            for idx, (ex, s) in enumerate(selected_exercises):
+                if ex.exercise_type == ExerciseType.PLYOMETRIC:
+                    continue  # Plyos don't contribute volume
+                has_muscle = any(ma.muscle.value == muscle_key for ma in ex.muscle_activations)
+                if not has_muscle:
+                    continue
+                add = min(ex.max_sets_per_session - s, max(1, round(deficit)))
+                if add <= 0:
+                    continue
+                # Check MRV before adding (skip muscles with MRV=0, exclude plyometrics)
+                test_selected = selected_exercises.copy()
+                test_selected[idx] = (ex, s + add)
+                would_exceed = False
+                for ma2 in ex.muscle_activations:
+                    mk = ma2.muscle.value
+                    mk_mrv = mrv_limits.get(mk, 999)
+                    if mk_mrv == 0:
+                        continue  # Not tracked
+                    cur = weekly_volume_delivered.get(mk, 0)
+                    for tex, ts in test_selected:
+                        if tex.exercise_type == ExerciseType.PLYOMETRIC:
+                            continue
+                        for tma in tex.muscle_activations:
+                            if tma.muscle.value == mk:
+                                cur += ts * tma.volume_credit
+                    if cur >= mk_mrv:  # Use >= to stay strictly under MRV
+                        would_exceed = True
+                        break
+                    # FIX: Per-session budget check (mirrors would_exceed_mrv)
+                    n_sess = _sessions_targeting_muscle.get(mk, 1)
+                    if n_sess >= 2:
+                        sess_vol = 0
+                        for tex, ts in test_selected:
+                            if tex.exercise_type == ExerciseType.PLYOMETRIC:
+                                continue
+                            for tma in tex.muscle_activations:
+                                if tma.muscle.value == mk:
+                                    sess_vol += ts * tma.volume_credit
+                        sess_budget = (mk_mrv / n_sess) + 2
+                        if sess_vol >= sess_budget:
+                            would_exceed = True
+                            break
+                if not would_exceed:
+                    selected_exercises[idx] = (ex, s + add)
+                    for ma2 in ex.muscle_activations:
+                        remaining_volume[ma2.muscle.value] = remaining_volume.get(ma2.muscle.value, 0) - add * ma2.volume_credit
+                    patched = True
+                    break  # Re-check deficit from the top of the loop
+
+            if patched:
+                continue  # Re-check deficit
+
+            # Strategy 2: Add a new exercise targeting this muscle
+            # Don't count plyometrics toward the exercise slot limit — they don't
+            # contribute volume but consume slots, crowding out real exercises.
+            non_plyo_count = sum(1 for ex, _ in selected_exercises if ex.exercise_type != ExerciseType.PLYOMETRIC)
+            if non_plyo_count >= max_exercises + 2:  # Allow +2 for MEV enforcement
+                break
+
+            best_mev_candidate = None
+            best_mev_score = -999999
+            for ex in available_exercises:
+                if any(s2[0].id == ex.id for s2 in selected_exercises):
+                    continue
+                if not any(ma.muscle.value == muscle_key and ma.role == MuscleRole.PRIMARY
+                           for ma in ex.muscle_activations):
+                    continue
+                if ex.difficulty > difficulty_cap:
+                    continue
+                if not is_exercise_eligible_for_session(ex):
+                    continue
+                if is_blocked_pairing(ex.id, selected_exercises):
+                    continue
+                sc = compute_exercise_score(
+                    exercise=ex,
+                    remaining_volume=remaining_volume,
+                    recently_used=recently_used,
+                    mesocycle_number=week_profile.mesocycle_number,
+                    week_number=week_profile.week_number,
+                    session_axial_count=axial_count,
+                    session_grip_count=grip_count,
+                    program_goal=profile.training_goal,
+                    user_preferences=profile.exercises_to_include,
+                    vbt_enabled=strategy.vbt_enabled,
+                    training_level=profile.training_level,
+                    is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                    weekly_volume_target=weekly_volume_targets,
+                    sessions_remaining_in_week=total_sessions - session_index,
+                )
+                sc += get_week_variety_penalty(ex)
+                if sc > best_mev_score:
+                    best_mev_score = sc
+                    best_mev_candidate = ex
+
+            if best_mev_candidate:
+                mev_sets = min(best_mev_candidate.max_sets_per_session, max(2, round(deficit)))
+                while mev_sets > 1 and would_exceed_mrv(best_mev_candidate, mev_sets):
+                    mev_sets -= 1
+                # Only add if it won't exceed MRV (even at minimum sets)
+                if would_exceed_mrv(best_mev_candidate, mev_sets):
+                    break  # Can't add without exceeding MRV
+                selected_exercises.append((best_mev_candidate, mev_sets))
+                for ma in best_mev_candidate.muscle_activations:
+                    mk = ma.muscle.value
+                    credit = mev_sets * ma.volume_credit
+                    remaining_volume[mk] = remaining_volume.get(mk, 0) - credit
+                if best_mev_candidate.is_axial_loading:
+                    axial_count += 1
+                if best_mev_candidate.grip_intensive:
+                    grip_count += 1
+                continue  # Re-check deficit
+            else:
+                break  # No more candidates available
 
     # ── PHASE 3: Validate and patch ──
 
@@ -1106,6 +1443,8 @@ def _build_session(
                     vbt_enabled=strategy.vbt_enabled,
                     training_level=profile.training_level,
                     is_in_season=profile.training_season is not None and profile.training_season.value == "in_season",
+                    weekly_volume_target=weekly_volume_targets,
+                    sessions_remaining_in_week=total_sessions - session_index,
                 )
                 # FIX 2: Apply same-week variety penalty
                 score += get_week_variety_penalty(ex)
@@ -1141,7 +1480,7 @@ def _build_session(
                             ex.max_sets_per_session - sets,
                             round(remaining)
                         )
-                        # FIX MRV: Check if adding sets would exceed MRV
+                        # FIX MRV: Check if adding sets would exceed MRV (skip MRV=0, exclude plyos)
                         while add > 0:
                             test_selected = selected_exercises.copy()
                             test_selected[idx] = (ex, sets + add)
@@ -1149,8 +1488,12 @@ def _build_session(
                             for ma in ex.muscle_activations:
                                 muscle_key = ma.muscle.value
                                 mrv = mrv_limits.get(muscle_key, 999)
+                                if mrv == 0:
+                                    continue  # Not tracked
                                 current_weekly = weekly_volume_delivered.get(muscle_key, 0)
                                 for tex, ts in test_selected:
+                                    if tex.exercise_type == ExerciseType.PLYOMETRIC:
+                                        continue
                                     for tma in tex.muscle_activations:
                                         if tma.muscle.value == muscle_key:
                                             current_weekly += ts * tma.volume_credit
@@ -1228,19 +1571,45 @@ def _build_session(
         )
 
     # Check time cap and remove exercises if needed
+    # But protect exercises whose removal would drop a muscle below MEV.
     estimated_duration = estimate_session_duration(prescribed_exercises)
     max_time = session_time_cap * 1.1  # 10% grace
 
     while estimated_duration > max_time and len(prescribed_exercises) > 4:
-        # Remove the last exercise (lowest priority, likely an isolation)
-        removed = prescribed_exercises.pop()
+        candidate_to_remove = prescribed_exercises[-1]
+        # Check if removing this exercise would drop any muscle below MEV
+        removal_safe = True
+        for muscle_key, contribution in candidate_to_remove.muscle_contributions.items():
+            if contribution <= 0:
+                continue
+            mev = mev_limits.get(muscle_key, 0)
+            if mev == 0:
+                continue
+            # Calculate total weekly volume for this muscle WITHOUT this exercise
+            remaining_weekly = weekly_volume_delivered.get(muscle_key, 0)
+            for pex in prescribed_exercises:
+                if pex is candidate_to_remove:
+                    continue
+                if pex.exercise_type == ExerciseType.PLYOMETRIC:
+                    continue
+                remaining_weekly += pex.muscle_contributions.get(muscle_key, 0)
+            if remaining_weekly < mev - 1:
+                removal_safe = False
+                break
+        if not removal_safe:
+            break  # Stop removing — would violate MEV
+        prescribed_exercises.pop()
         estimated_duration = estimate_session_duration(prescribed_exercises)
 
     # Calculate total sets and volume delivered
+    # Plyometric exercises are excluded from volume tracking — they are not
+    # weightlifting exercises and don't contribute meaningful hypertrophy volume.
     total_sets = sum(ex.total_sets for ex in prescribed_exercises)
 
     volume_delivered = {}
     for ex in prescribed_exercises:
+        if ex.exercise_type == ExerciseType.PLYOMETRIC:
+            continue  # Plyometrics don't count toward volume landmarks
         for muscle, contribution in ex.muscle_contributions.items():
             volume_delivered[muscle] = volume_delivered.get(muscle, 0) + contribution
 

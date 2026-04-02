@@ -44,7 +44,7 @@ rep_detection:
   min_rep_duration_frames: 20
 
 coaching:
-  min_cue_gap_seconds: 2.0
+  min_cue_gap_seconds: 1.0
   set_timeout_seconds: 30.0     # Pause > this = new set
   cache_cues_before_set: true
 

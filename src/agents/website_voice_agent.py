@@ -24,8 +24,8 @@ from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import openai
-from openai.types.beta.realtime.session import TurnDetection
+from livekit.plugins import deepgram, groq, cartesia, silero, noise_cancellation
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # Imports
 from agents.prompts.website_agent_prompt import get_website_agent_prompt
@@ -913,27 +913,32 @@ async def entrypoint(ctx: agents.JobContext):
         "program_creation": {}
     }
 
-    # Initialize OpenAI Realtime Model
-    realtime_model = openai.realtime.RealtimeModel(
-        voice=os.getenv("REALTIME_VOICE", "marin"),
-        turn_detection=TurnDetection(
-            type="semantic_vad",
-            eagerness="low",           # Patient — let users finish thinking before responding
-            create_response=True,
-            interrupt_response=True,
-            silence_duration_ms=1000,   # Require 1s of silence before treating as end-of-turn
-        ),
-        input_audio_noise_reduction="far_field",  # Users may be at varying distances
-        modalities=["audio", "text"],
+    # Initialize cascade pipeline components (STT + LLM + TTS)
+    stt = deepgram.STT(
+        model="nova-3",
+        language="en",
+    )
+
+    llm = groq.LLM(
+        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+    )
+
+    tts = cartesia.TTS(
+        model="sonic-3",
+        voice=os.getenv("CARTESIA_VOICE_ID", "default"),
     )
 
     # Create agent with state
     agent = WebsiteVoiceAgent(state=state)
 
-    # Create session
+    # Create session with cascade pipeline
     session = AgentSession(
-        llm=realtime_model,
-        preemptive_generation=True
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        vad=silero.VAD.load(),
+        turn_handling={"turn_detection": MultilingualModel()},
+        preemptive_generation=True,
     )
 
     # Store session reference in agent so it can disconnect later
@@ -945,6 +950,7 @@ async def entrypoint(ctx: agents.JobContext):
         room=ctx.room,
         agent=agent,
         room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC(),
             pre_connect_audio=True,
             pre_connect_audio_timeout=5.0,
         ),

@@ -8,7 +8,6 @@ from typing import Optional
 
 from livekit.agents import RunContext
 from livekit.agents.llm import function_tool
-from openai.types.beta.realtime.session import TurnDetection
 
 from agents.prompts import get_workout_prompt
 from agents.shared.base_agent import BaseNovaAgent
@@ -37,6 +36,7 @@ class WorkoutAgent(BaseNovaAgent):
         coaching_service = CoachingService(
             session=self.session,
             state=self.state,
+            room=self.userdata.room,
             on_set_complete=self._on_coaching_set_complete,
             on_calibration_complete=self._on_calibration_complete,
         )
@@ -127,8 +127,8 @@ class WorkoutAgent(BaseNovaAgent):
     async def _handle_workout_complete(self):
         """Run cleanup and agent handoff outside the orchestrator's task."""
         await self._cleanup_workout()
-        # Let the realtime model finish processing pending conversation events
-        # from the exercise recap before we delete/re-add items via truncation.
+        # Brief pause to let the LLM finish processing pending conversation
+        # events from the exercise recap before truncation.
         await asyncio.sleep(0.5)
         await self._truncate_context_for_handoff()
         from agents.main_menu_agent import MainMenuAgent
@@ -201,49 +201,26 @@ class WorkoutAgent(BaseNovaAgent):
     # ===== WAKE WORD SYSTEM =====
 
     def _set_workout_turn_detection(self):
-        """Switch to workout mode: suppress auto-responses and interruptions."""
+        """Workout mode: disable auto-responses, only respond to wake word."""
         try:
-            llm = self.session.llm
-            logger.info(f"[WAKE WORD] session.llm type: {type(llm).__name__}")
-            llm.update_options(
-                turn_detection=TurnDetection(
-                    type="semantic_vad",
-                    eagerness="low",
-                    create_response=False,
-                    interrupt_response=False,
-                )
-            )
-            logger.info("[WAKE WORD] Turn detection set to workout mode (create_response=False, interrupt_response=False)")
+            self.session.input.set_audio_enabled(False)
+            logger.info("[WAKE WORD] Turn detection disabled (workout mode)")
         except Exception as e:
             logger.error(f"[WAKE WORD] FAILED to set workout turn detection: {e}", exc_info=True)
 
     def _set_conversational_turn_detection(self):
-        """Restore normal conversational turn detection (non-workout modes)."""
+        """Restore normal conversational turn detection."""
         try:
-            self.session.llm.update_options(
-                turn_detection=TurnDetection(
-                    type="semantic_vad",
-                    eagerness="low",
-                    create_response=True,
-                    interrupt_response=True,
-                )
-            )
-            logger.info("[WAKE WORD] Turn detection restored to conversational mode")
+            self.session.input.set_audio_enabled(True)
+            logger.info("[WAKE WORD] Turn detection restored (conversational mode)")
         except Exception as e:
             logger.error(f"[WAKE WORD] FAILED to set conversational turn detection: {e}", exc_info=True)
 
     def _set_active_listening_turn_detection(self):
         """Temporarily enable responses after wake word detection."""
         try:
-            self.session.llm.update_options(
-                turn_detection=TurnDetection(
-                    type="semantic_vad",
-                    eagerness="medium",
-                    create_response=True,
-                    interrupt_response=True,
-                )
-            )
-            logger.info("[WAKE WORD] Turn detection set to active listening (temporary)")
+            self.session.input.set_audio_enabled(True)
+            logger.info("[WAKE WORD] Turn detection enabled (active listening)")
         except Exception as e:
             logger.error(f"[WAKE WORD] FAILED to set active listening turn detection: {e}", exc_info=True)
 

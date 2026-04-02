@@ -18,24 +18,11 @@ OPENAI_PRICING = {
         "output": 0.600 / 1_000_000,     # $0.60 per 1M tokens
         "cached_input": 0.075 / 1_000_000
     },
-    "gpt-4o-realtime-preview": {
-        "text_input": 5.00 / 1_000_000,
-        "text_output": 20.00 / 1_000_000,
-        "audio_input": 100.00 / 1_000_000,   # $100 per 1M tokens
-        "audio_output": 200.00 / 1_000_000   # $200 per 1M tokens
-    },
-    # Realtime API Models (newer naming convention)
-    "gpt-realtime": {
-        "text_input": 5.00 / 1_000_000,      # Same as gpt-4o-realtime-preview
-        "text_output": 20.00 / 1_000_000,
-        "audio_input": 100.00 / 1_000_000,
-        "audio_output": 200.00 / 1_000_000
-    },
-    "gpt-realtime-mini": {
-        "text_input": 0.60 / 1_000_000,      # $0.60 per 1M tokens
-        "text_output": 2.40 / 1_000_000,     # $2.40 per 1M tokens
-        "audio_input": 40.00 / 1_000_000,    # $40 per 1M tokens
-        "audio_output": 80.00 / 1_000_000    # $80 per 1M tokens
+    # Cascade pipeline LLM (OpenAI GPT-4o-mini)
+    "gpt-4o-mini": {
+        "input": 0.15 / 1_000_000,           # $0.15 per 1M tokens
+        "output": 0.60 / 1_000_000,          # $0.60 per 1M tokens
+        "cached_input": 0.075 / 1_000_000,   # 50% discount
     },
     # GPT-5 Models (preview/internal - using estimated pricing)
     "gpt-5.2": {
@@ -103,10 +90,10 @@ def calculate_cost(
     Args:
         input_tokens: Number of input tokens
         output_tokens: Number of output tokens
-        model: Model name (e.g., "gpt-4o", "gpt-5.2", "gpt-realtime-mini", "claude-3-5-haiku-20241022")
+        model: Model name (e.g., "gpt-4o", "gpt-5.2", "groq-llama-3.3-70b", "claude-3-5-haiku-20241022")
         cached_input_tokens: Number of cached input tokens (for prompt caching)
-        is_audio_input: Whether input is audio (for Realtime API)
-        is_audio_output: Whether output is audio (for Realtime API)
+        is_audio_input: Deprecated, kept for backwards compatibility
+        is_audio_output: Deprecated, kept for backwards compatibility
 
     Returns:
         Cost in USD
@@ -117,27 +104,14 @@ def calculate_cost(
         cost = 0.0
 
         # Input cost
-        if "realtime" in model and is_audio_input:
-            cost += input_tokens * pricing["audio_input"]
-        elif "realtime" in model:
-            # Realtime model with text input
-            cost += input_tokens * pricing["text_input"]
-        elif cached_input_tokens > 0:
-            # Calculate cost for non-cached tokens
+        if cached_input_tokens > 0:
             cost += (input_tokens - cached_input_tokens) * pricing["input"]
-            # Calculate cost for cached tokens (discounted)
             cost += cached_input_tokens * pricing.get("cached_input", pricing["input"])
         else:
             cost += input_tokens * pricing["input"]
 
         # Output cost
-        if "realtime" in model and is_audio_output:
-            cost += output_tokens * pricing["audio_output"]
-        elif "realtime" in model:
-            # Realtime model with text output
-            cost += output_tokens * pricing["text_output"]
-        else:
-            cost += output_tokens * pricing["output"]
+        cost += output_tokens * pricing["output"]
 
         return cost
 

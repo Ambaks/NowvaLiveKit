@@ -148,7 +148,7 @@ class MainMenuAgent(BaseNovaAgent):
             f"The user wants to do {normalized} as a quick exercise (not part of a scheduled workout). "
             f"Now ask the user conversationally about their plan. Ask how many sets they're thinking, "
             f"how many reps per set, what weight they want to use, and how long they want to rest between sets. "
-            f"Once you have all the details, call confirm_quick_exercise() with the parameters. "
+            f"Once you have all the details, use the confirm_quick_exercise tool with the parameters. "
             f"Keep it natural and conversational — like a coach checking in. "
             f"If they're unsure about anything, suggest reasonable defaults "
             f"(3-5 sets, 5-10 reps, 90-120 seconds rest)."

@@ -288,16 +288,18 @@ class CoachingOrchestrator:
         else:
             self._clean_streak = 0
 
-        # Rep count cue (uses per-set rep number)
+        # Rep count cue — fire-and-forget on separate audio track
+        # (bypasses queue since rep sounds play on a dedicated track)
         rep_cue_key = f"rep_{self._set_rep_count}"
         if self._get_cue_audio(rep_cue_key):
-            await self._queue.put(CoachingEvent(
-                priority=CuePriority.REP_COUNT_CUE,
-                timestamp=time.monotonic(),
-                event_type="cached_cue",
-                cue_key=rep_cue_key,
+            asyncio.create_task(self._play_cached(rep_cue_key))
+            # Log for set report
+            self._set_cue_log.append(CueLogEntry(
+                wall_time=time.time(),
+                label=f"Rep {self._set_rep_count}",
+                category="rep",
             ))
-            logger.info(f"[ORCHESTRATOR] ⬆ Enqueued REP COUNT cue: {rep_cue_key}")
+            logger.info(f"[ORCHESTRATOR] → Fire-and-forget REP COUNT cue: {rep_cue_key}")
         else:
             logger.info(f"[ORCHESTRATOR] No cached audio for rep cue: {rep_cue_key}")
 
@@ -565,7 +567,7 @@ class CoachingOrchestrator:
         # Drop stale cached cues — if a cue sat in the queue too long,
         # the coaching moment has passed
         age = time.monotonic() - event.timestamp
-        if age > 0.5:
+        if age > 1.0:
             logger.info("[ORCHESTRATOR] Dropping stale cached cue: %s (%.1fs old)", event.cue_key, age)
             return
 

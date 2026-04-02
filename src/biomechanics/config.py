@@ -137,7 +137,7 @@ class HipPositionCounterConfig(BaseModel):
 
 class CoachingConfig(BaseModel):
     """Coaching integration configuration."""
-    min_cue_gap_seconds: float = 2.0
+    min_cue_gap_seconds: float = 1.0
     set_timeout_seconds: float = 30.0
     cache_cues_before_set: bool = True
 

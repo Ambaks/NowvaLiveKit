@@ -30,6 +30,9 @@ class UserData:
     # Coaching service (live object reference, set by WorkoutAgent)
     coaching_service: Any = None
 
+    # Compaction service (live object reference, set by voice_agent entrypoint)
+    compaction_service: Any = None
+
     # Context summarization state (used by ProgramCreationAgent)
     current_token_count: int = 0
     is_summarizing: bool = False

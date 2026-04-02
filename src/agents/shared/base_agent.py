@@ -2,10 +2,8 @@
 Base agent class with shared properties and helpers for all Nova agents.
 """
 
-import asyncio
 import logging
 from livekit.agents import Agent
-from openai.types.beta.realtime.session import TurnDetection
 from core.agent_state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -30,45 +28,23 @@ class BaseNovaAgent(Agent):
         return self.state.get_user().get("name", "there")
 
     async def _suppress_turn_detection(self):
-        """Suppress auto-responses and interruptions on the Realtime session.
+        """Disable audio input so agent speech isn't interrupted.
 
-        Waits for the server to acknowledge the session update before returning,
-        preventing a race where generate_reply() fires before the new turn
-        detection settings take effect (which lets ambient noise interrupt speech).
+        In cascade mode this is a local operation — no server round-trip needed.
         """
-        confirmed = asyncio.Event()
-
-        def _on_server_event(ev):
-            if getattr(ev, "type", None) == "session.updated":
-                confirmed.set()
-
-        rt_session = self.realtime_llm_session
-        rt_session.on("openai_server_event_received", _on_server_event)
         try:
-            self.session.llm.update_options(
-                turn_detection=TurnDetection(
-                    type="semantic_vad",
-                    eagerness="low",
-                    create_response=False,
-                    interrupt_response=False,
-                )
-            )
-            await asyncio.wait_for(confirmed.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            logger.warning("[TURN DETECTION] Timed out waiting for session.updated confirmation")
-        finally:
-            rt_session.off("openai_server_event_received", _on_server_event)
+            self.session.input.set_audio_enabled(False)
+            logger.info("[TURN DETECTION] Audio input disabled (suppressed)")
+        except Exception as e:
+            logger.warning(f"[TURN DETECTION] Failed to suppress: {e}")
 
     def _restore_turn_detection(self):
-        """Restore normal conversational turn detection."""
-        self.session.llm.update_options(
-            turn_detection=TurnDetection(
-                type="semantic_vad",
-                eagerness="low",
-                create_response=True,
-                interrupt_response=True,
-            )
-        )
+        """Re-enable audio input for normal conversation."""
+        try:
+            self.session.input.set_audio_enabled(True)
+            logger.info("[TURN DETECTION] Audio input restored")
+        except Exception as e:
+            logger.warning(f"[TURN DETECTION] Failed to restore: {e}")
 
     async def _say(self, instructions: str, wait: bool = True, restore: bool = True):
         """Generate a greeting that won't be cut off by turn detection.
@@ -93,22 +69,62 @@ class BaseNovaAgent(Agent):
         return handle
 
     async def _truncate_context_for_handoff(self, max_items: int = 6):
-        """Truncate conversation context before agent handoff.
+        """Replace old context with compaction summary before agent handoff.
 
-        Prevents passing the full conversation history (e.g., an entire
-        workout session) to the next agent. Keeps only the last N items.
+        If a CompactionService is active, injects its pre-built summary as
+        a system message so the next agent retains conversation history.
+        Falls back to simple truncation if no summary is available.
         """
         try:
             ctx = self.chat_ctx
             if len(ctx.items) <= max_items:
                 return
+
             old_count = len(ctx.items)
-            new_ctx = ctx.copy()
-            new_ctx.truncate(max_items=max_items)
+
+            # Try to get compaction summary
+            summary_text = ""
+            compaction = getattr(self.userdata, 'compaction_service', None)
+            if compaction:
+                summary_text = compaction.get_summary()
+
+            if not summary_text:
+                # Fallback: simple truncation (original behavior)
+                new_ctx = ctx.copy()
+                new_ctx.truncate(max_items=max_items)
+                await self.update_chat_ctx(new_ctx)
+                logger.info(
+                    f"[HANDOFF] Truncated context: {old_count} → {len(new_ctx.items)} items (no summary)"
+                )
+                return
+
+            # Summary-aware truncation: system items + summary + recent items
+            from livekit.agents import llm
+
+            items = list(ctx.items)
+            system_items = [i for i in items if hasattr(i, 'role') and i.role in ("system", "developer")]
+            non_system = [i for i in items if not (hasattr(i, 'role') and i.role in ("system", "developer"))]
+            recent_items = non_system[-max_items:] if len(non_system) > max_items else non_system
+
+            new_ctx = llm.ChatContext.empty()
+            for item in system_items:
+                new_ctx.items.append(item)
+
+            summary_message = llm.ChatMessage(
+                role="system",
+                content=[f"[CONVERSATION SUMMARY]\n{summary_text}"],
+            )
+            new_ctx.items.append(summary_message)
+
+            for item in recent_items:
+                new_ctx.items.append(item)
+
             await self.update_chat_ctx(new_ctx)
             logger.info(
-                f"[HANDOFF] Truncated context: {old_count} → {len(new_ctx.items)} items"
+                f"[HANDOFF] Context with summary: {old_count} → {len(new_ctx.items)} items "
+                f"({len(system_items)} system + 1 summary + {len(recent_items)} recent)"
             )
+            logger.info("[COMPACTION:SWAP] Summary injected into context on handoff")
         except Exception as e:
             logger.warning(f"[HANDOFF] Context truncation failed: {e}")
 

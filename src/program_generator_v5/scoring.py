@@ -104,6 +104,8 @@ def compute_exercise_score(
     vbt_enabled: bool = False,
     training_level: str = "intermediate",
     is_in_season: bool = False,               # V6: penalize high-eccentric exercises in-season
+    weekly_volume_target: dict[str, float] = None,  # muscle → weekly target sets
+    sessions_remaining_in_week: int = 1,       # sessions left including current
 ) -> float:
     """
     Compute a composite score for an exercise candidate.  Higher = better.
@@ -121,6 +123,7 @@ def compute_exercise_score(
     """
     score = 0.0
     user_preferences = user_preferences or {}
+    weekly_volume_target = weekly_volume_target or {}
 
     # ── 1. SFR Rating ────────────────────────────────────────────────────────
     # Hypertrophy: SFR is the primary driver → weight it higher
@@ -130,15 +133,24 @@ def compute_exercise_score(
     else:
         score += exercise.sfr_rating * 6
 
-    # ── 2. Volume Fill ───────────────────────────────────────────────────────
-    # Sum of (remaining_volume[muscle] × volume_credit) capped at max_sets_per_session.
-    # Primary (credit 1.0) contributes more than secondary (credit 0.5).
+    # ── 2. Volume Fill (urgency-weighted) ────────────────────────────────────
+    # Base fill = remaining_volume × volume_credit, capped at max_sets_per_session.
+    # Urgency multiplier: higher when deficit_ratio is large and few sessions remain.
+    # This ensures muscles falling behind get prioritized in later sessions.
     volume_fill = 0.0
     for ma in exercise.muscle_activations:
         muscle_key = ma.muscle.value
         if muscle_key in remaining_volume and remaining_volume[muscle_key] > 0:
             capped = min(remaining_volume[muscle_key], exercise.max_sets_per_session)
-            volume_fill += capped * ma.volume_credit
+            base_fill = capped * ma.volume_credit
+            # Urgency weighting: boost score when muscle is behind target
+            target = weekly_volume_target.get(muscle_key, 0)
+            if target > 0 and sessions_remaining_in_week > 0:
+                deficit_ratio = remaining_volume[muscle_key] / target
+                urgency = 1.0 + (deficit_ratio * 2.0 / sessions_remaining_in_week)
+            else:
+                urgency = 1.0
+            volume_fill += base_fill * urgency
 
     score += volume_fill * 8
 
