@@ -35,8 +35,8 @@ class TestCocoKeypoints:
     """Test COCO keypoint constants."""
 
     def test_coco_keypoint_names_count(self):
-        """COCO format should have exactly 17 keypoints."""
-        assert len(COCO_KEYPOINT_NAMES) == 17
+        """COCO+ format should have exactly 19 keypoints (COCO 17 + 2 foot)."""
+        assert len(COCO_KEYPOINT_NAMES) == 19
 
     def test_coco_keypoint_names_order(self):
         """Keypoint names should be in standard COCO order."""
@@ -58,14 +58,16 @@ class TestCocoKeypoints:
             "right_knee",
             "left_ankle",
             "right_ankle",
+            "left_foot_index",
+            "right_foot_index",
         ]
         assert COCO_KEYPOINT_NAMES == expected_names
 
     def test_coco_skeleton_connections_valid(self):
         """Skeleton connections should reference valid keypoint indices."""
         for start_idx, end_idx in COCO_SKELETON_CONNECTIONS:
-            assert 0 <= start_idx < 17, f"Invalid start index: {start_idx}"
-            assert 0 <= end_idx < 17, f"Invalid end index: {end_idx}"
+            assert 0 <= start_idx < 19, f"Invalid start index: {start_idx}"
+            assert 0 <= end_idx < 19, f"Invalid end index: {end_idx}"
 
     def test_keypoint_index_lookup(self):
         """keypoint_index should return correct index for name."""
@@ -87,7 +89,7 @@ class TestCocoKeypoints:
     def test_keypoint_name_invalid_index(self):
         """keypoint_name should raise IndexError for out-of-range index."""
         with pytest.raises(IndexError):
-            PoseEstimator.keypoint_name(17)
+            PoseEstimator.keypoint_name(19)
         with pytest.raises(IndexError):
             PoseEstimator.keypoint_name(-1)
 
@@ -122,7 +124,7 @@ class TestMediaPipePoseEstimator:
         """Estimator should expose COCO keypoint names."""
         estimator = MediaPipePoseEstimator()
         assert estimator.KEYPOINT_NAMES == COCO_KEYPOINT_NAMES
-        assert estimator.NUM_KEYPOINTS == 17
+        assert estimator.NUM_KEYPOINTS == 19
 
     def test_estimate_returns_skeleton2d_or_none(self):
         """estimate() should return Skeleton2D or None."""
@@ -149,7 +151,7 @@ class TestMediaPipePoseEstimator:
         result = estimator.estimate(test_frame)
 
         if result is not None:
-            assert len(result.keypoints) == 17
+            assert len(result.keypoints) == 19
 
         estimator.release()
 
@@ -177,7 +179,7 @@ class TestMediaPipePoseEstimator:
         result = estimator.estimate_3d(test_frame)
 
         if result is not None:
-            assert len(result.keypoints) == 17
+            assert len(result.keypoints) == 19
 
         estimator.release()
 
@@ -191,9 +193,9 @@ class TestMediaPipePoseEstimator:
 
         # Both should be None or both should have valid data
         if skeleton_2d is not None:
-            assert len(skeleton_2d.keypoints) == 17
+            assert len(skeleton_2d.keypoints) == 19
         if skeleton_3d is not None:
-            assert len(skeleton_3d.keypoints) == 17
+            assert len(skeleton_3d.keypoints) == 19
 
         estimator.release()
 
@@ -206,9 +208,9 @@ class TestBlazePoseToCoco:
     """Test BlazePose to COCO landmark mapping."""
 
     def test_mapping_covers_all_coco_keypoints(self):
-        """All 17 COCO keypoints should be mapped."""
+        """All 19 keypoints (COCO 17 + 2 foot) should be mapped."""
         mapped_coco_indices = set(BLAZEPOSE_TO_COCO.values())
-        expected = set(range(17))
+        expected = set(range(19))
         assert mapped_coco_indices == expected
 
     def test_mapping_is_bijective(self):
@@ -241,6 +243,8 @@ class TestBlazePoseToCoco:
             26: 14,  # right_knee -> right_knee
             27: 15,  # left_ankle -> left_ankle
             28: 16,  # right_ankle -> right_ankle
+            31: 17,  # left_foot_index -> left_foot_index
+            32: 18,  # right_foot_index -> right_foot_index
         }
 
         for blazepose_idx, coco_idx in expected_mappings.items():
@@ -294,7 +298,7 @@ class TestMediaPipeIntegration:
         assert result is None or isinstance(result, Skeleton2D)
 
         if result is not None:
-            assert len(result.keypoints) == 17
+            assert len(result.keypoints) == 19
             # Check that at least some keypoints have valid confidence
             confidences = [kp.confidence for kp in result.keypoints]
             assert any(c > 0 for c in confidences), "No valid keypoints detected"

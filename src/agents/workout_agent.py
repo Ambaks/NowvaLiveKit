@@ -37,8 +37,9 @@ class WorkoutAgent(BaseNovaAgent):
             session=self.session,
             state=self.state,
             room=self.userdata.room,
-            on_set_complete=self._on_coaching_set_complete,
+            on_workout_complete=self._on_workout_complete_signal,
             on_calibration_complete=self._on_calibration_complete,
+            audio_cue_service=self.userdata.audio_cue_service,
         )
         await coaching_service.start()
         self.userdata.coaching_service = coaching_service
@@ -104,18 +105,10 @@ class WorkoutAgent(BaseNovaAgent):
 
     # ===== COACHING SERVICE CALLBACKS =====
 
-    async def _on_coaching_set_complete(self, set_summary: dict):
-        """Receive set summary data from coaching service."""
-        logger.info(f"[COACHING] Set complete: {set_summary}")
-
-        if set_summary.get("workout_complete"):
-            # Schedule cleanup in a separate task so the orchestrator's
-            # processor task can finish cleanly before we tear it down.
-            # Without this, stop() cancels the task we're running inside,
-            # causing CancelledError and InvalidStateError cascades.
-            logger.info("[COACHING] Workout complete — scheduling cleanup")
-            asyncio.create_task(self._handle_workout_complete())
-            return
+    async def _on_workout_complete_signal(self, data: dict):
+        """Called by CoachingService when the entire workout is done."""
+        logger.info("[COACHING] Workout complete signal received — scheduling cleanup")
+        asyncio.create_task(self._handle_workout_complete())
 
     async def _on_calibration_complete(self):
         """Called by CoachingService after calibration finishes.
@@ -422,71 +415,57 @@ class WorkoutAgent(BaseNovaAgent):
         return MainMenuAgent(state=self.state, userdata=self.userdata)
 
     @function_tool
-    async def complete_set(
-        self,
-        reps: int,
-        weight: Optional[float] = None,
-        rpe: Optional[float] = None,
-        context: RunContext = None
-    ):
+    async def end_set_early(self, reps_completed: int, context: RunContext = None):
         """
-        Call this when the user completes a set.
-        User might say: "done", "finished", "complete", or you count the reps and they confirm.
+        Call this when the user wants to stop the current set before the target reps.
+        User might say: "I'm done, that was 5", "stop, I got 3", "rack it".
+        Do NOT call this when sets complete normally — the coaching system handles that automatically.
 
         Args:
-            reps: Number of reps completed
-            weight: Weight used (optional, kg or lbs)
-            rpe: Rate of perceived exertion 1-10 (optional)
+            reps_completed: Number of reps the user completed before stopping
         """
-        logger.info(f"[WORKOUT] User completed set: {reps} reps, weight={weight}, rpe={rpe}")
+        logger.info(f"[WORKOUT] User ending set early: {reps_completed} reps")
 
-        # Guard: if coaching service already auto-completed this set, skip
         coaching = self.userdata.coaching_service
-        if coaching and coaching.is_resting:
-            logger.info("[WORKOUT] Set already auto-completed by orchestrator — skipping duplicate advance")
-            return None, "The set was already tracked automatically. Let the user know their set is recorded and to rest up for the next one."
-
-        from core.workout_session import WorkoutSession
-
-        session_data = self.state.get("workout.current_session")
-        if not session_data:
-            logger.info("[WORKOUT ERROR] No active session")
-            return None, "Tell the user: 'Hmm, I don't have an active workout session. Let's start a workout first!' Keep it helpful."
-
-        try:
-            session = WorkoutSession.from_dict(session_data)
-
-            current_set = session.get_current_set()
-            if not current_set:
-                return None, "Tell the user: 'Great work! Looks like you've finished all the sets. Ready to move on or end the workout?' Keep it encouraging."
-
-            session.mark_set_complete(
-                performed_reps=reps,
-                performed_weight=weight,
-                rpe=rpe
+        if not coaching:
+            return None, (
+                "Tell the user: 'Got it, set logged.' Keep it brief."
             )
 
-            has_next = session.advance_to_next_set()
+        # Check if the orchestrator already auto-completed this set
+        if coaching.is_resting:
+            return None, (
+                "The set was already tracked automatically. "
+                "Let the user know their set is recorded and to rest up."
+            )
 
-            self.state.set("workout.current_session", session.to_dict())
-            self.state.save_state()
+        try:
+            result = await coaching.force_end_current_set(reps=reps_completed)
 
-            if has_next:
-                next_desc = session.get_current_exercise_description()
-                rest_time = current_set.rest_seconds
-
-                rest_min = rest_time // 60
-                rest_sec = rest_time % 60
-                rest_display = f"{rest_min}:{rest_sec:02d}" if rest_min > 0 else f"{rest_sec} seconds"
-
-                return None, f"Tell the user: 'Awesome set! That's {reps} reps at {weight}kg.' Then say: 'Rest for {rest_display}. Next up: {next_desc}' Keep it energetic and clear."
+            if result["status"] == "advanced":
+                rest_sec = result.get("rest_seconds", 60)
+                next_desc = result.get("next_set_description", "the next set")
+                rest_display = f"{rest_sec // 60}:{rest_sec % 60:02d}" if rest_sec >= 60 else f"{rest_sec} seconds"
+                return None, (
+                    f"Tell the user: 'Got it — {reps_completed} reps, set logged. "
+                    f"Rest for {rest_display}. Next up: {next_desc}.' "
+                    f"Keep it brief and encouraging."
+                )
+            elif result["status"] == "workout_complete":
+                return None, (
+                    f"Tell the user: 'That's {reps_completed} reps — and that was your last set! "
+                    f"Amazing work today.' Be celebratory. Then call end_workout()."
+                )
             else:
-                summary = session.get_progress_summary()
-                return None, f"Tell the user: 'YES! That's the last one! You completed {summary['completed_sets']} total sets today. Amazing work! Ready to wrap up?' Keep it celebratory."
+                return None, (
+                    f"Tell the user: 'Got it, {reps_completed} reps logged.' Keep it brief."
+                )
 
         except Exception as e:
-            logger.exception("[WORKOUT ERROR] Failed to complete set")
-            return None, "Tell the user: 'Good set! Let me know when you're ready for the next one.' Keep it simple."
+            logger.exception("[WORKOUT ERROR] Failed to end set early")
+            return None, (
+                "Tell the user: 'Got it, set logged. Rest up!' Keep it simple."
+            )
 
     @function_tool
     async def skip_exercise(self, reason: Optional[str] = None, context: RunContext = None):

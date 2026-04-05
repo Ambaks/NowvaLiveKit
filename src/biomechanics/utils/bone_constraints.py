@@ -73,6 +73,9 @@ BONE_PAIRS: List[Tuple[int, int]] = [
     # Right arm
     (CK.RIGHT_SHOULDER, CK.RIGHT_ELBOW),
     (CK.RIGHT_ELBOW, CK.RIGHT_WRIST),
+    # Feet (only calibrated/enforced when foot_index landmarks are visible)
+    (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX),
+    (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX),
 ]
 
 
@@ -142,7 +145,7 @@ class BoneLengthConstraints:
                 self._standing_gate.check(skeleton)
                 return skeleton
 
-            self._record_calibration(points)
+            self._record_calibration(points, confidences)
             self._frame_count += 1
 
             if self._frame_count >= self.calibration_frames:
@@ -154,6 +157,10 @@ class BoneLengthConstraints:
         corrected = points.copy()
 
         for proximal_idx, distal_idx in BONE_PAIRS:
+            # Skip pairs where either keypoint has insufficient confidence
+            if confidences[proximal_idx] < 0.1 or confidences[distal_idx] < 0.1:
+                continue
+
             p_prox = corrected[proximal_idx]
             p_dist = corrected[distal_idx]
 
@@ -187,9 +194,12 @@ class BoneLengthConstraints:
             frame_index=skeleton.frame_index,
         )
 
-    def _record_calibration(self, points: np.ndarray) -> None:
+    def _record_calibration(self, points: np.ndarray, confidences: np.ndarray) -> None:
         """Record bone lengths for one frame during calibration."""
         for proximal_idx, distal_idx in BONE_PAIRS:
+            # Skip pairs where either keypoint has insufficient confidence
+            if confidences[proximal_idx] < 0.1 or confidences[distal_idx] < 0.1:
+                continue
             length = float(np.linalg.norm(
                 points[distal_idx] - points[proximal_idx]
             ))

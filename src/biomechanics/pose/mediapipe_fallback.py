@@ -47,6 +47,8 @@ BLAZEPOSE_TO_COCO = {
     26: 14,  # right_knee -> right_knee
     27: 15,  # left_ankle -> left_ankle
     28: 16,  # right_ankle -> right_ankle
+    31: 17,  # left_foot_index -> left_foot_index
+    32: 18,  # right_foot_index -> right_foot_index
 }
 
 # Reverse mapping: COCO index -> BlazePose index
@@ -189,7 +191,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         """Convert MediaPipe landmarks to COCO 17 format Skeleton2D."""
         keypoints = []
 
-        for coco_idx in range(17):
+        for coco_idx in range(19):
             blazepose_idx = COCO_TO_BLAZEPOSE.get(coco_idx)
 
             if blazepose_idx is not None and blazepose_idx < len(landmarks):
@@ -222,7 +224,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         """Convert MediaPipe world landmarks to COCO 17 format Skeleton3D."""
         keypoints = []
 
-        for coco_idx in range(17):
+        for coco_idx in range(19):
             blazepose_idx = COCO_TO_BLAZEPOSE.get(coco_idx)
 
             if blazepose_idx is not None and blazepose_idx < len(world_landmarks):

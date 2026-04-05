@@ -30,6 +30,9 @@ class UserData:
     # Coaching service (live object reference, set by WorkoutAgent)
     coaching_service: Any = None
 
+    # Prewarmed AudioCueService (set by prewarm, used by CoachingService)
+    audio_cue_service: Any = None
+
     # Compaction service (live object reference, set by voice_agent entrypoint)
     compaction_service: Any = None
 

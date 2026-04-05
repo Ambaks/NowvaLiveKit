@@ -34,19 +34,20 @@ class CoachingService:
         session,          # AgentSession — for generate_reply, output.audio
         state,            # AgentState — for reading/writing WorkoutSession
         room=None,        # rtc.Room — for publishing separate audio tracks
-        on_set_complete: Optional[Callable] = None,
+        on_workout_complete: Optional[Callable] = None,
         on_calibration_complete: Optional[Callable] = None,
+        audio_cue_service=None,  # Prewarmed AudioCueService (optional)
     ):
         self._session = session
         self._state = state
         self._room = room
-        self._on_set_complete_callback = on_set_complete
+        self._on_workout_complete_callback = on_workout_complete
         self._on_calibration_complete_callback = on_calibration_complete
 
         # Owned components
         self._coaching_ipc = None
         self._coaching_orchestrator = None
-        self._audio_cue_service = None
+        self._audio_cue_service = audio_cue_service
 
         # Internal state
         self._listener_running = False
@@ -285,6 +286,13 @@ class CoachingService:
             self._audio_cue_service = AudioCueService(session=self._session)
             if self._room:
                 await self._audio_cue_service.setup_rep_track(self._room)
+        else:
+            # Prewarmed service — attach live session and rep track on first use
+            if self._audio_cue_service._session is None:
+                self._audio_cue_service.attach_session(self._session)
+                logger.info("[COACHING SERVICE] Attached session to prewarmed AudioCueService")
+            if self._room and not self._audio_cue_service._rep_track_ready:
+                await self._audio_cue_service.setup_rep_track(self._room)
 
         cues = message.get("cues", {})
         exercise = message.get("exercise_name", "unknown")
@@ -478,17 +486,6 @@ class CoachingService:
                     except Exception as e:
                         logger.error(f"[COACHING SERVICE] Failed to send rest_start: {e}")
 
-                # Notify voice agent of set completion
-                if self._on_set_complete_callback:
-                    set_summary = {
-                        "set_number": self._coaching_orchestrator._set_number if self._coaching_orchestrator else 0,
-                        "total_reps": rep_count,
-                        "clean_reps": self._coaching_orchestrator._set_clean_count if self._coaching_orchestrator else 0,
-                        "has_next_set": True,
-                        "new_target_reps": new_target,
-                    }
-                    await self._on_set_complete_callback(set_summary)
-
                 return new_target
             else:
                 logger.info("[COACHING SERVICE] Workout complete — no more sets")
@@ -501,30 +498,58 @@ class CoachingService:
                     except Exception as e:
                         logger.error(f"[COACHING SERVICE] Failed to send workout_complete: {e}")
 
-                if self._on_set_complete_callback:
-                    set_summary = {
-                        "set_number": self._coaching_orchestrator._set_number if self._coaching_orchestrator else 0,
-                        "total_reps": rep_count,
-                        "clean_reps": self._coaching_orchestrator._set_clean_count if self._coaching_orchestrator else 0,
-                        "has_next_set": False,
-                        "new_target_reps": None,
-                    }
-                    await self._on_set_complete_callback(set_summary)
-
                 return None
 
         except Exception:
             logger.exception("[COACHING SERVICE] Failed to advance workout set")
             return None
 
+    async def force_end_current_set(self, reps: int) -> dict:
+        """Force-end the current set early (called by workout agent when user verbally stops).
+
+        Puts the orchestrator into rest mode, overrides the rep count,
+        advances the WorkoutSession, and resets for the next set if any.
+        """
+        from core.workout_session import WorkoutSession
+
+        session_data = self._state.get("workout.current_session")
+        if not session_data:
+            return {"status": "no_session"}
+
+        session = WorkoutSession.from_dict(session_data)
+        completed_set = session.get_current_set()
+        rest_seconds = completed_set.rest_seconds if completed_set else 60
+
+        if self._coaching_orchestrator:
+            self._coaching_orchestrator._resting = True
+            self._coaching_orchestrator._set_rep_count = reps
+
+        new_target = await self._advance_workout_set()
+
+        if new_target is not None:
+            # There is a next set — reset orchestrator
+            if self._coaching_orchestrator:
+                self._coaching_orchestrator.reset_set(target_reps=new_target)
+
+            session_data = self._state.get("workout.current_session")
+            next_desc = ""
+            if session_data:
+                s = WorkoutSession.from_dict(session_data)
+                next_desc = s.get_current_exercise_description()
+
+            return {
+                "status": "advanced",
+                "rest_seconds": rest_seconds,
+                "next_set_description": next_desc,
+            }
+        else:
+            return {"status": "workout_complete"}
+
     async def _on_workout_complete(self):
         """Called by orchestrator after exercise recap is spoken."""
         logger.info("[COACHING SERVICE] Workout complete — notifying voice agent")
-        if self._on_set_complete_callback:
-            await self._on_set_complete_callback({
-                "workout_complete": True,
-                "set_number": self._coaching_orchestrator._set_number if self._coaching_orchestrator else 0,
-            })
+        if self._on_workout_complete_callback:
+            await self._on_workout_complete_callback({"workout_complete": True})
 
     # ------------------------------------------------------------------
     # Audio Playback

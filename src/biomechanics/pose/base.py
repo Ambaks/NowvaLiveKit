@@ -29,8 +29,10 @@ COCO_KEYPOINT_NAMES = [
     "right_hip",      # 12
     "left_knee",      # 13
     "right_knee",     # 14
-    "left_ankle",     # 15
-    "right_ankle",    # 16
+    "left_ankle",      # 15
+    "right_ankle",     # 16
+    "left_foot_index", # 17
+    "right_foot_index",# 18
 ]
 
 # COCO skeleton connections (pairs of keypoint indices)
@@ -47,6 +49,8 @@ COCO_SKELETON_CONNECTIONS = [
     (13, 15),  # left_knee - left_ankle
     (12, 14),  # right_hip - right_knee
     (14, 16),  # right_knee - right_ankle
+    (15, 17),  # left_ankle - left_foot_index
+    (16, 18),  # right_ankle - right_foot_index
 ]
 
 
@@ -63,7 +67,7 @@ class PoseEstimator(ABC):
 
     # Class-level keypoint names
     KEYPOINT_NAMES = COCO_KEYPOINT_NAMES
-    NUM_KEYPOINTS = 17
+    NUM_KEYPOINTS = 19
 
     def __init__(self, confidence_threshold: float = 0.3):
         """

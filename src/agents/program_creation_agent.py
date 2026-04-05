@@ -792,8 +792,8 @@ class ProgramCreationAgent(BaseNovaAgent):
     @function_tool
     async def generate_workout_program(self, context: RunContext):
         """
-        Call this to START generating a complete workout program via FastAPI backend.
-        Returns immediately - generation happens in the background.
+        Call this to generate a complete workout program via FastAPI backend.
+        This tool handles the entire generation process including polling — do NOT call any status-check tool after this.
         """
         import httpx
 
@@ -805,10 +805,6 @@ class ProgramCreationAgent(BaseNovaAgent):
         saved_program_id = self.state.get("program_creation.saved_program_id")
         if saved_program_id:
             return None, f"Program already generated. Now call finish_program_creation() to complete."
-
-        existing_job_id = self.state.get("program_creation.job_id")
-        if existing_job_id:
-            return None, f"Generation already started. Now call check_program_status() to see if it's done."
 
         height_cm = self.state.get("program_creation.height_cm")
         weight_kg = self.state.get("program_creation.weight_kg")
@@ -842,6 +838,12 @@ class ProgramCreationAgent(BaseNovaAgent):
         if missing:
             logger.info(f"[PROGRAM] ERROR: Missing required parameters: {', '.join(missing)}")
             return None, f"ERROR: Cannot generate program - missing required parameters: {', '.join(missing)}. Go back and ask the missing questions."
+
+        # Speak hold message and suppress VAD so user speech doesn't interrupt polling
+        await self._say(
+            "Alright, I've got everything I need. Building your custom program now — this usually takes about 30 seconds. Hang tight!",
+            wait=True, restore=False
+        )
 
         try:
             user_info = self.state.get_user()
@@ -883,64 +885,66 @@ class ProgramCreationAgent(BaseNovaAgent):
 
             self.state.set("program_creation.job_id", job_id)
             logger.info(f"[PROGRAM] Started generation job: {job_id}")
+            self._log_function_call("generate_workout_program", params, {"job_id": job_id})
 
-            result = (None, f"Program generation started! Wait 45 seconds, then call check_program_status() to see if it's done. Don't say anything yet, just wait and call check_program_status() after 45 seconds.")
+            # Poll for completion internally — never ask the LLM to poll
+            final_status = None
+            for attempt in range(1, 25):
+                await asyncio.sleep(5.0)
+                try:
+                    async with httpx.AsyncClient() as client:
+                        status_resp = await client.get(
+                            f"{fastapi_url}/api/programs/status/{job_id}",
+                            headers=_service_headers(),
+                            timeout=5.0
+                        )
+                        status_data = status_resp.json()
 
-            self._log_function_call("generate_workout_program", params, result)
+                    status = status_data["status"]
+                    progress = status_data.get("progress", 0)
+                    logger.info(f"[PROGRAM] Poll attempt {attempt}: {status} ({progress}%)")
 
-            return result
+                    if status == "completed":
+                        program_id = status_data["program_id"]
+                        self.state.set("program_creation.saved_program_id", program_id)
+                        logger.info(f"[PROGRAM] Program generation complete! ID: {program_id}")
+                        final_status = "completed"
+                        break
+                    elif status == "failed":
+                        error = status_data.get("error_message", "Unknown error")
+                        logger.info(f"[PROGRAM] Generation failed: {error}")
+                        final_status = "failed"
+                        break
+                except Exception as poll_err:
+                    logger.info(f"[PROGRAM] Poll error on attempt {attempt}: {poll_err}")
+
+            self._restore_turn_detection()
+
+            if final_status == "completed":
+                return None, (
+                    "Program is ready! Say something like: 'Great news! Your custom program is ready. "
+                    "I've saved it to your account.' Then call finish_program_creation(). Be enthusiastic!"
+                )
+            elif final_status == "failed":
+                return None, (
+                    "Generation failed. Say something like: 'Hmmm, seems like I had trouble creating "
+                    "your program. Let me try again.' Keep it apologetic."
+                )
+            else:
+                return None, (
+                    "The program is still generating but it's taking longer than usual. Say something like: "
+                    "'Your program is taking a bit longer than expected — it should be ready soon. "
+                    "Check back in a minute and I'll have it for you.' Keep it reassuring."
+                )
 
         except Exception as e:
             logger.exception("[PROGRAM] ERROR")
+            self._restore_turn_detection()
 
             result = (None, f"Error starting generation. Say something like: 'I had trouble starting your program. Let me try again.' Keep it apologetic.")
             self._log_function_call("generate_workout_program", {}, result)
 
             return result
-
-    @function_tool
-    async def check_program_status(self, context: RunContext):
-        """
-        Check if program generation is complete.
-        Call this after generate_workout_program() to poll for completion.
-        """
-        import httpx
-
-        job_id = self.state.get("program_creation.job_id")
-        if not job_id:
-            return None, f"No generation job found. Call generate_workout_program() first."
-
-        try:
-            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{fastapi_url}/api/programs/status/{job_id}",
-                    headers=_service_headers(),
-                    timeout=5.0
-                )
-                data = response.json()
-
-            status = data["status"]
-            progress = data.get("progress", 0)
-
-            if status == "completed":
-                program_id = data["program_id"]
-                self.state.set("program_creation.saved_program_id", program_id)
-                logger.info(f"[PROGRAM] Program generation complete! ID: {program_id}")
-                return None, f"Program is ready! Say something like: 'Great news! Your custom program is ready. I've saved it to your account.' Then call finish_program_creation(). Be enthusiastic!"
-
-            elif status == "failed":
-                error = data.get("error_message", "Unknown error")
-                logger.info(f"[PROGRAM] Generation failed: {error}")
-                return None, f"Generation failed. Say something like: 'Hmmm, seems like I had trouble creating your program. Let me try again.' Keep it apologetic."
-
-            else:
-                logger.info(f"[PROGRAM] Generation in progress: {progress}%")
-                return None, f"Program is {progress}% complete. Wait 15 more seconds, then call check_program_status() again. Don't say anything, just wait."
-
-        except Exception as e:
-            logger.info(f"[PROGRAM] Error checking status: {e}")
-            return None, f"Error checking status. Wait 10 seconds and call check_program_status() again."
 
     @function_tool
     async def finish_program_creation(self, context: RunContext):
@@ -1071,7 +1075,7 @@ class ProgramCreationAgent(BaseNovaAgent):
             if not is_risky:
                 logger.info(f"[PROGRAM UPDATE] Validation passed, proceeding with update")
                 self.state.set("program_update.user_profile", user_profile)
-                return None, f"Got it! I'll update your {program_name} program: '{change_request}'. Now call start_program_update_job() to begin."
+                return None, f"Got it! I'll update your {program_name} program: '{change_request}'. Now call apply_program_update() to apply the changes."
 
             else:
                 warning = validation_result.get("warning", "This change may not be ideal for your goals.")
@@ -1093,9 +1097,10 @@ class ProgramCreationAgent(BaseNovaAgent):
             db.close()
 
     @function_tool
-    async def start_program_update_job(self, context: RunContext, user_response: str = ""):
+    async def apply_program_update(self, context: RunContext, user_response: str = ""):
         """
-        Call this to start the program update job after the user has described what they want to change.
+        Call this to apply a program update. Handles the entire update process including polling.
+        Do NOT call any status-check tool after this — it handles everything internally.
 
         Args:
             user_response: Optional - user's response if they were presented with validation choices
@@ -1112,6 +1117,7 @@ class ProgramCreationAgent(BaseNovaAgent):
         if not program_id or not change_request or not user_profile:
             return None, f"Error: Missing required data. Ensure capture_program_change_request() was called first."
 
+        # Resolve user choice if validation presented alternatives
         if awaiting_choice and validation_result:
             logger.info(f"[PROGRAM UPDATE] Processing user choice: {user_response}")
 
@@ -1152,6 +1158,12 @@ class ProgramCreationAgent(BaseNovaAgent):
             self.state.set("program_update.awaiting_choice", False)
             self.state.set("program_update.validation_result", None)
 
+        # Speak hold message and suppress VAD so user speech doesn't interrupt polling
+        await self._say(
+            f"Perfect, I'm updating your {program_name} program now. This usually takes about a minute. Hang tight!",
+            wait=True, restore=False
+        )
+
         try:
             fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
             async with httpx.AsyncClient() as client:
@@ -1174,53 +1186,41 @@ class ProgramCreationAgent(BaseNovaAgent):
             self.state.set("program_update.job_id", job_id)
             logger.info(f"[PROGRAM UPDATE] Started update job: {job_id}")
 
-            return None, f"Say something like: 'Perfect! I'm updating your {program_name} program now. This will take about a minute. Hang tight!' Wait 45 seconds, then call check_program_update_status()."
+            # Poll for completion internally — never ask the LLM to poll
+            final_status = None
+            final_data = None
+            for attempt in range(1, 25):
+                await asyncio.sleep(5.0)
+                try:
+                    async with httpx.AsyncClient() as client:
+                        status_resp = await client.get(
+                            f"{fastapi_url}/api/programs/update-status/{job_id}",
+                            headers=_service_headers(),
+                            timeout=5.0
+                        )
+                        status_data = status_resp.json()
 
-        except Exception as e:
-            logger.exception("[PROGRAM UPDATE] ERROR")
-            return None, f"Error starting update. Say something like: 'I had trouble starting the update. Let me try again.'"
+                    status = status_data["status"]
+                    progress = status_data.get("progress", 0)
+                    logger.info(f"[PROGRAM UPDATE] Poll attempt {attempt}: {status} ({progress}%)")
 
-    @function_tool
-    async def check_program_update_status(self, context: RunContext):
-        """
-        Check if the program update is complete.
-        Call this after start_program_update_job() to poll for completion.
-        """
-        import httpx
+                    if status == "completed":
+                        final_status = "completed"
+                        final_data = status_data
+                        logger.info(f"[PROGRAM UPDATE] Update complete!")
+                        break
+                    elif status == "failed":
+                        error = status_data.get("error_message", "Unknown error")
+                        logger.info(f"[PROGRAM UPDATE] Update failed: {error}")
+                        final_status = "failed"
+                        break
+                except Exception as poll_err:
+                    logger.info(f"[PROGRAM UPDATE] Poll error on attempt {attempt}: {poll_err}")
 
-        job_id = self.state.get("program_update.job_id")
-        program_name = self.state.get("program_update.selected_program_name")
+            self._restore_turn_detection()
 
-        if not job_id:
-            return None, f"No update job found. Call start_program_update_job() first."
-
-        try:
-            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{fastapi_url}/api/programs/update-status/{job_id}",
-                    headers=_service_headers(),
-                    timeout=5.0
-                )
-                data = response.json()
-
-            status = data["status"]
-            progress = data.get("progress", 0)
-
-            if status == "completed":
-                diff = data.get("diff") or []
-
-                if diff:
-                    diff_summary = "\n".join([f"- {change}" for change in diff])
-                    changes_text = f"Here's what changed:\n{diff_summary}\n"
-                else:
-                    changes_text = ""
-
+            if final_status == "completed":
                 self.state.set("program_update", None)
-
-                logger.info(f"[PROGRAM UPDATE] Update complete!")
-
-                # Handoff back to MainMenuAgent
                 self.state.switch_mode("main_menu")
                 self.state.save_state()
                 await self._suppress_turn_detection()
@@ -1228,15 +1228,19 @@ class ProgramCreationAgent(BaseNovaAgent):
                 from agents.main_menu_agent import MainMenuAgent
                 return MainMenuAgent(state=self.state, userdata=self.userdata)
 
-            elif status == "failed":
-                error = data.get("error_message", "Unknown error")
-                logger.info(f"[PROGRAM UPDATE] Update failed: {error}")
-                return None, f"Update failed. Say something like: 'I had trouble updating your program. Let's try again.'"
-
+            elif final_status == "failed":
+                return None, (
+                    "Update failed. Say something like: 'I had trouble updating your program. "
+                    "Let's try again.' Keep it apologetic."
+                )
             else:
-                logger.info(f"[PROGRAM UPDATE] Update in progress: {progress}%")
-                return None, f"Update is {progress}% complete. Wait 15 more seconds, then call check_program_update_status() again. Don't say anything, just wait."
+                return None, (
+                    "The update is still processing but it's taking longer than usual. Say something like: "
+                    "'Your program update is taking a bit longer than expected — it should be ready soon. "
+                    "Check back in a minute and I'll have it for you.' Keep it reassuring."
+                )
 
         except Exception as e:
-            logger.info(f"[PROGRAM UPDATE] Error checking status: {e}")
-            return None, f"Error checking status. Wait 10 seconds and call check_program_update_status() again."
+            logger.exception("[PROGRAM UPDATE] ERROR")
+            self._restore_turn_detection()
+            return None, f"Error starting update. Say something like: 'I had trouble starting the update. Let me try again.'"

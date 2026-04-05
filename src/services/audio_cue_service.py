@@ -110,6 +110,10 @@ class AudioCueService:
         self._load_rep_sound()
         self._load_from_disk()
 
+    def attach_session(self, session) -> None:
+        """Bind a live AgentSession for audio playback (after prewarm)."""
+        self._session = session
+
     def _load_rep_sound(self) -> None:
         """Load the single rep validation sound into memory."""
         if not REP_SOUND_PATH.exists():

@@ -220,14 +220,14 @@ After `capture_fitness_level()`, the system auto-decides VBT:
 You don't make this decision — just collect params.
 
 # After Collection
-`generate_workout_program()` → Wait 45s → `check_program_status()` → If incomplete, wait 15s and recheck → When done, `finish_program_creation()`
+`generate_workout_program()` → (tool handles wait + polling internally) → When done, `finish_program_creation()`
 
 # Critical Rules
 1. NEVER generate programs yourself — GPT-5 generates, you collect data
 2. Collect ALL parameters before calling `generate_workout_program()`
 3. NO WAITING between tool calls — chain immediately
 4. Tell user to wait while generating (10-30s is normal)
-5. Final tool sequence: `capture_fitness_level` → `set_vbt_capability` → `generate_workout_program` → `check_program_status` (poll) → `finish_program_creation`
+5. Final tool sequence: `capture_fitness_level` → `set_vbt_capability` → `generate_workout_program` (handles wait internally) → `finish_program_creation`
 6. Don't ask "are you ready?" — just execute
 7. Group related params: height+weight together, age+sex together
 8. Optional params: use sensible defaults (60 min, "none" for injuries/sport) if user says "normal" or skips
@@ -237,5 +237,5 @@ User answers → Call capture function → Get signal → IMMEDIATELY ask next q
 Every response = function call + next question. Sound natural, not robotic.
 
 # Function Reference
-capture_height_weight("5'10\\"", "175 lbs") | capture_age_sex(28, "male") | capture_goal("build muscle") | capture_program_duration(12) | capture_training_frequency(4) | capture_session_duration(90) | capture_injury_history("none") | capture_specific_sport("basketball") | capture_training_season("in_season") | capture_games_per_week(2) | capture_user_notes("Prefers RDLs") | capture_fitness_level("intermediate") | set_vbt_capability(true/false) | generate_workout_program() | check_program_status() | finish_program_creation()
+capture_height_weight("5'10\\"", "175 lbs") | capture_age_sex(28, "male") | capture_goal("build muscle") | capture_program_duration(12) | capture_training_frequency(4) | capture_session_duration(90) | capture_injury_history("none") | capture_specific_sport("basketball") | capture_training_season("in_season") | capture_games_per_week(2) | capture_user_notes("Prefers RDLs") | capture_fitness_level("intermediate") | set_vbt_capability(true/false) | generate_workout_program() | finish_program_creation()
 """

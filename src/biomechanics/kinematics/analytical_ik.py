@@ -83,6 +83,14 @@ class AnalyticalIKSolver(IKSolver):
         angles.hip_adduction_l = self._compute_hip_adduction(kpts, side="left")
         angles.hip_adduction_r = self._compute_hip_adduction(kpts, side="right")
 
+        # Knee valgus from toe (primary metric when foot landmarks available)
+        valgus_l, foot_conf_l = self._compute_knee_valgus_from_toe(kpts, side="left")
+        valgus_r, foot_conf_r = self._compute_knee_valgus_from_toe(kpts, side="right")
+        angles.knee_valgus_l = valgus_l
+        angles.knee_valgus_r = valgus_r
+        angles.foot_confidence_l = foot_conf_l
+        angles.foot_confidence_r = foot_conf_r
+
         # Hip rotation (internal/external)
         angles.hip_rotation_l = self._compute_hip_rotation(kpts, side="left")
         angles.hip_rotation_r = self._compute_hip_rotation(kpts, side="right")
@@ -117,7 +125,8 @@ class AnalyticalIKSolver(IKSolver):
             "nose", "left_eye", "right_eye", "left_ear", "right_ear",
             "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
             "left_wrist", "right_wrist", "left_hip", "right_hip",
-            "left_knee", "right_knee", "left_ankle", "right_ankle"
+            "left_knee", "right_knee", "left_ankle", "right_ankle",
+            "left_foot_index", "right_foot_index",
         ]
 
         kpts = {}
@@ -222,6 +231,58 @@ class AnalyticalIKSolver(IKSolver):
             sign = -1.0 if thigh_vec[0] < 0 else 1.0
 
         return angle * sign
+
+    def _compute_knee_valgus_from_toe(self, kpts: dict, side: str) -> tuple:
+        """
+        Compute knee valgus as the frontal-plane deviation of the knee
+        from the hip-to-big-toe reference line.
+
+        Returns:
+            (valgus_angle_degrees, foot_confidence)
+
+        Positive = valgus (knee medial to the hip-toe line)
+        Negative = varus (knee lateral to the hip-toe line)
+        """
+        hip = self._get_point(kpts, f"{side}_hip")
+        knee = self._get_point(kpts, f"{side}_knee")
+        foot = self._get_point(kpts, f"{side}_foot_index")
+
+        _, foot_conf = kpts.get(f"{side}_foot_index", (np.zeros(3), 0.0))
+
+        if hip is None or knee is None or foot is None:
+            return 0.0, foot_conf
+
+        # Project onto frontal plane (XY in MediaPipe coords, removing Z/depth)
+        hip_frontal = np.array([hip[0], hip[1]])
+        knee_frontal = np.array([knee[0], knee[1]])
+        foot_frontal = np.array([foot[0], foot[1]])
+
+        # Reference line: hip to foot_index
+        ref_vec = foot_frontal - hip_frontal
+        ref_len = np.linalg.norm(ref_vec)
+        if ref_len < 1e-6:
+            return 0.0, foot_conf
+
+        # Knee vector: hip to knee
+        knee_vec = knee_frontal - hip_frontal
+
+        # Angle magnitude via 3D helper (pad to 3D for angle_between_vectors)
+        angle = angle_between_vectors(
+            np.array([ref_vec[0], ref_vec[1], 0.0]),
+            np.array([knee_vec[0], knee_vec[1], 0.0]),
+        )
+
+        # Sign via 2D cross product: positive cross = knee is to the left of ref line
+        cross_2d = ref_vec[0] * knee_vec[1] - ref_vec[1] * knee_vec[0]
+
+        if side == "left":
+            # Left leg: knee medial (toward center/right) → cross > 0 = valgus
+            sign = 1.0 if cross_2d > 0 else -1.0
+        else:
+            # Right leg: knee medial (toward center/left) → cross < 0 = valgus
+            sign = 1.0 if cross_2d < 0 else -1.0
+
+        return angle * sign, foot_conf
 
     def _compute_hip_rotation(self, kpts: dict, side: str) -> float:
         """

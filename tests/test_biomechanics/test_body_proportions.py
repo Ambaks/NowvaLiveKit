@@ -35,7 +35,7 @@ def _make_skeleton(
 
 
 def _standing_skeleton() -> np.ndarray:
-    points = np.zeros((17, 3))
+    points = np.zeros((19, 3))
     points[CK.NOSE] = [0.0, 1.70, 0.0]
     points[CK.LEFT_EYE] = [0.03, 1.72, -0.02]
     points[CK.RIGHT_EYE] = [-0.03, 1.72, -0.02]
@@ -53,6 +53,8 @@ def _standing_skeleton() -> np.ndarray:
     points[CK.LEFT_ANKLE] = [0.10, 0.10, 0.0]
     points[CK.RIGHT_KNEE] = [-0.10, 0.55, 0.0]
     points[CK.RIGHT_ANKLE] = [-0.10, 0.10, 0.0]
+    points[CK.LEFT_FOOT_INDEX] = [0.10, 0.05, 0.10]
+    points[CK.RIGHT_FOOT_INDEX] = [-0.10, 0.05, 0.10]
     return points
 
 

@@ -72,6 +72,10 @@ class RuleEngine:
         self._peak_hip_adduction: float = 0.0
         self._rep_peak_hip_adductions: List[float] = []
         self._current_rep_peak_adduction: float = 0.0
+        self._peak_knee_valgus: float = 0.0
+        self._rep_peak_knee_valgus: List[float] = []
+        self._current_rep_peak_valgus: float = 0.0
+        self._toe_available_during_calibration: bool = False
         self._peak_asymmetry: float = 0.0
         self._peak_dorsiflexion_drop: float = 0.0
         self._baseline_dorsiflexion_l: float = 0.0
@@ -235,6 +239,14 @@ class RuleEngine:
         self._peak_trunk_flexion = min(self._peak_trunk_flexion, angles.trunk_flexion)
         frame_adduction = max(abs(angles.hip_adduction_l), abs(angles.hip_adduction_r))
         self._current_rep_peak_adduction = max(self._current_rep_peak_adduction, frame_adduction)
+
+        # Track knee valgus from toe when available
+        foot_conf = min(angles.foot_confidence_l, angles.foot_confidence_r)
+        if foot_conf >= 0.3:
+            self._toe_available_during_calibration = True
+            frame_valgus = max(abs(angles.knee_valgus_l), abs(angles.knee_valgus_r))
+            self._current_rep_peak_valgus = max(self._current_rep_peak_valgus, frame_valgus)
+
         self._peak_asymmetry = max(
             self._peak_asymmetry,
             abs(angles.hip_flexion_l - angles.hip_flexion_r),
@@ -253,10 +265,14 @@ class RuleEngine:
         if self._calibrated:
             return
 
-        # Save this rep's peak adduction and reset for next rep
+        # Save this rep's peak adduction and valgus, reset for next rep
         if self._current_rep_peak_adduction > 0:
             self._rep_peak_hip_adductions.append(self._current_rep_peak_adduction)
         self._current_rep_peak_adduction = 0.0
+
+        if self._current_rep_peak_valgus > 0:
+            self._rep_peak_knee_valgus.append(self._current_rep_peak_valgus)
+        self._current_rep_peak_valgus = 0.0
 
         if is_clean:
             self._calibration_reps += 1
@@ -289,13 +305,24 @@ class RuleEngine:
                 )
 
             elif isinstance(rule, KneeValgusRule):
-                rule.mild_threshold = self._peak_hip_adduction + 5.0
-                rule.moderate_threshold = self._peak_hip_adduction + 10.0
-                rule.severe_threshold = self._peak_hip_adduction + 15.0
-                logger.info(
-                    "[RULE ENGINE] Knee valgus baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
-                    self._peak_hip_adduction, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
-                )
+                if self._toe_available_during_calibration and self._rep_peak_knee_valgus:
+                    peak = sum(self._rep_peak_knee_valgus) / len(self._rep_peak_knee_valgus)
+                    self._peak_knee_valgus = peak
+                    rule.mild_threshold = peak + 5.0
+                    rule.moderate_threshold = peak + 10.0
+                    rule.severe_threshold = peak + 15.0
+                    logger.info(
+                        "[RULE ENGINE] Knee valgus baseline (toe): peak=%.1f° → thresholds %.1f/%.1f/%.1f",
+                        peak, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
+                    )
+                else:
+                    rule.mild_threshold = self._peak_hip_adduction + 5.0
+                    rule.moderate_threshold = self._peak_hip_adduction + 10.0
+                    rule.severe_threshold = self._peak_hip_adduction + 15.0
+                    logger.info(
+                        "[RULE ENGINE] Knee valgus baseline (hip adduction): peak=%.1f° → thresholds %.1f/%.1f/%.1f",
+                        self._peak_hip_adduction, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
+                    )
 
             elif isinstance(rule, SymmetryRule):
                 rule.mild_threshold = max(faults_config.bilateral_asymmetry.mild, self._peak_asymmetry + 5.0)

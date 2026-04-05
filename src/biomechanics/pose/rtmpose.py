@@ -234,6 +234,10 @@ class RTMPoseEstimator(PoseEstimator):
                     )
                 )
 
+        # Pad with zero-confidence foot_index keypoints (RTMPose lacks toe landmarks)
+        keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))  # left_foot_index
+        keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))  # right_foot_index
+
         return Skeleton2D(
             keypoints=keypoints,
             timestamp=timestamp,

@@ -1,9 +1,9 @@
 """
 Knee Valgus Fault Detection Rule
 
-Detects knee cave (valgus) using hip adduction angle as a proxy.
-V1 implementation uses rule-based detection; future versions
-will use TCN model for dynamic trajectory analysis.
+Detects knee cave (valgus) using the frontal-plane deviation of the knee
+from the hip-to-big-toe reference line (primary), with fallback to hip
+adduction angle when foot landmarks are unavailable.
 """
 
 from collections import deque
@@ -12,30 +12,23 @@ from typing import Optional
 from biomechanics.utils.types import JointAngles, FaultEvent, FaultSeverity
 from biomechanics.faults.fault_types import FaultRule, FaultType, DEFAULT_THRESHOLDS, FAULT_MESSAGES
 
+# Minimum foot landmark confidence to use toe-based valgus metric
+FOOT_CONFIDENCE_THRESHOLD = 0.3
+
 
 class KneeValgusRule(FaultRule):
     """
-    V1 rule-based knee valgus detection.
+    Knee valgus detection using knee-to-toe deviation with hip adduction fallback.
 
-    Uses hip adduction angle as a proxy for knee valgus:
-    - Increased hip adduction during squat indicates knees
-      tracking inward relative to feet
-    - This correlates with knee valgus in most cases
+    Primary metric (when foot landmarks available):
+    - Frontal-plane angle between the hip-to-toe reference line and the
+      hip-to-knee vector. Positive = knee medial to toe (valgus).
 
-    Severity thresholds (hip adduction degrees):
-    - Mild: 5-10° hip adduction
-    - Moderate: 10-15° hip adduction
-    - Severe: >15° hip adduction
+    Fallback metric (when foot landmarks unavailable):
+    - Hip adduction angle (thigh medial deviation from sagittal plane).
+      Used when foot_confidence is below FOOT_CONFIDENCE_THRESHOLD.
 
-    Note: This is a simplified v1 approach. The v2 implementation
-    will use a TCN model trained on labeled valgus data to detect
-    the dynamic trajectory pattern of knee cave, which is more
-    accurate but requires training data.
-
-    Hip adduction convention:
-    - 0° = neutral (knee tracking over toe)
-    - Positive = adduction (knee caving in)
-    - Negative = abduction (knee pushing out)
+    Severity thresholds apply to both metrics identically.
     """
 
     def __init__(
@@ -62,10 +55,9 @@ class KneeValgusRule(FaultRule):
         rep_number: int = 0,
     ) -> Optional[FaultEvent]:
         """
-        Evaluate for knee valgus using hip adduction.
+        Evaluate for knee valgus using toe-based metric or hip adduction fallback.
 
-        Only fires during reps and when hip adduction exceeds
-        the mild threshold.
+        Only fires during reps and when valgus exceeds the mild threshold.
         """
         if not in_rep:
             return None
@@ -74,18 +66,25 @@ class KneeValgusRule(FaultRule):
         if angles.frame_index - self._last_fault_frame < 30:
             return None
 
-        # Check hip adduction on both sides (positive = adduction = valgus)
-        adduction_l = angles.hip_adduction_l
-        adduction_r = angles.hip_adduction_r
+        # Prefer toe-based valgus when both feet have sufficient confidence
+        foot_conf = min(angles.foot_confidence_l, angles.foot_confidence_r)
 
-        # Use abs() — one knee reads positive, the other negative
-        max_adduction = max(abs(adduction_l), abs(adduction_r))
+        if foot_conf >= FOOT_CONFIDENCE_THRESHOLD:
+            valgus_l = angles.knee_valgus_l
+            valgus_r = angles.knee_valgus_r
+            metric_source = "toe"
+        else:
+            valgus_l = angles.hip_adduction_l
+            valgus_r = angles.hip_adduction_r
+            metric_source = "hip_adduction"
 
-        if max_adduction < self.mild_threshold:
+        max_valgus = max(abs(valgus_l), abs(valgus_r))
+
+        if max_valgus < self.mild_threshold:
             return None
 
         severity, score = self._get_severity(
-            max_adduction,
+            max_valgus,
             {
                 "mild": self.mild_threshold,
                 "moderate": self.moderate_threshold,
@@ -99,8 +98,8 @@ class KneeValgusRule(FaultRule):
         self._last_fault_frame = angles.frame_index
 
         # Determine which side has worse valgus
-        affected_side = "left" if adduction_l > adduction_r else "right"
-        if abs(adduction_l - adduction_r) < 2.0:
+        affected_side = "left" if abs(valgus_l) > abs(valgus_r) else "right"
+        if abs(abs(valgus_l) - abs(valgus_r)) < 2.0:
             affected_side = "both"
 
         message_key = severity.value
@@ -115,9 +114,12 @@ class KneeValgusRule(FaultRule):
             angles=angles,
             rep_number=rep_number,
             details={
-                "hip_adduction_l": adduction_l,
-                "hip_adduction_r": adduction_r,
-                "max_adduction": max_adduction,
+                "knee_valgus_l": valgus_l,
+                "knee_valgus_r": valgus_r,
+                "max_valgus": max_valgus,
                 "affected_side": affected_side,
+                "metric_source": metric_source,
+                "hip_adduction_l": angles.hip_adduction_l,
+                "hip_adduction_r": angles.hip_adduction_r,
             },
         )

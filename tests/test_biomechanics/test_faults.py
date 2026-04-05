@@ -35,6 +35,10 @@ def create_joint_angles(
     ankle_dorsiflexion_l: float = 20.0,
     ankle_dorsiflexion_r: float = 20.0,
     trunk_flexion: float = 0.0,
+    knee_valgus_l: float = 0.0,
+    knee_valgus_r: float = 0.0,
+    foot_confidence_l: float = 0.0,
+    foot_confidence_r: float = 0.0,
 ) -> JointAngles:
     """Create JointAngles with specified values, defaults for rest."""
     return JointAngles(
@@ -46,6 +50,10 @@ def create_joint_angles(
         hip_adduction_r=hip_adduction_r,
         ankle_dorsiflexion_l=ankle_dorsiflexion_l,
         ankle_dorsiflexion_r=ankle_dorsiflexion_r,
+        knee_valgus_l=knee_valgus_l,
+        knee_valgus_r=knee_valgus_r,
+        foot_confidence_l=foot_confidence_l,
+        foot_confidence_r=foot_confidence_r,
         trunk_flexion=trunk_flexion,
         frame_index=frame,
         timestamp=timestamp,
@@ -351,6 +359,64 @@ class TestKneeValgusRule:
         fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
         assert fault.details["affected_side"] == "right"
+
+    def test_toe_based_valgus_used_when_confident(self, knee_valgus_rule, history):
+        """Should use knee_valgus fields when foot confidence is high."""
+        angles = create_joint_angles(
+            frame=0,
+            hip_adduction_l=2.0,  # Low — would NOT trigger via fallback
+            hip_adduction_r=2.0,
+            knee_valgus_l=12.0,  # High — should trigger via toe metric
+            knee_valgus_r=11.0,
+            foot_confidence_l=0.8,
+            foot_confidence_r=0.7,
+        )
+        fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
+        assert fault is not None
+        assert fault.details["metric_source"] == "toe"
+        assert fault.details["max_valgus"] == 12.0
+
+    def test_fallback_to_hip_adduction_when_low_confidence(self, knee_valgus_rule, history):
+        """Should fall back to hip_adduction when foot confidence is low."""
+        angles = create_joint_angles(
+            frame=0,
+            hip_adduction_l=12.0,  # Should trigger via fallback
+            hip_adduction_r=11.0,
+            knee_valgus_l=0.0,
+            knee_valgus_r=0.0,
+            foot_confidence_l=0.1,  # Too low
+            foot_confidence_r=0.1,
+        )
+        fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
+        assert fault is not None
+        assert fault.details["metric_source"] == "hip_adduction"
+
+    def test_fallback_when_one_side_low_confidence(self, knee_valgus_rule, history):
+        """Should fall back if either side has low foot confidence."""
+        angles = create_joint_angles(
+            frame=0,
+            hip_adduction_l=12.0,
+            hip_adduction_r=11.0,
+            knee_valgus_l=12.0,
+            knee_valgus_r=11.0,
+            foot_confidence_l=0.8,
+            foot_confidence_r=0.1,  # One side too low → fallback
+        )
+        fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
+        assert fault is not None
+        assert fault.details["metric_source"] == "hip_adduction"
+
+    def test_no_fault_with_toe_metric_below_threshold(self, knee_valgus_rule, history):
+        """No fault when toe-based valgus is below threshold."""
+        angles = create_joint_angles(
+            frame=0,
+            knee_valgus_l=2.0,
+            knee_valgus_r=3.0,
+            foot_confidence_l=0.9,
+            foot_confidence_r=0.9,
+        )
+        fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
+        assert fault is None
 
 
 class TestHeelRiseRule:

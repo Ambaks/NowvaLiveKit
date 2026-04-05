@@ -90,6 +90,8 @@ class CocoKeypoints:
     RIGHT_KNEE = 14
     LEFT_ANKLE = 15
     RIGHT_ANKLE = 16
+    LEFT_FOOT_INDEX = 17
+    RIGHT_FOOT_INDEX = 18
 
 
 class MultiViewPose(BaseModel):
@@ -182,6 +184,12 @@ class JointAngles(BaseModel):
     ankle_dorsiflexion_l: float = 0.0
     ankle_dorsiflexion_r: float = 0.0
 
+    # Knee valgus (toe-based)
+    knee_valgus_l: float = 0.0
+    knee_valgus_r: float = 0.0
+    foot_confidence_l: float = 0.0
+    foot_confidence_r: float = 0.0
+
     # Trunk angles
     trunk_flexion: float = 0.0
     trunk_lateral_flexion: float = 0.0
@@ -208,6 +216,10 @@ class JointAngles(BaseModel):
             "knee_flexion_r": self.knee_flexion_r,
             "ankle_dorsiflexion_l": self.ankle_dorsiflexion_l,
             "ankle_dorsiflexion_r": self.ankle_dorsiflexion_r,
+            "knee_valgus_l": self.knee_valgus_l,
+            "knee_valgus_r": self.knee_valgus_r,
+            "foot_confidence_l": self.foot_confidence_l,
+            "foot_confidence_r": self.foot_confidence_r,
             "trunk_flexion": self.trunk_flexion,
             "trunk_lateral_flexion": self.trunk_lateral_flexion,
             "trunk_rotation": self.trunk_rotation,
@@ -464,13 +476,13 @@ class PipelineFrame(BaseModel):
 # HELPER FUNCTIONS
 # =============================================================================
 
-def create_empty_skeleton_2d(num_keypoints: int = 17) -> Skeleton2D:
+def create_empty_skeleton_2d(num_keypoints: int = 19) -> Skeleton2D:
     """Create an empty 2D skeleton with zero-confidence keypoints."""
     keypoints = [Keypoint2D(x=0.0, y=0.0, confidence=0.0) for _ in range(num_keypoints)]
     return Skeleton2D(keypoints=keypoints)
 
 
-def create_empty_skeleton_3d(num_keypoints: int = 17) -> Skeleton3D:
+def create_empty_skeleton_3d(num_keypoints: int = 19) -> Skeleton3D:
     """Create an empty 3D skeleton with zero-confidence keypoints."""
     keypoints = [Point3D(x=0.0, y=0.0, z=0.0, confidence=0.0) for _ in range(num_keypoints)]
     return Skeleton3D(keypoints=keypoints)

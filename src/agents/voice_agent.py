@@ -64,6 +64,12 @@ async def entrypoint(ctx: agents.JobContext):
     # Create shared userdata
     userdata = UserData(state=state, room=ctx.room)
 
+    # Retrieve prewarmed AudioCueService (if available)
+    prewarmed_cue_svc = ctx.proc.userdata.get("audio_cue_service")
+    if prewarmed_cue_svc is not None:
+        userdata.audio_cue_service = prewarmed_cue_svc
+        logger.info("[NOVA] Prewarmed AudioCueService attached to userdata")
+
     # Initialize cascade pipeline components (STT + LLM + TTS)
     logger.info("[NOVA] Initializing cascade pipeline...")
     stt = deepgram.STT(
@@ -87,13 +93,21 @@ async def entrypoint(ctx: agents.JobContext):
     )
     logger.info("[NOVA] Cascade pipeline initialized")
 
+    # Retrieve prewarmed VAD or load fresh as fallback
+    vad = ctx.proc.userdata.get("vad")
+    if vad is None:
+        logger.warning("[NOVA] No prewarmed VAD found, loading fresh (~100-500ms)...")
+        vad = silero.VAD.load()
+    else:
+        logger.info("[NOVA] Using prewarmed Silero VAD")
+
     # Create agent session with cascade pipeline
     logger.info("[NOVA] Creating agent session...")
     session = AgentSession(
         stt=stt,
         llm=llm,
         tts=tts,
-        vad=silero.VAD.load(),
+        vad=vad,
         turn_handling={"turn_detection": MultilingualModel()},
         userdata=userdata,
         preemptive_generation=True,
@@ -246,16 +260,47 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 def prewarm(proc: agents.JobProcess):
-    """Pre-load heavy resources before any room connection."""
-    logger.info("[PREWARM] Pre-loading audio cue index...")
-    try:
+    """Pre-load heavy resources before any room connection.
+
+    Runs silero VAD model loading and audio cue disk I/O concurrently
+    so neither blocks the other.  Results are stored on proc.userdata
+    for retrieval in entrypoint().
+    """
+    import concurrent.futures
+    import time
+
+    logger.info("[PREWARM] Starting parallel pre-load (VAD + audio cues)...")
+    start = time.monotonic()
+
+    def _load_vad():
+        return silero.VAD.load()
+
+    def _load_audio_cues():
         from services.audio_cue_service import AudioCueService
-        # Trigger eager disk indexing and memory pre-load (session=None is fine
-        # for the pre-load step — playback requires a session)
-        _cue_svc = AudioCueService(session=None)
-        logger.info(f"[PREWARM] Audio cues pre-loaded: {len(_cue_svc._memory_cache)} cue keys")
-    except Exception as e:
-        logger.warning(f"[PREWARM] Audio cue pre-load failed (will retry at session start): {e}")
+        return AudioCueService(session=None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        vad_future = executor.submit(_load_vad)
+        cue_future = executor.submit(_load_audio_cues)
+
+        try:
+            proc.userdata["vad"] = vad_future.result(timeout=10)
+            logger.info("[PREWARM] Silero VAD pre-loaded")
+        except Exception as e:
+            logger.warning(f"[PREWARM] VAD pre-load failed (will load in entrypoint): {e}")
+
+        try:
+            cue_svc = cue_future.result(timeout=30)
+            proc.userdata["audio_cue_service"] = cue_svc
+            logger.info(
+                f"[PREWARM] Audio cues pre-loaded: {len(cue_svc._memory_cache)} cue keys, "
+                f"{sum(len(v) for v in cue_svc._memory_cache.values())} variants"
+            )
+        except Exception as e:
+            logger.warning(f"[PREWARM] Audio cue pre-load failed (will retry at session start): {e}")
+
+    elapsed = time.monotonic() - start
+    logger.info(f"[PREWARM] Parallel pre-load complete in {elapsed:.3f}s")
 
 
 if __name__ == "__main__":

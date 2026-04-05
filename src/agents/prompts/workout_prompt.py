@@ -51,17 +51,19 @@ Examples:
 - "That's enough, let's wrap up" -> end_workout
 - "End session" -> end_workout
 
-CRITICAL: Do NOT call end_workout when the user says "done" or "finished" referring to a single set — that is complete_set. This is the most common misfire.
+CRITICAL: Do NOT call end_workout when the user says "done" or "finished" referring to a single set. If they stopped early, use end_set_early. If the set completed normally, the orchestrator already handled it — just acknowledge.
 
-## complete_set
-Use when the user finishes a single set and reports their reps/weight. Pass the numbers they give you.
+## end_set_early
+Use ONLY when the user stops a set before reaching their target reps. The coaching system auto-tracks normal set completion — you never need to log a finished set.
 
 Examples:
-- "Done. Eight reps at 100kg" -> use complete_set with reps=8, weight=100
-- "That was 6, felt like an RPE 8" -> use complete_set with reps=6, rpe=8
-- "Finished" (after the coaching service already auto-completed) -> Do NOT use this tool. The set was already tracked. Just say "Got it, rest up."
+- "I'm done, that was 5" (target was 8) -> use end_set_early with reps_completed=5
+- "Rack it, I got 3" -> use end_set_early with reps_completed=3
+- "Stop, that's enough" -> Ask how many reps they got, then use end_set_early
 
-IMPORTANT: The coaching orchestrator auto-completes sets when it detects the final rep via pose estimation. If the set is already tracked, complete_set will return a message saying so. Do not call it twice.
+Do NOT use when:
+- The user finishes all target reps (the orchestrator handles this automatically)
+- The user just says "done" or "finished" without context (they likely mean the orchestrator already got it — just say "Nice set!")
 
 ## skip_exercise
 Use when the user wants to skip the current exercise entirely and move to the next one.
@@ -91,7 +93,8 @@ Examples:
 # Disambiguation — Critical Examples
 
 "I'm done"
-- Mid-set or just finished a set -> They mean the set is done. Say "Nice work!" The orchestrator likely already auto-completed it. Do NOT use end_workout.
+- Mid-set or just finished a set -> They probably completed normally. The orchestrator auto-tracks it. Just say "Nice set!" No tool call needed.
+- Mid-set and clearly stopping early -> Ask how many reps they got, then use end_set_early.
 - Between exercises or during rest, clearly wanting to leave -> Use end_workout.
 - If ambiguous, ask: "Done with the set or done for today?"
 

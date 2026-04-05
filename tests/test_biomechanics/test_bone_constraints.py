@@ -22,7 +22,7 @@ def _standing_skeleton() -> np.ndarray:
 
     Returns (17, 3) array with anatomically reasonable positions.
     """
-    points = np.zeros((17, 3))
+    points = np.zeros((19, 3))
     # Head
     points[CK.NOSE] = [0.0, 1.70, 0.0]
     points[CK.LEFT_EYE] = [0.03, 1.72, -0.02]
@@ -46,6 +46,9 @@ def _standing_skeleton() -> np.ndarray:
     # Right leg
     points[CK.RIGHT_KNEE] = [-0.10, 0.55, 0.0]
     points[CK.RIGHT_ANKLE] = [-0.10, 0.10, 0.0]
+    # Feet
+    points[CK.LEFT_FOOT_INDEX] = [0.10, 0.05, 0.10]
+    points[CK.RIGHT_FOOT_INDEX] = [-0.10, 0.05, 0.10]
     return points
 
 
@@ -161,3 +164,28 @@ class TestBoneLengthConstraints:
         # Reset
         bc.reset()
         assert not bc.is_calibrated
+
+    def test_foot_pairs_skipped_when_zero_confidence(self):
+        """Foot bone pairs should not be calibrated when confidence is zero."""
+        bc = BoneLengthConstraints(calibration_frames=30)
+        skeleton_data = _standing_skeleton()
+
+        # Create skeleton with zero confidence for foot_index keypoints
+        confidences = np.ones(19)
+        confidences[CK.LEFT_FOOT_INDEX] = 0.0
+        confidences[CK.RIGHT_FOOT_INDEX] = 0.0
+
+        for i in range(30):
+            skeleton = Skeleton3D.from_numpy(
+                skeleton_data, confidences=confidences,
+                timestamp=0.0, frame_index=i,
+            )
+            bc.enforce(skeleton)
+
+        assert bc.is_calibrated
+
+        # Foot bone pairs should NOT have been calibrated
+        foot_pair_l = (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX)
+        foot_pair_r = (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX)
+        assert foot_pair_l not in bc._calibrated_lengths or bc._calibrated_lengths[foot_pair_l] == 0
+        assert foot_pair_r not in bc._calibrated_lengths or bc._calibrated_lengths[foot_pair_r] == 0
