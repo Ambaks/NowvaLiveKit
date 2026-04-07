@@ -66,6 +66,18 @@ export const programsApi = {
     return response.json();
   },
 
+  async getLastSubmission(): Promise<{ has_previous: boolean; data?: Record<string, unknown> }> {
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/programs/last-submission`);
+      if (!response.ok) {
+        return { has_previous: false };
+      }
+      return response.json();
+    } catch {
+      return { has_previous: false };
+    }
+  },
+
   async getProgramPdf(programId: string): Promise<Blob> {
     const response = await authFetch(`${API_BASE_URL}/api/programs/${programId}/download/pdf`);
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +12,7 @@ import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
 
 interface OnboardingProps {
   onComplete: (data: OnboardingData) => void;
+  prefillData?: Record<string, unknown> | null;
 }
 
 export interface OnboardingData {
@@ -43,11 +44,8 @@ export interface OnboardingData {
 
 const STEP_LABELS = ['Personal', 'Goals', 'Experience', 'Schedule', 'Advanced'];
 
-export const Onboarding = ({ onComplete }: OnboardingProps) => {
-  const [currentStep, setCurrentStep] = useState(1);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const [formData, setFormData] = useState<OnboardingData>({
+const buildInitialData = (prefill?: Record<string, unknown> | null): OnboardingData => {
+  const defaults: OnboardingData = {
     name: '',
     email: localStorage.getItem('nowva_user_email') || '',
     age: '',
@@ -67,7 +65,30 @@ export const Onboarding = ({ onComplete }: OnboardingProps) => {
     has_vbt_capability: false,
     user_notes: '',
     equipment_tier: '2',
-  });
+  };
+
+  if (!prefill) return defaults;
+
+  const converted: Partial<OnboardingData> = {};
+  for (const [key, value] of Object.entries(prefill)) {
+    if (value === null || value === undefined) continue;
+    if (key === 'has_vbt_capability') {
+      converted[key] = Boolean(value);
+    } else if (key in defaults) {
+      converted[key as keyof OnboardingData] = String(value) as never;
+    }
+  }
+
+  return { ...defaults, ...converted };
+};
+
+export const Onboarding = ({ onComplete, prefillData }: OnboardingProps) => {
+  const [currentStep, setCurrentStep] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPrefillNotice, setShowPrefillNotice] = useState(!!prefillData);
+
+  const initialData = useMemo(() => buildInitialData(prefillData), [prefillData]);
+  const [formData, setFormData] = useState<OnboardingData>(initialData);
 
   const handleChange = (field: string, value: string | boolean) => {
     setFormData((prev) => ({
@@ -157,6 +178,20 @@ export const Onboarding = ({ onComplete }: OnboardingProps) => {
           totalSteps={5}
           stepLabels={STEP_LABELS}
         />
+
+        {showPrefillNotice && (
+          <div className="mb-6 p-3 bg-accent/10 border border-accent/20 rounded-lg flex justify-between items-center">
+            <span className="text-sm text-foreground-secondary">
+              We've filled in your details from last time. Feel free to update anything.
+            </span>
+            <button
+              onClick={() => setShowPrefillNotice(false)}
+              className="ml-4 text-foreground-tertiary hover:text-foreground text-lg leading-none"
+            >
+              &times;
+            </button>
+          </div>
+        )}
 
         <AnimatePresence mode="wait">
           <motion.div key={currentStep}>

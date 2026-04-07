@@ -55,7 +55,7 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
     from .services.v5_adapter import convert_request_to_v5_input, get_user_data_from_request
     from .services.program_saver_v5 import save_and_publish_v5_program
     from .models.requests import ProgramGenerationRequest
-    from src.program_generator_v5 import generate_program_v5
+    from program_generator_v5 import generate_program_v5
     from services.email_service import send_program_email_async
 
     print(f"[CELERY TASK V5 {self.request.id}] Starting job {job_id}")
@@ -107,12 +107,11 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
             db.close()
 
         # Generate program with V5 (6-layer architecture)
-        # use_llm=False for fast deterministic generation
         v5_output = loop.run_until_complete(
             generate_program_v5(
                 input_data=v5_input,
                 openai_client=None,
-                use_llm=False,
+                use_llm=True,
                 input_type="structured"
             )
         )
@@ -152,7 +151,7 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
                     print(f"[CELERY TASK V5 {self.request.id}] ⚠️  Email error: {email_error}")
 
             # Mark as completed (100%)
-            update_job_status(db, job_id, "completed", progress=100, error_message=None)
+            update_job_status(db, job_id, "completed", progress=100, program_id=str(result['program_id']), error_message=None)
 
             print(f"[CELERY TASK V5 {self.request.id}] ✅ Completed job {job_id}")
             print(f"  - Program ID: {result['program_id']}")

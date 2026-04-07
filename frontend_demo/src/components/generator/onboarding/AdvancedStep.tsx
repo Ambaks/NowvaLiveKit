@@ -59,9 +59,9 @@ export const AdvancedStep = ({ data, onChange }: AdvancedStepProps) => {
         </label>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {[
-            { value: '1', label: 'Basic / Home Gym', desc: 'Barbell, rack, bench, plates' },
-            { value: '2', label: 'Full Gym', desc: 'Full machine & free weight access' },
-            { value: '3', label: 'Specialty Facility', desc: 'Competition equipment, specialty bars, platforms' },
+            { value: '1', label: 'Tier 1', desc: 'Barbell, rack, bench, pull-up bar, floor space' },
+            { value: '2', label: 'Tier 2', desc: '+ Dumbbells' },
+            { value: '3', label: 'Tier 3', desc: '+ Bands' },
           ].map((option) => (
             <button
               key={option.value}
@@ -89,7 +89,7 @@ export const AdvancedStep = ({ data, onChange }: AdvancedStepProps) => {
         <textarea
           className="w-full px-4 py-3 bg-surface border border-surface-light rounded-lg focus:outline-none focus:ring-2 focus:ring-accent/50 transition-all resize-none"
           rows={5}
-          placeholder="Any preferences, equipment you have, exercises you prefer/avoid, training timeline, etc.&#10;&#10;e.g., 'Prefer front squats over back squats. Have access to competition barbell and calibrated plates. Training for a meet in 12 weeks.'"
+          placeholder="Add additional notes like exercise preferences..."
           value={data.user_notes}
           onChange={(e) => onChange('user_notes', e.target.value)}
           maxLength={2000}

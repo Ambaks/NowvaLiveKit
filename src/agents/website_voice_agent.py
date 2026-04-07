@@ -72,10 +72,8 @@ class WebsiteVoiceAgent(Agent):
         logger.info(f"[WEBSITE AGENT] Initialized with email: {state.get('email')}")
 
     async def on_enter(self):
-        """Entry point - generate initial greeting when agent enters conversation"""
-        await self.session.generate_reply(
-            instructions="Greet the user warmly and ask for their first name. Follow the STEP 1 instructions exactly."
-        )
+        """Entry point - speak initial greeting when agent enters conversation"""
+        await self.session.say("Hey there! I'm Nova, your AI fitness coach. My boss has put me on duty helping y'all generate programs so here we are [laughter]. What's your first name?")
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
         """Helper method to log function tool calls"""
@@ -109,6 +107,19 @@ class WebsiteVoiceAgent(Agent):
 
             if len(first_name) > 50:
                 result = None, "Name is too long. Ask for just first name."
+                self._log_function_call(function_name, parameters, result)
+                return result
+
+            # Reject placeholder/example values that LLMs sometimes generate
+            placeholder_names = {
+                "example_value", "example", "string", "first_name", "name",
+                "user", "test", "placeholder", "null", "none", "undefined",
+                "value", "sample", "default", "your_name", "your name",
+                "user_name", "username",
+            }
+            if first_name.lower().replace(" ", "_") in placeholder_names:
+                logger.warning(f"[WEBSITE AGENT] Rejected placeholder name: {first_name}")
+                result = None, "That doesn't sound like a real name. Please ask the user for their actual first name again."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -516,7 +527,7 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] User notes: {notes}")
 
-            result = None, "Captured. Now immediately ask Question 12 about equipment access (home gym, full gym, or specialty facility)."
+            result = None, "Captured. Now immediately ask Question 12 about equipment tier (Tier 1: barbell, rack, bench, pull-up bar, floor space; Tier 2: adds dumbbells; Tier 3: adds bands)."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -530,9 +541,9 @@ class WebsiteVoiceAgent(Agent):
     async def capture_equipment_tier(self, context: RunContext, equipment_tier: int):
         """
         Call this when the user describes their gym equipment access.
-        1 = basic/home gym (barbell, rack, bench)
-        2 = full gym (machines + free weights)
-        3 = specialty facility (competition equipment, specialty bars)
+        Tier 1 = barbell, rack, bench, pull-up bar, floor space
+        Tier 2 = Tier 1 + dumbbells
+        Tier 3 = Tier 2 + bands
 
         Args:
             equipment_tier: 1, 2, or 3
@@ -591,7 +602,7 @@ class WebsiteVoiceAgent(Agent):
             # Set VBT to false by default for website users
             self.state["program_creation"]["has_vbt_capability"] = False
 
-            result = None, "All parameters collected! Now immediately call update_user_profile() to save their info to the database, then generate the program."
+            result = None, "All parameters collected! Enthusiastically tell the user that you've got everything you need to build their program. Thank them for their time, and let them know they should receive their personalized program via email within the next 5 minutes. Then immediately call update_user_profile() to save their info to the database."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -645,7 +656,7 @@ class WebsiteVoiceAgent(Agent):
                     db.commit()
                     logger.info(f"[WEBSITE AGENT] Updated user profile for {self.state.get('email')}")
 
-                    result = None, "Profile updated successfully. Tell user you're submitting for generation, then immediately call generate_workout_program()."
+                    result = None, "Profile updated successfully. Now immediately call generate_workout_program()."
                     self._log_function_call(function_name, parameters, result)
                     return result
                 else:
@@ -749,7 +760,7 @@ class WebsiteVoiceAgent(Agent):
 
                     # Send data message to frontend to trigger completion UI
                     try:
-                        await context.room.local_participant.publish_data(
+                        await context.session.room_io.room.local_participant.publish_data(
                             json.dumps({
                                 "type": "program_generating",
                                 "job_id": job_id,
@@ -762,7 +773,7 @@ class WebsiteVoiceAgent(Agent):
                         logger.error(f"[PROGRAM] Failed to send data message: {e}")
 
                     # Tell user they'll receive email and call end_conversation()
-                    result = None, f"Program generation started successfully. Inform user their program is being created and will arrive at {user_email} within 10 minutes. Mention checking spam folder. Then immediately call end_conversation()."
+                    result = None, f"Program generation started successfully. You have already said goodbye to the user. Now immediately call end_conversation()."
                     self._log_function_call(function_name, parameters, result)
                     return result
                 else:
@@ -792,7 +803,7 @@ class WebsiteVoiceAgent(Agent):
 
             # Disconnect from the room to free up resources
             try:
-                await context.room.disconnect()
+                await context.session.room_io.room.disconnect()
                 logger.info("[WEBSITE AGENT] Disconnected from room successfully")
             except Exception as disconnect_error:
                 logger.warning(f"[WEBSITE AGENT] Error disconnecting from room: {disconnect_error}")
@@ -943,6 +954,29 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Store session reference in agent so it can disconnect later
     agent._session_ref = session
+
+    # --- Session event tracking ---
+    @session.on("metrics_collected")
+    def _on_metrics(ev):
+        m = ev.metrics
+        if hasattr(m, "ttft"):
+            logger.info(
+                f"[METRICS] {m.type} — ttft={m.ttft:.3f}s, duration={m.duration:.3f}s, "
+                f"cancelled={m.cancelled}, input_tokens={getattr(m, 'input_tokens', 'N/A')}, "
+                f"output_tokens={getattr(m, 'output_tokens', 'N/A')}, "
+                f"tps={getattr(m, 'tokens_per_second', 'N/A')}"
+            )
+        elif hasattr(m, "audio_duration"):
+            logger.info(
+                f"[METRICS] {m.type} — duration={m.duration:.3f}s, "
+                f"audio_duration={m.audio_duration:.3f}s"
+            )
+        else:
+            logger.info(f"[METRICS] {m.type}")
+
+    @session.on("error")
+    def _on_error(ev):
+        logger.error(f"[SESSION] Error from {ev.source}: {ev.error}")
 
     # Start session — on_enter() will handle the initial greeting automatically
     logger.info("[WEBSITE AGENT] Starting session...")

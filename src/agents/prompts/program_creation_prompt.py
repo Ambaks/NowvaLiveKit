@@ -173,7 +173,7 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
         n+7, "Notes", pc.get("notes"),
         "Mention you noted: {value}. Ask if there's anything else",
         f'capture_user_notes("{pc.get("notes", "notes")}")',
-        "Ask if there's anything else to know (exercise preferences, etc.) → Call `capture_user_notes(notes)`",
+        "Ask if they have any additional notes like exercise preferences → Call `capture_user_notes(notes)`",
         optional=True
     )
 

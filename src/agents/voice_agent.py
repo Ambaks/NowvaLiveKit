@@ -30,6 +30,7 @@ from agents.schedule_agent import ScheduleMaintenanceAgent
 from agents.shared.userdata import UserData
 from core.latency_tracker import LatencyTracker
 from services.compaction_service import CompactionService
+from services.context_viewer import ContextViewer
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,18 @@ async def entrypoint(ctx: agents.JobContext):
         # Log final latency summary
         latency_tracker.log_summary()
 
+        # Stop context viewer
+        try:
+            viewer = getattr(userdata, 'context_viewer', None)
+            if viewer:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(viewer.stop(), loop)
+                userdata.context_viewer = None
+        except Exception as e:
+            logger.error(f"[SESSION] Failed to stop context viewer: {e}")
+
         # Stop compaction service
         try:
             compaction = userdata.compaction_service
@@ -255,6 +268,15 @@ async def entrypoint(ctx: agents.JobContext):
     if userdata.compaction_service:
         await userdata.compaction_service.start()
         logger.info("[NOVA] Compaction service started")
+
+    # Start context viewer debug dashboard (http://localhost:8899)
+    context_viewer = ContextViewer(
+        session=session,
+        compaction_service=userdata.compaction_service,
+        state=state,
+    )
+    userdata.context_viewer = context_viewer
+    await context_viewer.start()
 
     logger.info(f"Nova voice agent started in room: {ctx.room.name}")
 

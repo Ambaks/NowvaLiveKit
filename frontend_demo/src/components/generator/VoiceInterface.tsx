@@ -219,10 +219,10 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
               <h3 className="text-heading-lg font-semibold mb-2">Conversation Complete</h3>
               <p className="text-foreground-secondary">
                 Your program has been submitted for generation.
-                You'll receive it via email within 10 minutes!
+                You'll receive it via email within 5 minutes! If you don't see it, check your spam folder.
               </p>
               <p className="text-foreground-tertiary text-sm mt-4">
-                You can generate a new program once per week.
+                You can generate a new program once every 20 minutes.
               </p>
             </motion.div>
           )}

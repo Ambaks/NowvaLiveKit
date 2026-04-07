@@ -2,7 +2,7 @@
 Pydantic Response Models for FastAPI
 """
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 
 
@@ -107,6 +107,12 @@ class ProgramListResponse(BaseModel):
                 "total_count": 1
             }
         }
+
+
+class LastSubmissionResponse(BaseModel):
+    """Response model for returning a user's last form submission data for prefill"""
+    has_previous: bool
+    data: Optional[dict[str, Any]] = None
 
 
 class UpdateStatusResponse(BaseModel):

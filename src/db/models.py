@@ -260,6 +260,9 @@ class ProgramGenerationJob(Base):
     specific_sport = Column(String(100), nullable=True, default='none') # Sport name or "none"
     has_vbt_capability = Column(Boolean, nullable=True, default=False) # VBT equipment available
     user_notes = Column(Text, nullable=True)                           # Any additional user notes/preferences
+    training_season = Column(String(50), nullable=True)                # off_season, pre_season, in_season, post_season
+    games_per_week = Column(Integer, nullable=True, default=0)         # Games/competitions per week
+    equipment_tier = Column(Integer, nullable=True, default=1)         # 1=Basic, 2=Full Gym, 3=Specialty
 
     # Output
     program_id = Column(Integer, ForeignKey('user_generated_programs.id', ondelete="SET NULL"), nullable=True)

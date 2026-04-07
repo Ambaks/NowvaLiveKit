@@ -3,13 +3,23 @@ import { EmailGate } from '@/components/ui/EmailGate';
 import { ModeSelector } from '@/components/generator/ModeSelector';
 import { VoiceInterface } from '@/components/generator/VoiceInterface';
 import { FormInterface } from '@/components/generator/FormInterface';
+import { programsApi } from '@/api/programs';
 
 export const ProgramGenerator = () => {
   const [emailSubmitted, setEmailSubmitted] = useState(false);
   const [interactionMode, setInteractionMode] = useState<'voice' | 'form' | null>(null);
+  const [prefillData, setPrefillData] = useState<Record<string, unknown> | null>(null);
 
-  const handleEmailSubmit = (_email: string) => {
+  const handleEmailSubmit = async (_email: string) => {
     setEmailSubmitted(true);
+    try {
+      const result = await programsApi.getLastSubmission();
+      if (result.has_previous && result.data) {
+        setPrefillData(result.data);
+      }
+    } catch (e) {
+      console.warn('Could not fetch previous submission for prefill:', e);
+    }
   };
 
   const handleModeSelect = (mode: 'voice' | 'form') => {
@@ -33,7 +43,7 @@ export const ProgramGenerator = () => {
         ) : interactionMode === 'voice' ? (
           <VoiceInterface />
         ) : (
-          <FormInterface />
+          <FormInterface prefillData={prefillData} />
         )}
       </div>
     </section>

@@ -13,6 +13,7 @@ from ..models.requests import ProgramGenerationRequest, ProgramUpdateRequest
 from ..models.responses import (
     JobResponse,
     JobStatusResponse,
+    LastSubmissionResponse,
     ProgramResponse,
     ProgramListResponse,
     ProgramSummary,
@@ -25,7 +26,7 @@ from ..services.program_updater import (
 )
 from ..services.job_manager import create_job, get_job_status
 from db.database import get_db
-from db.models import UserGeneratedProgram, User
+from db.models import ProgramGenerationJob, UserGeneratedProgram, User
 from db.program_utils import get_program_summary_list
 from utils.username_generator import generate_username
 from auth.user_management import generate_temporary_password
@@ -97,23 +98,22 @@ async def check_program_eligibility(
             "message": "Welcome! You're eligible to generate your first program."
         }
 
-    # Check if user has generated a program in the last 7 days
-    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    # Check if user has generated a program in the last 20 minutes
+    cooldown_cutoff = datetime.utcnow() - timedelta(minutes=20)
     recent_program = db.query(UserGeneratedProgram).filter(
         UserGeneratedProgram.user_id == user.id,
-        UserGeneratedProgram.created_at >= one_week_ago
+        UserGeneratedProgram.created_at >= cooldown_cutoff
     ).order_by(UserGeneratedProgram.created_at.desc()).first()
 
     if recent_program:
         # Calculate when they can generate next
-        next_allowed = recent_program.created_at + timedelta(days=7)
+        next_allowed = recent_program.created_at + timedelta(minutes=20)
         time_remaining = next_allowed - datetime.utcnow()
-        days_remaining = time_remaining.days
-        hours_remaining = (time_remaining.seconds // 3600)
+        minutes_remaining = max(1, (time_remaining.seconds + 59) // 60)
 
         raise HTTPException(
             status_code=429,
-            detail=f"You can only generate one program per week. Please try again in {days_remaining} days and {hours_remaining} hours."
+            detail=f"You can only generate one program every 20 minutes. Please try again in {minutes_remaining} minute{'s' if minutes_remaining != 1 else ''}."
         )
 
     # Eligible to generate
@@ -159,6 +159,19 @@ async def start_program_generation(
         db.commit()
         db.refresh(user)
         print(f"[API] Created new user {user.id} ({username} / {user.email}) for program generation")
+    else:
+        # Update user demographics if changed
+        updated = False
+        if request.name and user.name != request.name:
+            user.name = request.name
+            updated = True
+        for field in ("age", "sex", "height_cm", "weight_kg"):
+            req_val = getattr(request, field)
+            if req_val is not None and getattr(user, field) != req_val:
+                setattr(user, field, req_val)
+                updated = True
+        if updated:
+            db.commit()
 
     # Create job record
     job = create_job(
@@ -177,7 +190,10 @@ async def start_program_generation(
         injury_history=request.injury_history,
         specific_sport=request.specific_sport,
         has_vbt_capability=request.has_vbt_capability,
-        user_notes=request.user_notes
+        user_notes=request.user_notes,
+        training_season=request.training_season,
+        games_per_week=request.games_per_week,
+        equipment_tier=request.equipment_tier,
     )
 
     # Dispatch to Celery (V5 - 6-layer deterministic architecture)
@@ -266,6 +282,54 @@ async def get_generation_status(
         response.error_message = job.error_message
 
     return response
+
+
+@router.get("/last-submission", response_model=LastSubmissionResponse)
+async def get_last_submission(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the user's most recent program generation submission data
+    for form prefilling. Merges name from the User model with all other
+    fields from the latest ProgramGenerationJob.
+    """
+    last_job = db.query(ProgramGenerationJob).filter(
+        ProgramGenerationJob.user_id == current_user.id,
+        ProgramGenerationJob.goal_category != "update",
+    ).order_by(
+        ProgramGenerationJob.created_at.desc()
+    ).first()
+
+    if not last_job:
+        return LastSubmissionResponse(has_previous=False)
+
+    data = {
+        "name": current_user.name,
+        "email": current_user.email,
+        "age": last_job.age,
+        "sex": last_job.sex,
+        "height_cm": float(last_job.height_cm) if last_job.height_cm else None,
+        "weight_kg": float(last_job.weight_kg) if last_job.weight_kg else None,
+        "goal_category": last_job.goal_category,
+        "goal_raw": last_job.goal_raw,
+        "specific_sport": last_job.specific_sport,
+        "training_season": last_job.training_season,
+        "games_per_week": last_job.games_per_week,
+        "fitness_level": last_job.fitness_level,
+        "injury_history": last_job.injury_history,
+        "days_per_week": last_job.days_per_week,
+        "session_duration": last_job.session_duration,
+        "duration_weeks": last_job.duration_weeks,
+        "has_vbt_capability": last_job.has_vbt_capability,
+        "user_notes": last_job.user_notes,
+        "equipment_tier": last_job.equipment_tier,
+    }
+
+    # Strip None values so frontend uses its own defaults for missing fields
+    data = {k: v for k, v in data.items() if v is not None}
+
+    return LastSubmissionResponse(has_previous=True, data=data)
 
 
 @router.get("/{program_id}", response_model=ProgramResponse)

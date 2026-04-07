@@ -25,7 +25,10 @@ def create_job(
     injury_history: str = "none",
     specific_sport: str = "none",
     has_vbt_capability: bool = False,
-    user_notes: str = None
+    user_notes: str = None,
+    training_season: str = None,
+    games_per_week: int = 0,
+    equipment_tier: int = 1,
 ) -> ProgramGenerationJob:
     """
     Create a new program generation job
@@ -69,7 +72,10 @@ def create_job(
         injury_history=injury_history,
         specific_sport=specific_sport,
         has_vbt_capability=has_vbt_capability,
-        user_notes=user_notes
+        user_notes=user_notes,
+        training_season=training_season,
+        games_per_week=games_per_week,
+        equipment_tier=equipment_tier,
     )
     db.add(job)
     db.commit()

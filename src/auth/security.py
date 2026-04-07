@@ -119,11 +119,13 @@ async def get_current_user(
         if expected and service_key == expected:
             # Return a lightweight sentinel — endpoints that need a real user
             # record should check ``getattr(user, 'is_service', False)``.
-            sentinel = User.__new__(User)
-            sentinel.id = None
-            sentinel.email = "service@internal"
-            sentinel.name = "Service Account"
-            sentinel.is_service = True  # dynamic attribute
+            from types import SimpleNamespace
+            sentinel = SimpleNamespace(
+                id=None,
+                email="service@internal",
+                name="Service Account",
+                is_service=True,
+            )
             return sentinel
         # Bad key → 401 (don't fall through to JWT)
         raise credentials_exception

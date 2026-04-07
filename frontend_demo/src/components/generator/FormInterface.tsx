@@ -1,16 +1,20 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { Mail } from 'lucide-react';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
 import { Onboarding } from './onboarding/Onboarding';
 import type { OnboardingData } from './onboarding/Onboarding';
-import { ProgramGenerationStatus } from './ProgramGenerationStatus';
 import { programsApi } from '@/api/programs';
 
-type FormState = 'form' | 'generating' | 'complete';
+interface FormInterfaceProps {
+  prefillData?: Record<string, unknown> | null;
+}
 
-export const FormInterface = () => {
+type FormState = 'form' | 'submitted';
+
+export const FormInterface = ({ prefillData }: FormInterfaceProps) => {
   const [state, setState] = useState<FormState>('form');
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [programId, setProgramId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleFormComplete = async (data: OnboardingData) => {
@@ -47,29 +51,16 @@ export const FormInterface = () => {
         equipment_tier: data.equipment_tier ? parseInt(data.equipment_tier) : 2,
       };
 
-      const response = await programsApi.generateProgram(requestData);
-      setJobId(response.job_id);
-      setState('generating');
+      await programsApi.generateProgram(requestData);
+      setState('submitted');
     } catch (err) {
       console.error('Error starting program generation:', err);
       setError(err instanceof Error ? err.message : 'Failed to start program generation');
     }
   };
 
-  const handleGenerationComplete = (generatedProgramId: string) => {
-    setProgramId(generatedProgramId);
-    setState('complete');
-  };
-
-  const handleGenerationError = (errorMessage: string) => {
-    setError(errorMessage);
-    setState('form');
-  };
-
   const handleReset = () => {
     setState('form');
-    setJobId(null);
-    setProgramId(null);
     setError(null);
   };
 
@@ -86,16 +77,38 @@ export const FormInterface = () => {
       )}
 
       {state === 'form' && (
-        <Onboarding onComplete={handleFormComplete} />
+        <Onboarding onComplete={handleFormComplete} prefillData={prefillData} />
       )}
 
-      {(state === 'generating' || state === 'complete') && jobId && (
-        <ProgramGenerationStatus
-          jobId={jobId}
-          onComplete={handleGenerationComplete}
-          onError={handleGenerationError}
-          onReset={handleReset}
-        />
+      {state === 'submitted' && (
+        <div className="max-w-2xl mx-auto">
+          <Card className="p-12 text-center">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="mb-6 flex justify-center"
+            >
+              <Mail className="w-16 h-16 text-accent" />
+            </motion.div>
+
+            <h3 className="text-heading-lg font-semibold mb-2">
+              Your program is being generated!
+            </h3>
+
+            <p className="text-foreground-secondary mt-4 mb-8">
+              You'll receive it in your email in under 5 minutes.
+              If you don't see it, check your spam folder.
+            </p>
+
+            <Button
+              onClick={handleReset}
+              variant="secondary"
+              className="w-full"
+            >
+              Generate Another Program
+            </Button>
+          </Card>
+        </div>
       )}
     </motion.div>
   );
