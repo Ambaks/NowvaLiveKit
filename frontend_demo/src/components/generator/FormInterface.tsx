@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Mail } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
 import { Onboarding } from './onboarding/Onboarding';
 import type { OnboardingData } from './onboarding/Onboarding';
 import { programsApi } from '@/api/programs';
@@ -59,11 +58,6 @@ export const FormInterface = ({ prefillData }: FormInterfaceProps) => {
     }
   };
 
-  const handleReset = () => {
-    setState('form');
-    setError(null);
-  };
-
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -95,18 +89,10 @@ export const FormInterface = ({ prefillData }: FormInterfaceProps) => {
               Your program is being generated!
             </h3>
 
-            <p className="text-foreground-secondary mt-4 mb-8">
+            <p className="text-foreground-secondary mt-4">
               You'll receive it in your email in under 5 minutes.
               If you don't see it, check your spam folder.
             </p>
-
-            <Button
-              onClick={handleReset}
-              variant="secondary"
-              className="w-full"
-            >
-              Generate Another Program
-            </Button>
           </Card>
         </div>
       )}

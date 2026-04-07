@@ -67,29 +67,6 @@ export const Hero = () => {
             </motion.p>
 
             {/* Stats strip */}
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.45 }}
-              className="flex gap-8 mb-10"
-            >
-              {[
-                { value: '30', unit: 'FPS', label: 'Real-time tracking' },
-                { value: '17', unit: 'pts', label: '3D body keypoints' },
-                { value: '<50', unit: 'ms', label: 'Voice cue latency' },
-              ].map((stat, i) => (
-                <div key={i}>
-                  <div className="font-display text-heading-md md:text-heading-lg font-bold text-foreground leading-none">
-                    {stat.value}
-                    <span className="text-accent text-body-sm font-mono ml-0.5">{stat.unit}</span>
-                  </div>
-                  <div className="font-mono text-[10px] tracking-[0.1em] text-foreground-tertiary uppercase mt-1">
-                    {stat.label}
-                  </div>
-                </div>
-              ))}
-            </motion.div>
-
             {/* CTAs */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}

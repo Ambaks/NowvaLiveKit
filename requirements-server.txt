@@ -3,11 +3,19 @@
 # Only includes what's needed for the program generation API
 
 # =============================================================================
-# VOICE AGENT - LiveKit & OpenAI Realtime API
+# VOICE AGENT - Cascade Pipeline (STT + LLM + TTS)
 # =============================================================================
-livekit>=0.17.0
-livekit-agents>=0.10.0
-livekit-plugins-openai>=0.7.0
+livekit>=1.1.3
+livekit-agents>=1.5.1
+livekit-plugins-openai>=1.5.1          # OpenAI API client
+livekit-plugins-groq>=1.5.1            # Groq LLM (native plugin)
+livekit-plugins-deepgram>=1.5.1        # Deepgram Nova-3 STT
+livekit-plugins-cartesia>=1.5.1        # Cartesia Sonic TTS
+livekit-plugins-silero>=1.5.1          # Silero VAD (local)
+livekit-plugins-elevenlabs>=1.5.1
+# livekit-plugins-turn-detector — REMOVED: requires PyTorch, won't fit on e2-micro (1GB RAM).
+# Silero VAD handles end-of-utterance via silence detection instead.
+livekit-plugins-noise-cancellation~=0.2 # Krisp BVC server-side noise cancellation
 
 # =============================================================================
 # DATABASE & SESSION MANAGEMENT
@@ -20,12 +28,14 @@ cryptography>=41.0.0
 # =============================================================================
 # FASTAPI BACKEND
 # =============================================================================
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-gunicorn>=21.2.0
-httpx>=0.26.0
-openai>=1.0.0
-tiktoken>=0.5.0
+fastapi>=0.109.0                       # Web framework
+uvicorn[standard]>=0.27.0              # ASGI server
+gunicorn>=21.2.0                       # WSGI server for production
+bcrypt>=4.0.0                          # Password hashing (used directly, not via passlib)
+python-jose[cryptography]>=3.3.0       # JWT token creation/verification
+httpx>=0.26.0                          # Async HTTP client (for voice agent → FastAPI)
+openai>=1.0.0                          # OpenAI API client
+tiktoken>=0.5.0                        # Token counting for OpenAI models
 
 # =============================================================================
 # JOB QUEUE & TASK PROCESSING

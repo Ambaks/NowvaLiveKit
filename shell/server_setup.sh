@@ -45,7 +45,7 @@ sudo apt update
 sudo apt install -y \
     python3 python3-venv python3-dev python3-pip \
     redis-server nginx git build-essential libpq-dev \
-    libffi-dev libssl-dev libcairo2 libpango-1.0-0 \
+    libffi-dev libssl-dev libcairo2 libpango-1.0-0 libpangoft2-1.0-0 \
     libgdk-pixbuf2.0-0 shared-mime-info
 echo "✓ Dependencies installed"
 
@@ -151,7 +151,7 @@ Group=www-data
 WorkingDirectory=$PROJECT_DIR
 Environment=\"PATH=$PROJECT_DIR/venv/bin\"
 Environment=\"PYTHONPATH=$PROJECT_DIR/src\"
-ExecStart=$PROJECT_DIR/venv/bin/celery -A src.api.celery_app worker --pool=gevent --concurrency=3 --hostname=worker1@%%h --loglevel=warning --logfile=$PROJECT_DIR/logs/celery/worker.log --detach
+ExecStart=$PROJECT_DIR/venv/bin/celery -A src.api.celery_app worker --pool=gevent --concurrency=2 --hostname=worker1@%%h --loglevel=warning --logfile=$PROJECT_DIR/logs/celery/worker.log --detach
 
 Restart=always
 RestartSec=10
@@ -208,7 +208,7 @@ upstream nowva_backend {
 
 server {
     listen 80;
-    server_name $EXTERNAL_IP;
+    server_name nowvasports.com www.nowvasports.com;
 
     client_max_body_size 10M;
     client_body_timeout 30s;

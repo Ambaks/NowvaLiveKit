@@ -41,10 +41,8 @@ const features = [
 
 const FeatureBlock = ({
   feature,
-  index,
 }: {
   feature: (typeof features)[0];
-  index: number;
 }) => {
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true });
@@ -187,7 +185,7 @@ export const TechShowcase = () => {
         {/* Feature blocks */}
         {features.map((feature, index) => (
           <div key={feature.number}>
-            <FeatureBlock feature={feature} index={index} />
+            <FeatureBlock feature={feature} />
             {index < features.length - 1 && <div className="separator" />}
           </div>
         ))}

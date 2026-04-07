@@ -132,9 +132,14 @@ async def serve_frontend(full_path: str):
     if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("redoc"):
         raise HTTPException(status_code=404, detail="Not found")
 
-    # Serve index.html for SPA routing
     frontend_dist = Path(__file__).parent.parent.parent / "frontend_demo" / "dist"
-    if frontend_dist.exists():
-        return FileResponse(str(frontend_dist / "index.html"))
-    else:
+    if not frontend_dist.exists():
         raise HTTPException(status_code=404, detail="Frontend not built")
+
+    # Try to serve the exact file first (images, favicon, etc. from public/)
+    static_file = frontend_dist / full_path
+    if full_path and static_file.is_file():
+        return FileResponse(str(static_file))
+
+    # Fall back to index.html for SPA routing
+    return FileResponse(str(frontend_dist / "index.html"))

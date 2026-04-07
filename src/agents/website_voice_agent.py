@@ -24,8 +24,7 @@ from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, groq, cartesia, silero, noise_cancellation
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import deepgram, groq, cartesia, silero, elevenlabs
 
 # Imports
 from agents.prompts.website_agent_prompt import get_website_agent_prompt
@@ -35,11 +34,6 @@ from db.database import SessionLocal
 from db.models import User
 import httpx
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(levelname)s] %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +67,7 @@ class WebsiteVoiceAgent(Agent):
 
     async def on_enter(self):
         """Entry point - speak initial greeting when agent enters conversation"""
-        await self.session.say("Hey there! I'm Nova, your AI fitness coach. My boss has put me on duty helping y'all generate programs so here we are [laughter]. What's your first name?")
+        await self.session.say("[happy] Hey there! I'm Nova, your AI fitness coach! My boss has put me on duty helping y'all generate programs so here we are [chuckles]. So, what's your first name?")
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
         """Helper method to log function tool calls"""
@@ -934,10 +928,12 @@ async def entrypoint(ctx: agents.JobContext):
         model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
     )
 
-    tts = cartesia.TTS(
-        model="sonic-3",
-        voice=os.getenv("CARTESIA_VOICE_ID", "default"),
-    )
+    tts = elevenlabs.TTS(
+        api_key=os.getenv("ELEVEN_API_KEY"),
+        voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
+        model="eleven_flash_v2_5",   # fastest realtime model
+        streaming_latency=0,         # lowest latency
+)
 
     # Create agent with state
     agent = WebsiteVoiceAgent(state=state)
@@ -948,7 +944,6 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm,
         tts=tts,
         vad=silero.VAD.load(),
-        turn_handling={"turn_detection": MultilingualModel()},
         preemptive_generation=True,
     )
 
@@ -984,7 +979,6 @@ async def entrypoint(ctx: agents.JobContext):
         room=ctx.room,
         agent=agent,
         room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
             pre_connect_audio=True,
             pre_connect_audio_timeout=5.0,
         ),
@@ -1014,6 +1008,7 @@ if __name__ == "__main__":
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
+                initialize_process_timeout=120,
             )
         )
     except KeyboardInterrupt:

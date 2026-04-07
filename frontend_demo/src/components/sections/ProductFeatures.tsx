@@ -8,23 +8,23 @@ const features = [
     icon: Scan,
     title: 'Built-In Computer Vision',
     description:
-      'Dual cameras integrated into the uprights track 17 body keypoints in 3D at 30 FPS. Every angle measured, every rep counted, every deviation caught — no wearables needed.',
-    detail: 'Pose estimation · Joint angles · Bar path · Velocity tracking',
+      'Dual cameras integrated into the uprights track over 20 body keypoints in 3D with lab-grade accuracy. Every angle measured, every rep counted, every deviation caught — no wearables needed.',
+    detail: 'Pose estimation · Deep Learning · Barbell tracking · Velocity tracking',
     span: 'large' as const,
   },
   {
     icon: Mic,
     title: 'Real-Time Voice Coaching',
     description:
-      'Nova, your AI coach, lives in the rack. Get real-time form cues and program adjustments through natural conversation with <50ms latency.',
-    detail: 'Natural language · Context-aware · Adaptive cues',
+      'Nova, your AI coach, lives in the rack. Get real-time form cues, teaching, and program adjustments through natural conversation.',
+    detail: 'Powered by LLMs · Context-aware · Built in memory',
     span: 'small' as const,
   },
   {
     icon: Brain,
     title: 'Adaptive Intelligence',
     description:
-      'Every session feeds the system. Your training auto-regulates based on velocity, RPE, and fatigue — predicting plateaus before they happen.',
+      'Every session feeds the system. Your training auto-regulates based on velocity, RPE, and fatigue — predicting plateaus before they happen, like a world class coach would.',
     detail: 'Autoregulation · Fatigue management · Periodization',
     span: 'small' as const,
   },
