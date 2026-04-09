@@ -24,10 +24,13 @@ from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, groq, cartesia, silero, elevenlabs
+from livekit.plugins import deepgram, groq, silero, elevenlabs, noise_cancellation
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # Imports
-from agents.prompts.website_agent_prompt import get_website_agent_prompt
+from agents.prompts.website_step_prompts import (
+    ConversationStep, get_step_prompt, get_first_step, get_next_step, get_first_missing_step
+)
 from agents.shared.unit_conversion import normalize_height_to_cm, normalize_weight_to_kg, categorize_goal
 from auth.security import hash_password
 from db.database import SessionLocal
@@ -58,16 +61,41 @@ class WebsiteVoiceAgent(Agent):
         # Store reference to session (will be set later)
         self._session_ref = None
 
-        # Get prompt
-        instructions = get_website_agent_prompt()
+        # Step-scoped prompt system
+        self._current_step = get_first_step(state)
+        self._step_retries = 0
+        self._finalize_fired = False
+        instructions = get_step_prompt(self._current_step, state)
 
         super().__init__(instructions=instructions)
 
-        logger.info(f"[WEBSITE AGENT] Initialized with email: {state.get('email')}")
+        logger.info(
+            f"[WEBSITE AGENT] Initialized with email: {state.get('email')}, "
+            f"first step: {self._current_step.value}, "
+            f"known fields: {list(state.get('existing_profile', {}).keys())}"
+        )
+
+    async def _advance_to(self, step: ConversationStep):
+        """Swap the system prompt to the next conversation step."""
+        self._current_step = step
+        self._step_retries = 0
+        await self.update_instructions(get_step_prompt(step, self.state))
+        logger.info(f"[STEP] -> {step.value}")
 
     async def on_enter(self):
         """Entry point - speak initial greeting when agent enters conversation"""
-        await self.session.say("[happy] Hey there! I'm Nova, your AI fitness coach! My boss has put me on duty helping y'all generate programs so here we are [chuckles]. So, what's your first name?")
+        name = self.state.get("name")
+        if name:
+            await self.session.say(
+                f"Hey! Welcome back, {name}! Let's get you a new program set up."
+            )
+        else:
+            await self.session.say(
+                "Hey there! Nice to meet you, I'm Nova, your AI fitness coach! "
+                "We'll be able to do a lot more once the Nowva One squat rack comes out, "
+                "but for now I'm on duty helping y'all generate programs. "
+                "So, what's your first name?"
+            )
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
         """Helper method to log function tool calls"""
@@ -121,7 +149,9 @@ class WebsiteVoiceAgent(Agent):
             self.state["name"] = first_name
             logger.info(f"[WEBSITE AGENT] Name captured: {first_name}")
 
-            result = None, f"Name captured. Now start collecting program parameters with Question 1 (height and weight)."
+            next_step = get_next_step(ConversationStep.NAME_CAPTURE, self.state)
+            await self._advance_to(next_step)
+            result = None, "Name captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -152,14 +182,22 @@ class WebsiteVoiceAgent(Agent):
             # Parse and validate height
             height_cm = normalize_height_to_cm(height_value)
             if height_cm is None or height_cm < 50 or height_cm > 300:
-                result = None, "Height invalid. Ask for height again with examples (e.g., 5'9\" or 175cm)."
+                self._step_retries += 1
+                if self._step_retries >= 3:
+                    result = None, "That still didn't work. Try saying something like five foot nine, or one seventy-five centimeters."
+                else:
+                    result = None, "Height invalid. Ask for height again with examples like five foot nine or one seventy-five centimeters."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
             # Parse and validate weight
             weight_kg = normalize_weight_to_kg(weight_value)
             if weight_kg is None or weight_kg < 30 or weight_kg > 300:
-                result = None, "Weight invalid. Ask for weight again with examples (e.g., 185lbs or 80kg)."
+                self._step_retries += 1
+                if self._step_retries >= 3:
+                    result = None, "That still didn't work. Try saying something like one eighty-five pounds, or eighty kilograms."
+                else:
+                    result = None, "Weight invalid. Ask for weight again with examples like one eighty-five pounds or eighty kilograms."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -171,7 +209,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Height: {height_cm} cm, Weight: {weight_kg} kg")
 
-            result = None, "Captured. Now immediately ask Question 2 about age and sex."
+            next_step = get_next_step(ConversationStep.HEIGHT_WEIGHT, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -196,7 +236,8 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate age
             if age < 13 or age > 100:
-                result = None, "Age out of range (13-100). Ask for age again."
+                self._step_retries += 1
+                result = None, "Age out of range. Ask for age again -- must be between thirteen and one hundred."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -207,6 +248,7 @@ class WebsiteVoiceAgent(Agent):
             elif sex_normalized in ["f", "female", "woman", "girl"]:
                 sex_normalized = "female"
             else:
+                self._step_retries += 1
                 result = None, "Sex unclear. Ask if male or female."
                 self._log_function_call(function_name, parameters, result)
                 return result
@@ -219,7 +261,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
 
-            result = None, "Captured. Now immediately ask Question 3 about fitness goal."
+            next_step = get_next_step(ConversationStep.AGE_SEX, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -261,7 +305,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Goal: {goal_description} -> Category: {goal_category}")
 
-            result = None, f"Captured and categorized as '{goal_category}'. Now immediately ask Question 4 about program duration (recommend {recommended_duration} weeks)."
+            next_step = get_next_step(ConversationStep.GOAL, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -285,7 +331,8 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate duration
             if duration_weeks < 2 or duration_weeks > 52:
-                result = None, "Duration out of range (2-52 weeks). Ask for duration again."
+                self._step_retries += 1
+                result = None, "Duration out of range. Ask again -- must be between two and fifty-two weeks."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -296,7 +343,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Duration: {duration_weeks} weeks")
 
-            result = None, "Captured. Now immediately ask Question 5 about training frequency (days per week)."
+            next_step = get_next_step(ConversationStep.DURATION, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -320,7 +369,8 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate frequency
             if days_per_week < 1 or days_per_week > 7:
-                result = None, "Frequency out of range (1-7 days/week). Ask for frequency again."
+                self._step_retries += 1
+                result = None, "Frequency out of range. Ask again -- must be between one and seven days per week."
                 self._log_function_call(function_name, parameters, result)
                 return result
 
@@ -331,7 +381,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Frequency: {days_per_week} days/week")
 
-            result = None, "Captured. Now immediately ask Question 6 about session duration (optional)."
+            next_step = get_next_step(ConversationStep.FREQUENCY, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -355,9 +407,15 @@ class WebsiteVoiceAgent(Agent):
         try:
             # Validate duration
             if duration_minutes < 30 or duration_minutes > 180:
-                result = None, "Duration out of range (30-180 minutes). Ask for session duration again."
-                self._log_function_call(function_name, parameters, result)
-                return result
+                self._step_retries += 1
+                if self._step_retries >= 3:
+                    # Optional field -- skip with default
+                    duration_minutes = 60
+                    logger.warning("[RETRY] Max retries for session_duration, defaulting to 60 min")
+                else:
+                    result = None, "Duration out of range. Ask again -- between thirty and one hundred eighty minutes."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
 
             # Save to state
             if "program_creation" not in self.state:
@@ -366,7 +424,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Session duration: {duration_minutes} minutes")
 
-            result = None, "Captured. Now immediately ask Question 7 about injuries (optional)."
+            next_step = get_next_step(ConversationStep.SESSION_DURATION, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -395,7 +455,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Injury history: {injury_description}")
 
-            result = None, "Captured. Now immediately ask Question 8 about specific sport (optional)."
+            next_step = get_next_step(ConversationStep.INJURIES, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -417,14 +479,16 @@ class WebsiteVoiceAgent(Agent):
         parameters = {"sport_name": sport_name}
 
         try:
-            # Save to state
+            # Save to state BEFORE calling get_next_step (skip logic depends on sport value)
             if "program_creation" not in self.state:
                 self.state["program_creation"] = {}
             self.state["program_creation"]["specific_sport"] = sport_name
 
             logger.info(f"[PROGRAM] Specific sport: {sport_name}")
 
-            result = None, "Captured. Now immediately ask Question 9 about training season (only if they named a sport, otherwise skip to Question 11 about additional notes)."
+            next_step = get_next_step(ConversationStep.SPORT, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -452,16 +516,16 @@ class WebsiteVoiceAgent(Agent):
             if season not in valid_seasons:
                 season = "off_season"
 
+            # Save to state BEFORE calling get_next_step (skip logic depends on season value)
             if "program_creation" not in self.state:
                 self.state["program_creation"] = {}
             self.state["program_creation"]["training_season"] = season
 
             logger.info(f"[PROGRAM] Training season: {season}")
 
-            if season == "in_season":
-                result = None, "Captured. Now immediately ask Question 10 about how many games or competitions per week."
-            else:
-                result = None, "Captured. Now immediately ask Question 11 about additional notes (optional)."
+            next_step = get_next_step(ConversationStep.TRAINING_SEASON, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -492,7 +556,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Games per week: {games}")
 
-            result = None, "Captured. Now immediately ask Question 11 about additional notes (optional)."
+            next_step = get_next_step(ConversationStep.GAMES_PER_WEEK, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -521,7 +587,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] User notes: {notes}")
 
-            result = None, "Captured. Now immediately ask Question 12 about equipment tier (Tier 1: barbell, rack, bench, pull-up bar, floor space; Tier 2: adds dumbbells; Tier 3: adds bands)."
+            next_step = get_next_step(ConversationStep.NOTES, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -554,7 +622,9 @@ class WebsiteVoiceAgent(Agent):
 
             logger.info(f"[PROGRAM] Equipment tier: {tier}")
 
-            result = None, "Captured. Now immediately ask the LAST question about fitness level (beginner, intermediate, or advanced)."
+            next_step = get_next_step(ConversationStep.EQUIPMENT, self.state)
+            await self._advance_to(next_step)
+            result = None, "Captured. Follow your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -596,7 +666,29 @@ class WebsiteVoiceAgent(Agent):
             # Set VBT to false by default for website users
             self.state["program_creation"]["has_vbt_capability"] = False
 
-            result = None, "All parameters collected! Enthusiastically tell the user that you've got everything you need to build their program. Thank them for their time, and let them know they should receive their personalized program via email within the next 5 minutes. Then immediately call update_user_profile() to save their info to the database."
+            # Advance to GOODBYE prompt -- LLM will generate the farewell speech
+            await self._advance_to(ConversationStep.GOODBYE)
+
+            # Register callback to fire finalize chain after goodbye speech plays out
+            # Same pattern as LiveKit's EndCallTool (agents/beta/tools/end_call.py)
+            def _on_goodbye_done(_):
+                if not self._finalize_fired:
+                    self._finalize_fired = True
+                    asyncio.create_task(self._finalize_and_disconnect())
+
+            context.speech_handle.add_done_callback(_on_goodbye_done)
+
+            # Timeout fallback: if speech callback never fires, finalize anyway
+            async def _finalize_timeout():
+                await asyncio.sleep(30)
+                if not self._finalize_fired:
+                    logger.warning("[FINALIZE] Timeout -- speech callback never fired, finalizing anyway")
+                    self._finalize_fired = True
+                    await self._finalize_and_disconnect()
+
+            asyncio.create_task(_finalize_timeout())
+
+            result = None, "All parameters collected. Say goodbye following your current instructions."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -605,6 +697,149 @@ class WebsiteVoiceAgent(Agent):
             result = None, "Error capturing fitness level. Please tell me your level again."
             self._log_function_call(function_name, parameters, result)
             return result
+
+    # =========================================================================
+    # PROGRAMMATIC FINALIZE CHAIN (no LLM round-trip)
+    # =========================================================================
+
+    async def _update_user_profile_direct(self):
+        """Update user profile in DB. Extracted from the function_tool for programmatic use."""
+        user_id = self.state.get("user_id")
+        if not user_id:
+            logger.error("[FINALIZE] No user ID. Cannot update profile.")
+            return
+
+        name = self.state.get("name")
+        program_params = self.state.get("program_creation", {})
+
+        db = SessionLocal()
+        try:
+            db_user = db.query(User).filter(User.id == user_id).first()
+            if db_user:
+                if name:
+                    db_user.name = name
+                if "height_cm" in program_params:
+                    db_user.height_cm = program_params["height_cm"]
+                if "weight_kg" in program_params:
+                    db_user.weight_kg = program_params["weight_kg"]
+                if "age" in program_params:
+                    db_user.age = program_params["age"]
+                if "sex" in program_params:
+                    db_user.sex = program_params["sex"]
+                db.commit()
+                logger.info(f"[FINALIZE] Updated user profile for {self.state.get('email')}")
+            else:
+                logger.error("[FINALIZE] User not found in database.")
+        except Exception as e:
+            logger.error(f"[FINALIZE] Failed to update user profile: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    async def _generate_program_direct(self):
+        """Trigger program generation via FastAPI. Extracted for programmatic use."""
+        user_id = self.state.get("user_id")
+        user_email = self.state.get("email")
+
+        if not user_id:
+            logger.error("[FINALIZE] No user ID. Cannot generate program.")
+            return
+
+        program_params = self.state.get("program_creation", {})
+
+        payload = {
+            "user_id": str(user_id),
+            "name": self.state.get("name"),
+            "email": user_email,
+            "height_cm": program_params["height_cm"],
+            "weight_kg": program_params["weight_kg"],
+            "age": program_params["age"],
+            "sex": program_params["sex"],
+            "goal_category": program_params["goal_category"],
+            "goal_raw": program_params["goal_raw"],
+            "duration_weeks": program_params["duration_weeks"],
+            "days_per_week": program_params["days_per_week"],
+            "session_duration": program_params.get("session_duration", 60),
+            "injury_history": program_params.get("injury_history", "none"),
+            "specific_sport": program_params.get("specific_sport", "none"),
+            "user_notes": program_params.get("user_notes", None),
+            "fitness_level": program_params["fitness_level"],
+            "has_vbt_capability": program_params.get("has_vbt_capability", False),
+            "send_email": True,
+            "training_season": program_params.get("training_season"),
+            "games_per_week": program_params.get("games_per_week", 0),
+            "equipment_tier": program_params.get("equipment_tier", 2),
+        }
+
+        fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
+        url = f"{fastapi_url}/api/programs/generate"
+        logger.info(f"[FINALIZE] Calling program generation API: {url}")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload, headers=_service_headers())
+
+                if response.status_code == 202:
+                    data = response.json()
+                    job_id = data.get("job_id")
+                    self.state["program_creation"]["job_id"] = job_id
+                    logger.info(f"[FINALIZE] Program generation started. Job ID: {job_id}")
+
+                    # Send data message to frontend
+                    try:
+                        await self.session.room_io.room.local_participant.publish_data(
+                            json.dumps({
+                                "type": "program_generating",
+                                "job_id": job_id,
+                                "email": user_email
+                            }).encode(),
+                            reliable=True
+                        )
+                        logger.info("[FINALIZE] Sent 'program_generating' data message to frontend")
+                    except Exception as e:
+                        logger.error(f"[FINALIZE] Failed to send data message: {e}")
+                else:
+                    logger.error(f"[FINALIZE] API error: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"[FINALIZE] Failed to generate program: {e}")
+
+    async def _finalize_and_disconnect(self):
+        """Run the post-goodbye chain: save profile, generate program, disconnect."""
+        try:
+            # Check for missing required data
+            required = [
+                "height_cm", "weight_kg", "age", "sex",
+                "goal_category", "goal_raw", "duration_weeks",
+                "days_per_week", "fitness_level"
+            ]
+            program = self.state.get("program_creation", {})
+            missing = [p for p in required if p not in program]
+            if missing:
+                logger.error(f"[FINALIZE] Missing required params: {missing}")
+                first_missing = get_first_missing_step(missing)
+                if first_missing:
+                    await self._advance_to(first_missing)
+                    return  # Don't finalize -- conversation continues
+
+            # 1. Update user profile in DB
+            await self._update_user_profile_direct()
+
+            # 2. Trigger program generation via API
+            await self._generate_program_direct()
+
+            # 3. Disconnect from room
+            try:
+                await self.session.room_io.room.disconnect()
+                logger.info("[FINALIZE] Complete. Disconnected.")
+            except Exception as e:
+                logger.warning(f"[FINALIZE] Error disconnecting: {e}")
+
+        except Exception as e:
+            logger.error(f"[FINALIZE] Error in finalize chain: {e}")
+
+    # =========================================================================
+    # FUNCTION TOOLS (kept for backward compat / direct LLM invocation fallback)
+    # =========================================================================
 
     @function_tool
     async def update_user_profile(self, context: RunContext):
@@ -841,17 +1076,24 @@ async def entrypoint(ctx: agents.JobContext):
             except json.JSONDecodeError as e:
                 logger.error(f"[ERROR] Failed to parse participant metadata: {participant.metadata}, error: {e}")
 
+    # In console mode, use a test email since there are no real participants
+    is_console = ctx.room.name == "console"
+    if is_console:
+        email = os.getenv("TEST_EMAIL", "ambakalgr@gmail.com")
+        logger.info(f"[WEBSITE AGENT] Console mode — using test email: {email}")
+
     # Check already-connected participants first
-    for participant in ctx.room.remote_participants.values():
-        if participant.metadata:
-            try:
-                metadata_dict = json.loads(participant.metadata)
-                email = metadata_dict.get('email')
-                if email:
-                    logger.info(f"[WEBSITE AGENT] Email from existing participant: {email}")
-                    break
-            except json.JSONDecodeError:
-                pass
+    if not email:
+        for participant in ctx.room.remote_participants.values():
+            if participant.metadata:
+                try:
+                    metadata_dict = json.loads(participant.metadata)
+                    email = metadata_dict.get('email')
+                    if email:
+                        logger.info(f"[WEBSITE AGENT] Email from existing participant: {email}")
+                        break
+                except json.JSONDecodeError:
+                    pass
 
     # If no email found yet, wait for participant connection event
     if not email:
@@ -876,10 +1118,22 @@ async def entrypoint(ctx: agents.JobContext):
     try:
         # Check if user exists
         existing_user = db.query(User).filter(User.email == email).first()
+        existing_profile = {}
         if existing_user:
             user_id = existing_user.id
             username = existing_user.username
-            logger.info(f"[WEBSITE AGENT] Existing user found: {email}, ID: {user_id}")
+            # Read existing profile data for returning users
+            if existing_user.name and existing_user.name.strip():
+                existing_profile["name"] = existing_user.name.strip()
+            if existing_user.height_cm is not None:
+                existing_profile["height_cm"] = float(existing_user.height_cm)
+            if existing_user.weight_kg is not None:
+                existing_profile["weight_kg"] = float(existing_user.weight_kg)
+            if existing_user.age is not None:
+                existing_profile["age"] = existing_user.age
+            if existing_user.sex is not None:
+                existing_profile["sex"] = existing_user.sex
+            logger.info(f"[WEBSITE AGENT] Existing user found: {email}, ID: {user_id}, profile: {list(existing_profile.keys())}")
         else:
             # Generate username from email
             email_prefix = email.split('@')[0]
@@ -910,40 +1164,67 @@ async def entrypoint(ctx: agents.JobContext):
         db.close()
 
     # Initialize ephemeral state (simple dict)
+    # Pre-populate program_creation with known profile values so
+    # generate_workout_program validation passes without calling skipped capture tools
+    prepopulated = {}
+    for key in ("height_cm", "weight_kg", "age", "sex"):
+        if key in existing_profile:
+            prepopulated[key] = existing_profile[key]
+
     state = {
         "email": email,
-        "name": None,
+        "name": existing_profile.get("name"),
         "user_id": user_id,
         "username": username,
-        "program_creation": {}
+        "existing_profile": existing_profile,
+        "program_creation": prepopulated,
     }
 
     # Initialize cascade pipeline components (STT + LLM + TTS)
     stt = deepgram.STT(
         model="nova-3",
         language="en",
+        endpointing_ms=150,
+        smart_format=True,
+        filler_words=True,
+        keyterm=["Nowva", "Nova"],
     )
 
     llm = groq.LLM(
         model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+        temperature=0.6,
+        max_completion_tokens=256,
     )
 
     tts = elevenlabs.TTS(
         api_key=os.getenv("ELEVEN_API_KEY"),
         voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
-        model="eleven_flash_v2_5",   # fastest realtime model
-        streaming_latency=0,         # lowest latency
-)
+        model="eleven_multilingual_v2",
+        voice_settings=elevenlabs.VoiceSettings(
+            stability=0.50,
+            similarity_boost=0.75,
+        ),
+        chunk_length_schedule=[80, 120, 200, 260],
+    )
 
     # Create agent with state
     agent = WebsiteVoiceAgent(state=state)
+
+    # Retrieve prewarmed VAD or load fresh as fallback
+    vad = ctx.proc.userdata.get("vad")
+    if vad is None:
+        logger.warning("[WEBSITE AGENT] No prewarmed VAD found, loading fresh...")
+        vad = silero.VAD.load()
+    else:
+        logger.info("[WEBSITE AGENT] Using prewarmed Silero VAD")
 
     # Create session with cascade pipeline
     session = AgentSession(
         stt=stt,
         llm=llm,
         tts=tts,
-        vad=silero.VAD.load(),
+        vad=vad,
+        turn_handling={"turn_detection": MultilingualModel()},
         preemptive_generation=True,
     )
 
@@ -979,12 +1260,35 @@ async def entrypoint(ctx: agents.JobContext):
         room=ctx.room,
         agent=agent,
         room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC(),
             pre_connect_audio=True,
             pre_connect_audio_timeout=5.0,
         ),
     )
 
     logger.info("[WEBSITE AGENT] Session ended.")
+
+
+def prewarm(proc: agents.JobProcess):
+    """Pre-load heavy resources before any room connection.
+
+    Silero VAD model is loaded here so entrypoint() starts instantly.
+    MultilingualModel turn detector requires a job context and is
+    created inside entrypoint() instead.
+    """
+    import time
+
+    logger.info("[PREWARM] Pre-loading Silero VAD...")
+    start = time.monotonic()
+
+    try:
+        proc.userdata["vad"] = silero.VAD.load()
+        logger.info("[PREWARM] Silero VAD pre-loaded")
+    except Exception as e:
+        logger.warning(f"[PREWARM] VAD pre-load failed (will load in entrypoint): {e}")
+
+    elapsed = time.monotonic() - start
+    logger.info(f"[PREWARM] Pre-load complete in {elapsed:.3f}s")
 
 
 if __name__ == "__main__":
@@ -1008,6 +1312,7 @@ if __name__ == "__main__":
         agents.cli.run_app(
             agents.WorkerOptions(
                 entrypoint_fnc=entrypoint,
+                prewarm_fnc=prewarm,
                 initialize_process_timeout=120,
             )
         )

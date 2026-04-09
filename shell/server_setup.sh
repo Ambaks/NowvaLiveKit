@@ -145,13 +145,13 @@ After=network.target redis-server.service nowva-api.service
 Requires=redis-server.service
 
 [Service]
-Type=forking
+Type=simple
 User=$USERNAME
 Group=www-data
 WorkingDirectory=$PROJECT_DIR
 Environment=\"PATH=$PROJECT_DIR/venv/bin\"
 Environment=\"PYTHONPATH=$PROJECT_DIR/src\"
-ExecStart=$PROJECT_DIR/venv/bin/celery -A src.api.celery_app worker --pool=gevent --concurrency=2 --hostname=worker1@%%h --loglevel=warning --logfile=$PROJECT_DIR/logs/celery/worker.log --detach
+ExecStart=$PROJECT_DIR/venv/bin/celery -A src.api.celery_app worker --pool=gevent --concurrency=2 --hostname=worker1@%%h --loglevel=warning --logfile=$PROJECT_DIR/logs/celery/worker.log
 
 Restart=always
 RestartSec=10

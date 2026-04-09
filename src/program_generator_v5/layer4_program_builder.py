@@ -1872,23 +1872,25 @@ async def review_and_refine_program(
     # Create mutator for applying LLM suggestions
     mutator = ProgramMutator(program, profile, strategy, volume_allocation, exercise_library)
 
+    sem = asyncio.Semaphore(4)  # Limit to 4 concurrent requests to avoid rate limits
+
     async def review_single_week(week: BuiltWeek) -> dict:
         """Review a single week and return the LLM response."""
-        prompt = format_week_review_prompt(week, profile, strategy)
+        async with sem:
+            prompt = format_week_review_prompt(week, profile, strategy)
 
-        try:
-            response = await openai_client.chat.completions.create(
-                model="gpt-5-mini",  # Per spec: gpt-5-mini for per-week review
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.3,
-            )
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            print(f"⚠️  LLM week review failed for week {week.week_number}: {e}")
-            return {"issues": [], "overall_quality": "unknown", "coaching_notes": "Review failed"}
+            try:
+                response = await openai_client.chat.completions.create(
+                    model="gpt-5-mini",  # Per spec: gpt-5-mini for per-week review
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                )
+                return json.loads(response.choices[0].message.content)
+            except Exception as e:
+                print(f"⚠️  LLM week review failed for week {week.week_number}: {e}")
+                return {"issues": [], "overall_quality": "unknown", "coaching_notes": "Review failed"}
 
-    # Fire all week reviews IN PARALLEL
+    # Fire all week reviews in parallel (semaphore-throttled to avoid rate limits)
     reviews = await asyncio.gather(*[review_single_week(week) for week in program.weeks])
 
     # Apply suggestions using the ProgramMutator (respecting hard constraints)

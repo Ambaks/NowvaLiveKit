@@ -332,7 +332,7 @@ After=network.target redis-server.service nowva-api.service
 Requires=redis-server.service
 
 [Service]
-Type=forking
+Type=simple
 User=YOUR-USERNAME
 Group=www-data
 WorkingDirectory=/home/YOUR-USERNAME/nowva
@@ -346,8 +346,7 @@ ExecStart=/home/YOUR-USERNAME/nowva/venv/bin/celery \
   --concurrency=3 \
   --hostname=worker1@%%h \
   --loglevel=warning \
-  --logfile=/home/YOUR-USERNAME/nowva/logs/celery/worker.log \
-  --detach
+  --logfile=/home/YOUR-USERNAME/nowva/logs/celery/worker.log
 
 # Process management
 Restart=always

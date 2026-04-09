@@ -1,5 +1,5 @@
-# Minimal Server Requirements for GCP Free Tier (1GB RAM)
-# This excludes pose estimation libraries (torch, opencv, mmpose) to save memory
+# Server Requirements for GCP (8GB RAM)
+# This excludes pose estimation libraries (torch, opencv, mmpose)
 # Only includes what's needed for the program generation API
 
 # =============================================================================
@@ -13,8 +13,7 @@ livekit-plugins-deepgram>=1.5.1        # Deepgram Nova-3 STT
 livekit-plugins-cartesia>=1.5.1        # Cartesia Sonic TTS
 livekit-plugins-silero>=1.5.1          # Silero VAD (local)
 livekit-plugins-elevenlabs>=1.5.1
-# livekit-plugins-turn-detector — REMOVED: requires PyTorch, won't fit on e2-micro (1GB RAM).
-# Silero VAD handles end-of-utterance via silence detection instead.
+livekit-plugins-turn-detector>=1.5.1   # MultilingualModel end-of-turn detection (uses ONNX Runtime)
 livekit-plugins-noise-cancellation~=0.2 # Krisp BVC server-side noise cancellation
 
 # =============================================================================
@@ -29,6 +28,8 @@ cryptography>=41.0.0
 # FASTAPI BACKEND
 # =============================================================================
 fastapi>=0.109.0                       # Web framework
+email-validator>=2.0.0                 # Pydantic email field support
+python-multipart>=0.0.6               # Form data parsing for FastAPI
 uvicorn[standard]>=0.27.0              # ASGI server
 gunicorn>=21.2.0                       # WSGI server for production
 bcrypt>=4.0.0                          # Password hashing (used directly, not via passlib)

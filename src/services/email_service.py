@@ -4,6 +4,7 @@ Uses Resend API for reliable email delivery.
 """
 
 import os
+import asyncio
 import logging
 from typing import Optional
 from pathlib import Path
@@ -351,23 +352,35 @@ async def send_program_email_async(
             }]
         }
 
-        # Send via Resend API (async)
+        # Send via Resend API (async) with retry for transient failures
         logger.info(f"Sending program email to {to_email} (Program ID: {program_id})")
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                },
-                json=payload
-            )
-            response.raise_for_status()  # Raise exception for 4xx/5xx
-            result = response.json()
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        "https://api.resend.com/emails",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json=payload
+                    )
+                    response.raise_for_status()
+                    result = response.json()
 
-            logger.info(f"Email sent successfully to {to_email}. Response: {result}")
-            return result
+                    logger.info(f"Email sent successfully to {to_email}. Response: {result}")
+                    return result
+
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as e:
+                if attempt < max_retries:
+                    wait = attempt * 5
+                    logger.warning(f"Email attempt {attempt}/{max_retries} failed ({type(e).__name__}), retrying in {wait}s...")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(f"Email to {to_email} failed after {max_retries} attempts: {e}", exc_info=True)
+                    return None
 
     except httpx.HTTPError as e:
         logger.error(f"HTTP error sending email to {to_email}: {str(e)}", exc_info=True)

@@ -105,9 +105,12 @@ def save_program_to_db_v5(
     print(f"[PROGRAM SAVER V5] Created program with ID: {user_program.id}")
 
     # Step 3: Create Workouts, WorkoutExercises, Sets
+    # Batched flushes to minimize DB round-trips (~3 instead of ~288)
+
+    # Pass 1: Create all Workouts, flush once to get IDs
+    workout_map = []
     for week in v5_output.get("weeks", []):
         for workout in week.get("workouts", []):
-            # Create Workout
             workout_model = Workout(
                 user_generated_program_id=user_program.id,
                 week_number=week.get("week_number", 1),
@@ -117,42 +120,46 @@ def save_program_to_db_v5(
                 description=f"Estimated duration: {workout.get('estimated_duration_minutes', 60)} min"
             )
             db.add(workout_model)
-            db.flush()  # Get workout.id
+            workout_map.append((workout_model, workout))
+    db.flush()
 
-            # Create WorkoutExercises and Sets
-            for exercise in workout.get("exercises", []):
-                ex_name = exercise.get("exercise_name", "")
-                exercise_model = exercise_cache.get(ex_name)
+    # Pass 2: Create all WorkoutExercises, flush once to get IDs
+    we_map = []
+    for workout_model, workout in workout_map:
+        for exercise in workout.get("exercises", []):
+            ex_name = exercise.get("exercise_name", "")
+            exercise_model = exercise_cache.get(ex_name)
 
-                if not exercise_model:
-                    print(f"[PROGRAM SAVER V5] ⚠️  Exercise '{ex_name}' not in cache, skipping")
-                    continue
+            if not exercise_model:
+                print(f"[PROGRAM SAVER V5] ⚠️  Exercise '{ex_name}' not in cache, skipping")
+                continue
 
-                workout_exercise = WorkoutExercise(
-                    workout_id=workout_model.id,
-                    exercise_id=exercise_model.id,
-                    order_number=exercise.get("order", 1),
-                    notes=exercise.get("rationale", "")
-                )
-                db.add(workout_exercise)
-                db.flush()  # Get workout_exercise.id
+            workout_exercise = WorkoutExercise(
+                workout_id=workout_model.id,
+                exercise_id=exercise_model.id,
+                order_number=exercise.get("order", 1),
+                notes=exercise.get("rationale", "")
+            )
+            db.add(workout_exercise)
+            we_map.append((workout_exercise, exercise))
+    db.flush()
 
-                # Create Sets
-                for set_data in exercise.get("sets", []):
-                    set_model = Set(
-                        workout_exercise_id=workout_exercise.id,
-                        set_number=set_data.get("set_number", 1),
-                        reps=set_data.get("reps", 10),
-                        intensity_percent=set_data.get("intensity_percent"),
-                        rest_seconds=set_data.get("rest_seconds", 90),
-                        set_type=set_data.get("set_type", "standard"),
-                        velocity_threshold=set_data.get("velocity_target"),
-                        velocity_min=set_data.get("velocity_min"),
-                        velocity_max=set_data.get("velocity_max"),
-                    )
-                    db.add(set_model)
+    # Pass 3: Create all Sets, then commit
+    for workout_exercise, exercise in we_map:
+        for set_data in exercise.get("sets", []):
+            set_model = Set(
+                workout_exercise_id=workout_exercise.id,
+                set_number=set_data.get("set_number", 1),
+                reps=set_data.get("reps", 10),
+                intensity_percent=set_data.get("intensity_percent"),
+                rest_seconds=set_data.get("rest_seconds", 90),
+                set_type=set_data.get("set_type", "standard"),
+                velocity_threshold=set_data.get("velocity_target"),
+                velocity_min=set_data.get("velocity_min"),
+                velocity_max=set_data.get("velocity_max"),
+            )
+            db.add(set_model)
 
-    # Final commit
     db.commit()
     print(f"[PROGRAM SAVER V5] ✅ Program saved to database! ID: {user_program.id}")
     return user_program.id

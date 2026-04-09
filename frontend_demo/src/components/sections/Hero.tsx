@@ -25,7 +25,7 @@ export const Hero = () => {
       </div>
 
       {/* Content */}
-      <div className="section-container relative z-10 w-full pt-32 pb-24 md:pt-40 md:pb-32">
+      <div className="section-container relative z-10 w-full pt-24 pb-20 md:pt-40 md:pb-32">
         <div className="grid lg:grid-cols-2 gap-12 lg:gap-8 items-center">
           {/* Left: Copy */}
           <div className="relative z-20 max-w-2xl">
@@ -50,7 +50,7 @@ export const Hero = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.15 }}
-              className="font-display font-extrabold text-display-lg md:text-display-xl lg:text-display-2xl text-foreground mb-6"
+              className="font-display font-extrabold text-[2.75rem] sm:text-display-lg md:text-display-xl lg:text-display-2xl text-foreground mb-6"
             >
               Intelligence,
               <br />
@@ -61,7 +61,7 @@ export const Hero = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.3 }}
-              className="text-body-lg md:text-heading-md text-foreground-secondary max-w-lg mb-10 leading-relaxed"
+              className="text-body-lg md:text-heading-md text-foreground-secondary max-w-lg mb-8 md:mb-10 leading-relaxed"
             >
               The AI-powered squat rack that watches your form, coaches your lifts, and programs your training — all in real time. No phone. No wearable. Just lift.
             </motion.p>
@@ -72,11 +72,11 @@ export const Hero = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.55 }}
-              className="flex flex-wrap gap-4"
+              className="flex flex-col sm:flex-row gap-4"
             >
               <button
                 onClick={handleCTAClick}
-                className="button-primary text-lg group"
+                className="button-primary text-lg group w-full sm:w-auto text-center justify-center"
               >
                 <span className="flex items-center gap-3">
                   Get a Free Program
@@ -90,7 +90,7 @@ export const Hero = () => {
               </button>
               <button
                 onClick={handleLearnMore}
-                className="button-secondary text-lg group"
+                className="button-secondary text-lg group w-full sm:w-auto text-center justify-center"
               >
                 <span className="flex items-center gap-3">
                   See the Technology

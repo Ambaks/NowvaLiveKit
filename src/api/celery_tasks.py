@@ -3,6 +3,8 @@ Celery Task Definitions
 Wraps async service functions for Celery execution
 """
 import asyncio
+import os
+from openai import AsyncOpenAI
 from .celery_app import celery_app
 import traceback
 
@@ -56,7 +58,7 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
     from .services.program_saver_v5 import save_and_publish_v5_program
     from .models.requests import ProgramGenerationRequest
     from program_generator_v5 import generate_program_v5
-    from services.email_service import send_program_email_async
+    from services.email_service import send_program_email
 
     print(f"[CELERY TASK V5 {self.request.id}] Starting job {job_id}")
 
@@ -110,7 +112,7 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
         v5_output = loop.run_until_complete(
             generate_program_v5(
                 input_data=v5_input,
-                openai_client=None,
+                openai_client=AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")),
                 use_llm=True,
                 input_type="structured"
             )
@@ -135,13 +137,11 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
             if params.get("send_email") and result.get("pdf_path"):
                 try:
                     print(f"[CELERY TASK V5 {self.request.id}] 📧 Sending email...")
-                    email_result = loop.run_until_complete(
-                        send_program_email_async(
-                            to_email=params.get("email"),
-                            user_name=params.get("name"),
-                            program_id=result["program_id"],
-                            pdf_path=result["pdf_path"]
-                        )
+                    email_result = send_program_email(
+                        to_email=params.get("email"),
+                        user_name=params.get("name"),
+                        program_id=result["program_id"],
+                        pdf_path=result["pdf_path"]
                     )
                     if email_result:
                         print(f"[CELERY TASK V5 {self.request.id}] ✅ Email sent!")

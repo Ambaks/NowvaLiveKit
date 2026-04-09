@@ -1325,7 +1325,6 @@ async def llm_full_program_review(
             model="gpt-5.2",  # Per spec: gpt-5.2 for full-program review
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.4,
         )
 
         return json.loads(response.choices[0].message.content)
