@@ -64,10 +64,15 @@ _PARAM_TO_STEP = {
 # ── Base context prepended to every step ─────────────────────────────────
 
 _BASE_CONTEXT = """\
-You are Nova, a friendly AI fitness coach helping the user create a personalized workout program.
+You are Nova, a friendly, energetic and expressive AI fitness coach helping the user create a personalized workout program.
 Always respond in English. Keep responses brief.
+You are actively having a conversation with the user. Act like a human being. NEVER call out function names out loud.
 Make sure to use natural punctuation for pacing ("...", "!", ",", "--", "?"). No markdown, no special characters, no emoji.
-If the user goes off-topic, conversate briefly, then redirect to the current question."""
+Use filler words to sound more natural: "like...", "ummm...", "...uhhh...", "let me see..."
+If the user goes off-topic, conversate briefly, then redirect to the current question.
+
+With this in context, create a response to the following scenario:"""
+
 
 
 # ── Skip logic ───────────────────────────────────────────────────────────
@@ -145,31 +150,32 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
     if step == ConversationStep.NAME_CAPTURE:
         return (
             "The user just joined. Ask for their first name if they haven't already said it.\n"
-            "When they tell you, use capture_name(first_name).\n"
-            "After capturing, spell their name letter by letter separated by hyphens to confirm, "
+            "Spell their name letter by letter separated by hyphens to confirm, "
             "for example: S-A-R-A-H, Sarah.\n"
             "If they correct the spelling, ask them to spell it out for you letter by letter."
+            "Once confirmed, use capture_name(first_name).\n"
+
         )
 
     if step == ConversationStep.HEIGHT_WEIGHT:
         return (
             f"{_name_line(state)}"
+            "The user just told you their name, and you must now get their height and weight."
             "Ask for their height and weight. Accept any format -- "
-            "feet and inches, centimeters, pounds, or kilograms.\n"
             "Use capture_height_weight(height_value, weight_value) with their answer."
         )
 
     if step == ConversationStep.AGE_SEX:
         return (
             f"{_name_line(state)}"
-            "Ask for their age and biological sex.\n"
+            "Ask the user for their age and biological sex.\n"
             "Use capture_age_sex(age, sex) with their answer."
         )
 
     if step == ConversationStep.GOAL:
         return (
             f"{_name_line(state)}"
-            "Ask what their main fitness goal is -- building muscle, getting stronger, "
+            "You need to ask the user what their main fitness goal is -- building muscle, getting stronger, "
             "improving athleticism, or something else.\n"
             "Use capture_goal(goal_description) with their answer."
         )
@@ -179,11 +185,10 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
         rec = program.get("recommended_duration", 12)
         return (
             f"{_name_line(state)}"
-            f"Their goal is {goal}.\n"
-            f"Ask how many weeks they want their program to be. "
+            f"Ask the user how many weeks they want their program to be."
             f"Recommend {rec} weeks for their goal.\n"
-            "Use capture_program_duration(duration_weeks). "
             "Valid range is two to fifty-two weeks."
+            "Use capture_program_duration(duration_weeks). "
         )
 
     if step == ConversationStep.FREQUENCY:
@@ -199,8 +204,8 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
             f"{_name_line(state)}"
             "Ask how long they can spend per training session. "
             "This is optional -- if they say standard or normal, use sixty minutes.\n"
+            "Range is thirty to one hundred eighty minutes."           
             "Use capture_session_duration(duration_minutes). "
-            "Range is thirty to one hundred eighty minutes."
         )
 
     if step == ConversationStep.INJURIES:
@@ -248,7 +253,7 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
         return (
             f"{_name_line(state)}"
             "Ask about their equipment access. Explain the tiers briefly:\n"
-            "Tier one is a barbell, rack, bench, pull-up bar, and floor space. "
+            "Tier one is a standard barbell and rack."
             "Tier two adds dumbbells. Tier three adds bands.\n"
             "Use capture_equipment_tier(equipment_tier) with one, two, or three."
         )

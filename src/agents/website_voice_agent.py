@@ -1184,7 +1184,7 @@ async def entrypoint(ctx: agents.JobContext):
     stt = deepgram.STT(
         model="nova-3",
         language="en",
-        endpointing_ms=150,
+        endpointing_ms=50,
         smart_format=True,
         filler_words=True,
         keyterm=["Nowva", "Nova"],
@@ -1192,7 +1192,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     llm = groq.LLM(
         model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
-        temperature=0.6,
+        temperature=0.7,
         max_completion_tokens=256,
     )
 
@@ -1201,8 +1201,8 @@ async def entrypoint(ctx: agents.JobContext):
         voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
         model="eleven_multilingual_v2",
         voice_settings=elevenlabs.VoiceSettings(
-            stability=0.50,
-            similarity_boost=0.75,
+            stability=0.30,
+            similarity_boost=0.5,
         ),
         chunk_length_schedule=[80, 120, 200, 260],
     )
