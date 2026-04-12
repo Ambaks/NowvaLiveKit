@@ -69,33 +69,6 @@ def _get_program_file_urls(user_id: str, program_id: str) -> tuple[str | None, s
     return pdf_url, md_url
 
 
-def _build_generation_params(request: ProgramGenerationRequest, user: User) -> dict:
-    return {
-        "user_id": str(request.user_id),
-        "email": request.email,
-        "name": user.name,
-        "height_cm": request.height_cm,
-        "weight_kg": request.weight_kg,
-        "goal_category": request.goal_category,
-        "goal_raw": request.goal_raw,
-        "duration_weeks": request.duration_weeks,
-        "days_per_week": request.days_per_week,
-        "fitness_level": request.fitness_level,
-        "age": request.age,
-        "sex": request.sex,
-        "session_duration": request.session_duration,
-        "injury_history": request.injury_history,
-        "specific_sport": request.specific_sport,
-        "has_vbt_capability": request.has_vbt_capability,
-        "user_notes": request.user_notes,
-        "send_email": request.send_email,
-        "training_season": request.training_season,
-        "games_per_week": request.games_per_week,
-        "competition_date": request.competition_date,
-        "equipment_tier": request.equipment_tier,
-    }
-
-
 @router.post("/check-eligibility")
 async def check_program_eligibility(
     request: dict,
@@ -221,15 +194,37 @@ async def start_program_generation(
         training_season=request.training_season,
         games_per_week=request.games_per_week,
         equipment_tier=request.equipment_tier,
-        generator_version="v5",
     )
 
     # Dispatch to Celery (V5 - 6-layer deterministic architecture)
-    params = _build_generation_params(request, user)
     task = generate_program_v5_task.delay(
         job_id=str(job.id),
         user_id=str(request.user_id),
-        params=params,
+        params={
+            "user_id": str(request.user_id),
+            "email": request.email,
+            "name": user.name,
+            "height_cm": request.height_cm,
+            "weight_kg": request.weight_kg,
+            "goal_category": request.goal_category,
+            "goal_raw": request.goal_raw,
+            "duration_weeks": request.duration_weeks,
+            "days_per_week": request.days_per_week,
+            "fitness_level": request.fitness_level,
+            "age": request.age,
+            "sex": request.sex,
+            "session_duration": request.session_duration,
+            "injury_history": request.injury_history,
+            "specific_sport": request.specific_sport,
+            "has_vbt_capability": request.has_vbt_capability,
+            "user_notes": request.user_notes,
+            "send_email": request.send_email,
+            # V6 fields
+            "training_season": request.training_season,
+            "games_per_week": request.games_per_week,
+            "competition_date": request.competition_date,
+            "equipment_tier": request.equipment_tier,
+        }
     )
 
     print(f"[API V5] Dispatched Celery task {task.id} for job {job.id} (user: {user.name})")
@@ -238,87 +233,6 @@ async def start_program_generation(
         job_id=str(job.id),
         status="pending",
         message="Program generation started"
-    )
-
-
-@router.post("/generate-v7", response_model=JobResponse, status_code=202)
-async def start_program_generation_v7(
-    request: ProgramGenerationRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Start generating a workout program via the V7 generator.
-    Returns immediately with a job_id to track progress.
-    """
-    from ..celery_tasks import generate_program_v7_task
-
-    if not getattr(current_user, "is_service", False) and request.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    user = db.query(User).filter(User.id == request.user_id).first()
-    if not user:
-        username = generate_username(request.name, db)
-        user = User(
-            id=request.user_id,
-            username=username,
-            email=request.email,
-            name=request.name,
-            password_hash=hash_password(generate_temporary_password()),
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        print(f"[API V7] Created new user {user.id} ({username} / {user.email}) for program generation")
-    else:
-        updated = False
-        if request.name and user.name != request.name:
-            user.name = request.name
-            updated = True
-        for field in ("age", "sex", "height_cm", "weight_kg"):
-            req_val = getattr(request, field)
-            if req_val is not None and getattr(user, field) != req_val:
-                setattr(user, field, req_val)
-                updated = True
-        if updated:
-            db.commit()
-
-    job = create_job(
-        db=db,
-        user_id=str(request.user_id),
-        height_cm=request.height_cm,
-        weight_kg=request.weight_kg,
-        goal_category=request.goal_category,
-        goal_raw=request.goal_raw,
-        duration_weeks=request.duration_weeks,
-        days_per_week=request.days_per_week,
-        fitness_level=request.fitness_level,
-        age=request.age,
-        sex=request.sex,
-        session_duration=request.session_duration,
-        injury_history=request.injury_history,
-        specific_sport=request.specific_sport,
-        has_vbt_capability=request.has_vbt_capability,
-        user_notes=request.user_notes,
-        training_season=request.training_season,
-        games_per_week=request.games_per_week,
-        equipment_tier=request.equipment_tier,
-        generator_version="v7",
-    )
-
-    params = _build_generation_params(request, user)
-    task = generate_program_v7_task.delay(
-        job_id=str(job.id),
-        user_id=str(request.user_id),
-        params=params,
-    )
-
-    print(f"[API V7] Dispatched Celery task {task.id} for job {job.id} (user: {user.name})")
-
-    return JobResponse(
-        job_id=str(job.id),
-        status="pending",
-        message="V7 program generation started",
     )
 
 

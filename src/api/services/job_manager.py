@@ -29,7 +29,6 @@ def create_job(
     training_season: str = None,
     games_per_week: int = 0,
     equipment_tier: int = 1,
-    generator_version: str = "v5",
 ) -> ProgramGenerationJob:
     """
     Create a new program generation job
@@ -60,7 +59,6 @@ def create_job(
         user_id=user_id,
         status="pending",
         progress=0,
-        generator_version=generator_version,
         height_cm=height_cm,
         weight_kg=weight_kg,
         goal_category=goal_category,
@@ -84,10 +82,7 @@ def create_job(
     db.refresh(job)
 
     print(f"[JOB MANAGER] Created job {job.id} for user {user_id}")
-    print(
-        f"[JOB MANAGER] Parameters: {age}{sex}, {goal_category}, "
-        f"{duration_weeks}w, {days_per_week}d/w, {fitness_level}, generator={generator_version}"
-    )
+    print(f"[JOB MANAGER] Parameters: {age}{sex}, {goal_category}, {duration_weeks}w, {days_per_week}d/w, {fitness_level}")
     if has_vbt_capability:
         print(f"[JOB MANAGER] VBT capability: ENABLED")
     return job

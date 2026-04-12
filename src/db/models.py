@@ -64,8 +64,6 @@ class UserGeneratedProgram(Base):
     description = Column(Text)
     duration_weeks = Column(Integer)
     is_public = Column(Boolean, default=False)
-    generator_version = Column(String(20), nullable=False, default="v5")
-    artifact_ref = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -73,7 +71,6 @@ class UserGeneratedProgram(Base):
     user = relationship("User", back_populates="user_generated_programs")
     workouts = relationship("Workout", back_populates="user_generated_program", cascade="all, delete-orphan")
     schedule = relationship("Schedule", back_populates="user_generated_program", cascade="all, delete-orphan")
-    v7_artifact = relationship("ProgramArtifactV7Record", back_populates="program", uselist=False, cascade="all, delete-orphan")
 
 
 # -------------------------
@@ -129,7 +126,6 @@ class Exercise(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    canonical_id = Column(String(255), nullable=True, unique=True, index=True)
     category = Column(String(100))       # Strength, Cardio, Mobility
     muscle_group = Column(String(100))   # Chest, Legs, etc.
     description = Column(Text)
@@ -147,7 +143,6 @@ class WorkoutExercise(Base):
     id = Column(Integer, primary_key=True, index=True)
     workout_id = Column(Integer, ForeignKey("workouts.id", ondelete="CASCADE"))
     exercise_id = Column(Integer, ForeignKey("exercises.id"))
-    canonical_exercise_id = Column(String(255), nullable=True, index=True)
     order_number = Column(Integer)  # Position in workout
     notes = Column(Text)
 
@@ -248,7 +243,6 @@ class ProgramGenerationJob(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(50), nullable=False, index=True)  # pending, in_progress, completed, failed
     progress = Column(Integer, default=0)  # 0-100
-    generator_version = Column(String(20), nullable=False, default="v5")
 
     # Input parameters (original)
     height_cm = Column(DECIMAL(5, 2))
@@ -283,142 +277,6 @@ class ProgramGenerationJob(Base):
     # Relationships
     user = relationship("User")
     program = relationship("UserGeneratedProgram")
-
-
-# -------------------------
-# V7 Knowledge Graph
-# -------------------------
-class KnowledgeGraphVersion(Base):
-    __tablename__ = "kg_versions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_label = Column(String(100), nullable=False, unique=True)
-    description = Column(Text)
-    is_active = Column(Boolean, nullable=False, default=False)
-    metadata_json = Column(JSONB, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    exercises = relationship("KnowledgeGraphExercise", back_populates="version", cascade="all, delete-orphan")
-    relations = relationship("KnowledgeGraphExerciseRelation", back_populates="version", cascade="all, delete-orphan")
-    session_roles = relationship("KnowledgeGraphSessionRole", back_populates="version", cascade="all, delete-orphan")
-    progression_templates = relationship("KnowledgeGraphProgressionTemplate", back_populates="version", cascade="all, delete-orphan")
-    block_templates = relationship("KnowledgeGraphBlockTemplate", back_populates="version", cascade="all, delete-orphan")
-    constraint_rules = relationship("KnowledgeGraphConstraintRule", back_populates="version", cascade="all, delete-orphan")
-
-
-class KnowledgeGraphExercise(Base):
-    __tablename__ = "kg_exercises"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_id = Column(Integer, ForeignKey("kg_versions.id", ondelete="CASCADE"), nullable=False, index=True)
-    canonical_id = Column(String(255), nullable=False, index=True)
-    name = Column(String(255), nullable=False)
-    family_id = Column(String(255), nullable=False, index=True)
-    equipment_min = Column(Integer, nullable=False, default=1)
-    difficulty = Column(Integer, nullable=False, default=3)
-    movement_pattern = Column(String(100), nullable=False, index=True)
-    exercise_type = Column(String(100), nullable=False)
-    rotation_group = Column(String(255), nullable=False, index=True)
-    bilateral = Column(Boolean, nullable=False, default=True)
-    vbt_eligible = Column(Boolean, nullable=False, default=False)
-    tags = Column(ARRAY(String), nullable=True)
-    fatigue_json = Column(JSONB, nullable=True)
-    stimulus_json = Column(JSONB, nullable=True)
-    constraints_json = Column(JSONB, nullable=True)
-    metadata_json = Column(JSONB, nullable=True)
-
-    version = relationship("KnowledgeGraphVersion", back_populates="exercises")
-
-
-class KnowledgeGraphExerciseRelation(Base):
-    __tablename__ = "kg_exercise_relations"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_id = Column(Integer, ForeignKey("kg_versions.id", ondelete="CASCADE"), nullable=False, index=True)
-    src_id = Column(String(255), nullable=False, index=True)
-    relation_type = Column(String(100), nullable=False, index=True)
-    dst_id = Column(String(255), nullable=False, index=True)
-    payload_json = Column(JSONB, nullable=True)
-
-    version = relationship("KnowledgeGraphVersion", back_populates="relations")
-
-
-class KnowledgeGraphSessionRole(Base):
-    __tablename__ = "kg_session_roles"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_id = Column(Integer, ForeignKey("kg_versions.id", ondelete="CASCADE"), nullable=False, index=True)
-    role_id = Column(String(255), nullable=False, index=True)
-    label = Column(String(255), nullable=False)
-    session_type = Column(String(100), nullable=False, index=True)
-    goal = Column(String(50), nullable=False, index=True)
-    config_json = Column(JSONB, nullable=False)
-
-    version = relationship("KnowledgeGraphVersion", back_populates="session_roles")
-
-
-class KnowledgeGraphProgressionTemplate(Base):
-    __tablename__ = "kg_progression_templates"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_id = Column(Integer, ForeignKey("kg_versions.id", ondelete="CASCADE"), nullable=False, index=True)
-    family_id = Column(String(255), nullable=False, index=True)
-    session_role = Column(String(255), nullable=False, index=True)
-    goal_phase = Column(String(100), nullable=False, index=True)
-    training_level = Column(String(50), nullable=False, index=True)
-    template_json = Column(JSONB, nullable=False)
-
-    version = relationship("KnowledgeGraphVersion", back_populates="progression_templates")
-
-
-class KnowledgeGraphBlockTemplate(Base):
-    __tablename__ = "kg_block_templates"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_id = Column(Integer, ForeignKey("kg_versions.id", ondelete="CASCADE"), nullable=False, index=True)
-    template_id = Column(String(255), nullable=False, index=True)
-    goal = Column(String(50), nullable=False, index=True)
-    phase = Column(String(100), nullable=False, index=True)
-    duration_weeks = Column(Integer, nullable=False)
-    days_per_week = Column(Integer, nullable=False)
-    season_context = Column(String(50), nullable=False, default="standard")
-    periodization_model = Column(String(100), nullable=False)
-    template_json = Column(JSONB, nullable=False)
-
-    version = relationship("KnowledgeGraphVersion", back_populates="block_templates")
-
-
-class KnowledgeGraphConstraintRule(Base):
-    __tablename__ = "kg_constraint_rules"
-
-    id = Column(Integer, primary_key=True, index=True)
-    version_id = Column(Integer, ForeignKey("kg_versions.id", ondelete="CASCADE"), nullable=False, index=True)
-    rule_id = Column(String(255), nullable=False, index=True)
-    rule_type = Column(String(100), nullable=False, index=True)
-    subject_type = Column(String(100), nullable=False)
-    subject_key = Column(String(255), nullable=False, index=True)
-    config_json = Column(JSONB, nullable=False)
-
-    version = relationship("KnowledgeGraphVersion", back_populates="constraint_rules")
-
-
-class ProgramArtifactV7Record(Base):
-    __tablename__ = "program_artifacts_v7"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_generated_program_id = Column(Integer, ForeignKey("user_generated_programs.id", ondelete="CASCADE"), nullable=False, unique=True)
-    job_id = Column(UUID(as_uuid=True), ForeignKey("program_generation_jobs.id", ondelete="SET NULL"), nullable=True)
-    directive_json = Column(JSONB, nullable=False)
-    block_plan_json = Column(JSONB, nullable=False)
-    assembly_trace_json = Column(JSONB, nullable=False)
-    validation_json = Column(JSONB, nullable=False)
-    critic_json = Column(JSONB, nullable=True)
-    metrics_json = Column(JSONB, nullable=True)
-    kg_version = Column(String(100), nullable=False)
-    prompt_version = Column(String(100), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    program = relationship("UserGeneratedProgram", back_populates="v7_artifact")
 
 
 # -------------------------
