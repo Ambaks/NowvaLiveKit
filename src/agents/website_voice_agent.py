@@ -24,8 +24,8 @@ from livekit import agents
 from livekit.agents import AgentSession, Agent, RunContext
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, groq, silero, elevenlabs, noise_cancellation
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import deepgram, openai, silero, elevenlabs, noise_cancellation
+from livekit.plugins.turn_detector.english import EnglishModel
 
 # Imports
 from agents.prompts.website_step_prompts import (
@@ -47,6 +47,11 @@ def _service_headers() -> dict:
 
 class WebsiteVoiceAgent(Agent):
     """Streamlined voice agent for website visitors creating programs"""
+
+    # Only 5 methods carry @function_tool (the batched 5-step flow).
+    # Legacy per-field helpers (capture_age_sex, capture_height_weight, …)
+    # are kept as plain methods for programmatic / fallback use but are NOT
+    # decorated, so the LLM never sees them.
 
     def __init__(self, state: Dict[str, Any]) -> None:
         """
@@ -70,6 +75,10 @@ class WebsiteVoiceAgent(Agent):
         super().__init__(instructions=instructions)
 
         logger.info(
+            f"[WEBSITE AGENT] Registered {len(self._tools)} tools: "
+            f"{[t.info.name for t in self._tools]}"
+        )
+        logger.info(
             f"[WEBSITE AGENT] Initialized with email: {state.get('email')}, "
             f"first step: {self._current_step.value}, "
             f"known fields: {list(state.get('existing_profile', {}).keys())}"
@@ -86,15 +95,20 @@ class WebsiteVoiceAgent(Agent):
         """Entry point - speak initial greeting when agent enters conversation"""
         name = self.state.get("name")
         if name:
-            await self.session.say(
-                f"Hey! Welcome back, {name}! Let's get you a new program set up."
+            await self.session.generate_reply(
+                instructions=(
+                    "An existing user has just logged back in. Give the user a warm welcome and move on."
+                    "Example: Hey! Welcome back buddy! Let's get you a new program set up."
+                )
             )
         else:
-            await self.session.say(
-                "Hey there! Nice to meet you, I'm Nova, your AI fitness coach! "
-                "We'll be able to do a lot more once the Nowva One squat rack comes out, "
-                "but for now I'm on duty helping y'all generate programs. "
-                "So, what's your first name?"
+            await self.session.generate_reply(
+                instructions="""
+                A new user just joined us! Give them a warm welcome and move on to the next step.
+                Example: 'Hey there! Nice to meet you, I'm Nova, your AI fitness coach!
+                We'll be able to do a lot more once the Nova One squat rack is released,
+                but for now they've put me on duty helping y'all generate programs...
+                So, what's your first name?' """
             )
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
@@ -293,7 +307,6 @@ class WebsiteVoiceAgent(Agent):
     # PROGRAM CREATION TOOLS - Copied from voice_agent.py
     # =========================================================================
 
-    @function_tool
     async def capture_height_weight(self, context: RunContext, height_value: str = None, weight_value: str = None):
         """
         Call this when the user provides both height and weight together.
@@ -348,7 +361,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_age_sex(self, context: RunContext, age: int, sex: str):
         """
         Call this when the user provides both age and sex together.
@@ -400,7 +412,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_goal(self, context: RunContext, goal_description: str):
         """
         Call this when the user describes their fitness goal.
@@ -539,7 +550,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_program_duration(self, context: RunContext, duration_weeks: int):
         """
         Call this when the user specifies how many weeks they want their program to be.
@@ -577,7 +587,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_training_frequency(self, context: RunContext, days_per_week: int):
         """
         Call this when the user specifies how many days per week they can train.
@@ -615,7 +624,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_session_duration(self, context: RunContext, duration_minutes: int):
         """
         Call this when the user specifies how long each training session will be.
@@ -658,7 +666,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_injury_history(self, context: RunContext, injury_description: str):
         """
         Call this when the user describes any injuries or limitations.
@@ -689,7 +696,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_specific_sport(self, context: RunContext, sport_name: str):
         """
         Call this when the user mentions a specific sport they're training for.
@@ -720,7 +726,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_training_season(self, context: RunContext, training_season: str):
         """
         Call this when the user specifies their current training season.
@@ -757,7 +762,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_games_per_week(self, context: RunContext, games_per_week: int):
         """
         Call this when the user specifies how many games or competitions they have per week.
@@ -790,7 +794,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_user_notes(self, context: RunContext, notes: str):
         """
         Call this when the user provides additional preferences or requirements.
@@ -821,7 +824,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def capture_equipment_tier(self, context: RunContext, equipment_tier: int):
         """
         Call this when the user describes their gym equipment access.
@@ -1026,7 +1028,7 @@ class WebsiteVoiceAgent(Agent):
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to apply defaults: {e}")
-            result = None, "Error applying defaults. Try calling apply_defaults(use_defaults=true) again."
+            result = None, "Error applying defaults. Try finalizing with defaults again."
             self._log_function_call(function_name, parameters, result)
             return result
 
@@ -1177,7 +1179,6 @@ class WebsiteVoiceAgent(Agent):
     # FUNCTION TOOLS (kept for backward compat / direct LLM invocation fallback)
     # =========================================================================
 
-    @function_tool
     async def update_user_profile(self, context: RunContext):
         """
         Update user profile in database with all collected information.
@@ -1244,7 +1245,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def generate_workout_program(self, context: RunContext):
         """
         Generate the workout program by calling FastAPI backend.
@@ -1354,7 +1354,6 @@ class WebsiteVoiceAgent(Agent):
             self._log_function_call(function_name, parameters, result)
             return result
 
-    @function_tool
     async def end_conversation(self, context: RunContext):
         """
         End the conversation gracefully.
@@ -1526,21 +1525,23 @@ async def entrypoint(ctx: agents.JobContext):
         keyterm=["Nowva", "Nova"],
     )
 
-    llm = groq.LLM(
-        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
-        temperature=0.7,
-        max_completion_tokens=256,
+    # Keep the website agent on its own model knob so it can diverge from the
+    # main voice agent without inheriting the shared LLM_MODEL setting.
+    llm = openai.LLM(
+        model=os.getenv("WEBSITE_LLM_MODEL", "gpt-5.4-nano"),
+        reasoning_effort=os.getenv("WEBSITE_LLM_REASONING_EFFORT", "low"),
     )
 
     tts = elevenlabs.TTS(
         api_key=os.getenv("ELEVEN_API_KEY"),
         voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
         model="eleven_multilingual_v2",
+        encoding="pcm_24000",
         voice_settings=elevenlabs.VoiceSettings(
             stability=0.30,
             similarity_boost=0.5,
         ),
-        chunk_length_schedule=[80, 120, 200, 260],
+        chunk_length_schedule=[40, 120, 200, 260],
     )
 
     # Create agent with state
@@ -1560,7 +1561,7 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm,
         tts=tts,
         vad=vad,
-        turn_handling={"turn_detection": MultilingualModel()},
+        turn_handling={"turn_detection": EnglishModel()},
         preemptive_generation=True,
     )
 
@@ -1650,6 +1651,7 @@ if __name__ == "__main__":
                 entrypoint_fnc=entrypoint,
                 prewarm_fnc=prewarm,
                 initialize_process_timeout=120,
+                num_idle_processes=2,
             )
         )
     except KeyboardInterrupt:
