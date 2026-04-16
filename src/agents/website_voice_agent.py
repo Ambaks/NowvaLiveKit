@@ -32,6 +32,7 @@ from agents.prompts.website_step_prompts import (
     ConversationStep, get_step_prompt, get_first_step, get_next_step, get_first_missing_step
 )
 from agents.shared.unit_conversion import normalize_height_to_cm, normalize_weight_to_kg, categorize_goal
+from agents.website_voice_agent_v2 import WebsiteVoiceAgentV2
 from auth.security import hash_password
 from db.database import SessionLocal
 from db.models import User
@@ -122,13 +123,11 @@ class WebsiteVoiceAgent(Agent):
     @function_tool
     async def capture_name(self, context: RunContext, first_name: str):
         """
-        Capture user's first name for personalization.
+        Call this AS SOON AS the user tells you their first name.
+        Do not wait -- call immediately once you hear a name.
 
         Args:
-            first_name: User's first name
-
-        Returns:
-            Instruction to start collecting program parameters
+            first_name: User's first name (just the name, no filler words)
         """
         function_name = "capture_name"
         parameters = {"first_name": first_name}
@@ -176,6 +175,177 @@ class WebsiteVoiceAgent(Agent):
             return result
 
     @function_tool
+    async def correct_previous_answer(self, context: RunContext, field: str, new_value: str):
+        """
+        Call this when the user wants to CHANGE a previously captured value.
+        For example: "actually make it a strength program", "I'm 26 not 25",
+        "change my weight to 200 pounds".
+
+        Args:
+            field: Which field to update. One of: "name", "age", "sex", "height",
+                   "weight", "goal", "fitness_level", "days_per_week",
+                   "session_duration", "injury_history", "specific_sport",
+                   "training_season", "games_per_week"
+            new_value: The corrected value as spoken by the user
+        """
+        function_name = "correct_previous_answer"
+        parameters = {"field": field, "new_value": new_value}
+
+        try:
+            field_lower = field.lower().strip()
+            if "program_creation" not in self.state:
+                self.state["program_creation"] = {}
+            pc = self.state["program_creation"]
+
+            if field_lower == "name":
+                name = new_value.strip()
+                if not name or len(name) > 50:
+                    result = None, "Invalid name. Ask the user to repeat it."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                self.state["name"] = name
+                logger.info(f"[CORRECTION] Name -> {name}")
+                result = None, f"Updated name to {name}. Continue with your current step."
+
+            elif field_lower == "age":
+                try:
+                    age = int(re.search(r'\d+', new_value).group())
+                except (AttributeError, ValueError):
+                    result = None, "Could not parse age. Ask the user to say their age as a number."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                if age < 13 or age > 100:
+                    result = None, "Age out of range (13-100). Ask the user to confirm their age."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["age"] = age
+                logger.info(f"[CORRECTION] Age -> {age}")
+                result = None, f"Updated age to {age}. Continue with your current step."
+
+            elif field_lower == "sex":
+                sex_lower = new_value.lower().strip()
+                if sex_lower in ("m", "male", "man", "boy"):
+                    pc["sex"] = "male"
+                elif sex_lower in ("f", "female", "woman", "girl"):
+                    pc["sex"] = "female"
+                else:
+                    result = None, "Could not determine sex. Ask the user: male or female?"
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                logger.info(f"[CORRECTION] Sex -> {pc['sex']}")
+                result = None, f"Updated sex to {pc['sex']}. Continue with your current step."
+
+            elif field_lower == "height":
+                height_cm = normalize_height_to_cm(new_value)
+                if height_cm is None or height_cm < 50 or height_cm > 300:
+                    result = None, "Could not parse height. Ask the user to say it like 'five foot ten' or '175 cm'."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["height_cm"] = height_cm
+                logger.info(f"[CORRECTION] Height -> {height_cm:.0f}cm")
+                result = None, f"Updated height to {height_cm:.0f} cm. Continue with your current step."
+
+            elif field_lower == "weight":
+                weight_kg = normalize_weight_to_kg(new_value)
+                if weight_kg is None or weight_kg < 30 or weight_kg > 300:
+                    result = None, "Could not parse weight. Ask the user to say it like '185 pounds' or '80 kg'."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["weight_kg"] = weight_kg
+                logger.info(f"[CORRECTION] Weight -> {weight_kg:.0f}kg")
+                result = None, f"Updated weight to {weight_kg:.0f} kg. Continue with your current step."
+
+            elif field_lower == "goal":
+                if not new_value.strip():
+                    result = None, "Goal description is empty. Ask the user to describe their goal."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["goal_raw"] = new_value.strip()
+                pc["goal_category"] = categorize_goal(new_value)
+                logger.info(f"[CORRECTION] Goal -> {pc['goal_category']} ({new_value.strip()[:60]})")
+                result = None, f"Updated goal to {pc['goal_category']}. Continue with your current step."
+
+            elif field_lower == "fitness_level":
+                level = new_value.lower().strip()
+                if "beginner" in level or "new" in level or "start" in level:
+                    level = "beginner"
+                elif "advanced" in level or "expert" in level or "experienced" in level:
+                    level = "advanced"
+                else:
+                    level = "intermediate"
+                pc["fitness_level"] = level
+                logger.info(f"[CORRECTION] Fitness level -> {level}")
+                result = None, f"Updated fitness level to {level}. Continue with your current step."
+
+            elif field_lower == "days_per_week":
+                try:
+                    days = int(re.search(r'\d+', new_value).group())
+                except (AttributeError, ValueError):
+                    result = None, "Could not parse days per week. Ask the user for a number between 1 and 7."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["days_per_week"] = max(1, min(7, days))
+                logger.info(f"[CORRECTION] Days/week -> {pc['days_per_week']}")
+                result = None, f"Updated to {pc['days_per_week']} days per week. Continue with your current step."
+
+            elif field_lower == "session_duration":
+                try:
+                    mins = int(re.search(r'\d+', new_value).group())
+                except (AttributeError, ValueError):
+                    result = None, "Could not parse session duration. Ask for minutes (30-180)."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["session_duration"] = max(30, min(180, mins))
+                logger.info(f"[CORRECTION] Session duration -> {pc['session_duration']}min")
+                result = None, f"Updated session duration to {pc['session_duration']} minutes. Continue with your current step."
+
+            elif field_lower == "injury_history":
+                pc["injury_history"] = new_value.strip() if new_value.strip() else "none"
+                logger.info(f"[CORRECTION] Injuries -> {pc['injury_history'][:60]}")
+                result = None, f"Updated injury info. Continue with your current step."
+
+            elif field_lower == "specific_sport":
+                pc["specific_sport"] = new_value.strip() if new_value.strip() else "none"
+                logger.info(f"[CORRECTION] Sport -> {pc['specific_sport']}")
+                result = None, f"Updated sport to {pc['specific_sport']}. Continue with your current step."
+
+            elif field_lower == "training_season":
+                season = new_value.lower().strip().replace(" ", "_").replace("-", "_")
+                if season in ("off_season", "pre_season", "in_season", "post_season"):
+                    pc["training_season"] = season
+                else:
+                    result = None, "Invalid season. Ask the user: off-season, pre-season, in-season, or post-season?"
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                logger.info(f"[CORRECTION] Season -> {season}")
+                result = None, f"Updated training season to {season}. Continue with your current step."
+
+            elif field_lower == "games_per_week":
+                try:
+                    games = int(re.search(r'\d+', new_value).group())
+                except (AttributeError, ValueError):
+                    result = None, "Could not parse games per week. Ask for a number between 0 and 7."
+                    self._log_function_call(function_name, parameters, result)
+                    return result
+                pc["games_per_week"] = max(0, min(7, games))
+                logger.info(f"[CORRECTION] Games/week -> {pc['games_per_week']}")
+                result = None, f"Updated to {pc['games_per_week']} games per week. Continue with your current step."
+
+            else:
+                result = None, f"Unknown field '{field}'. Continue with your current step."
+                self._log_function_call(function_name, parameters, result)
+                return result
+
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to correct field '{field}': {e}")
+            result = None, "Error updating that value. Acknowledge the user's request and continue with the current step."
+            self._log_function_call(function_name, parameters, result)
+            return result
+
+    @function_tool
     async def capture_personal_info(
         self,
         context: RunContext,
@@ -186,13 +356,8 @@ class WebsiteVoiceAgent(Agent):
         extra_info: str = "none",
     ):
         """
-        Capture the user's personal information all at once: age, sex, height, and weight.
-        Also stores any extra context the user volunteered (training history, personal goals,
-        life context, etc.) for later persistence to the users.extra_info DB column.
-
-        Required fields must all be valid to advance. If any are missing/invalid, the tool
-        returns a targeted error naming only the bad fields -- the agent should re-ask for
-        just those, not the ones already captured.
+        Call this IMMEDIATELY once the user has provided all four: age, sex, height, and weight.
+        If they also shared extra context (training history, goals, life context), include it.
 
         Args:
             age: User's age in years (13-100)
@@ -460,28 +625,28 @@ class WebsiteVoiceAgent(Agent):
         self,
         context: RunContext,
         goal_description: str,
-        duration_weeks: int = None,
-        days_per_week: int = None,
-        session_duration: int = None,
-        injury_history: str = None,
-        specific_sport: str = None,
-        training_season: str = None,
-        games_per_week: int = None,
+        duration_weeks: Optional[int] = None,
+        days_per_week: Optional[int] = None,
+        session_duration: Optional[int] = None,
+        injury_history: Optional[str] = None,
+        specific_sport: Optional[str] = None,
+        training_season: Optional[str] = None,
+        games_per_week: Optional[int] = None,
     ):
         """
-        Capture the user's fitness goal along with any optional program details they
-        mentioned in the same response. Only goal_description is required; everything
-        else is optional and defaults will be applied later if not provided.
+        Call this IMMEDIATELY when the user describes their fitness goal.
+        Only goal_description is required. Include any optional details they
+        happened to mention; omit anything they did not mention.
 
         Args:
             goal_description: User's full description of their fitness goal
-            duration_weeks: Program length in weeks (2-52), if mentioned
-            days_per_week: Training frequency (1-7), if mentioned
-            session_duration: Minutes per session (30-180), if mentioned
-            injury_history: Injuries or limitations description, if mentioned
-            specific_sport: Sport name, if mentioned
-            training_season: "off_season", "pre_season", "in_season", "post_season", if mentioned
-            games_per_week: Games per week (0-7), if mentioned
+            duration_weeks: Program length in weeks (2-52), only if mentioned
+            days_per_week: Training frequency (1-7), only if mentioned
+            session_duration: Minutes per session (30-180), only if mentioned
+            injury_history: Injuries or limitations, only if mentioned
+            specific_sport: Sport name, only if mentioned
+            training_season: "off_season", "pre_season", "in_season", "post_season", only if mentioned
+            games_per_week: Games per week (0-7), only if mentioned
         """
         function_name = "capture_goal_and_details"
         parameters = {
@@ -861,9 +1026,7 @@ class WebsiteVoiceAgent(Agent):
     @function_tool
     async def capture_fitness_level(self, context: RunContext, fitness_level: str):
         """
-        Call this when the user describes their fitness level.
-        After this step the agent advances to EXTRA_DETAILS where the user can
-        customize further or accept recommended defaults.
+        Call this IMMEDIATELY when the user states their fitness level.
 
         Args:
             fitness_level: "beginner", "intermediate", or "advanced"
@@ -905,35 +1068,32 @@ class WebsiteVoiceAgent(Agent):
         self,
         context: RunContext,
         use_defaults: bool,
-        days_per_week: int = None,
-        session_duration: int = None,
-        injury_history: str = None,
-        specific_sport: str = None,
-        training_season: str = None,
-        games_per_week: int = None,
+        days_per_week: Optional[int] = None,
+        session_duration: Optional[int] = None,
+        injury_history: Optional[str] = None,
+        specific_sport: Optional[str] = None,
+        training_season: Optional[str] = None,
+        games_per_week: Optional[int] = None,
     ):
         """
-        Finalize the program parameters by applying any user customizations and filling
-        remaining gaps with sensible defaults. This is the LAST tool call -- after this,
-        the agent says goodbye and the finalize chain runs.
+        Call this IMMEDIATELY when the user responds to "defaults or customize?".
+        This is the LAST tool call before goodbye.
 
-        If use_defaults is true, any optional params passed are ignored (pure defaults).
-        If use_defaults is false, the provided optional params are applied first, then
-        defaults fill any remaining gaps.
+        - User says "defaults" / "sounds good" / "go for it" / any agreement
+          -> call with use_defaults=true
+        - User gives specific customizations (e.g. "four days a week")
+          -> call with use_defaults=false and pass their values
 
-        Always hardcodes:
-        - duration_weeks = 12
-        - equipment_tier = 3
-        - has_vbt_capability = False
+        Do NOT ask about equipment. Do NOT ask follow-up questions before calling this.
 
         Args:
-            use_defaults: True to apply pure defaults; False to apply customizations + defaults
-            days_per_week: Optional custom training frequency (1-7)
-            session_duration: Optional custom session length in minutes (30-180)
-            injury_history: Optional injuries description
-            specific_sport: Optional sport name
-            training_season: Optional "off_season", "pre_season", "in_season", "post_season"
-            games_per_week: Optional games per week (0-7)
+            use_defaults: true = pure defaults, false = apply the optional params below first
+            days_per_week: Custom training frequency (1-7), only if user specified
+            session_duration: Custom session length in minutes (30-180), only if user specified
+            injury_history: Injuries description, only if user specified
+            specific_sport: Sport name, only if user specified
+            training_season: "off_season"/"pre_season"/"in_season"/"post_season", only if user specified
+            games_per_week: Games per week (0-7), only if user specified
         """
         function_name = "apply_defaults"
         parameters = {
@@ -1165,12 +1325,17 @@ class WebsiteVoiceAgent(Agent):
             # 2. Trigger program generation via API
             await self._generate_program_direct()
 
-            # 3. Disconnect from room
+            # 3. Disconnect from room (try room disconnect first, fall back to session close)
             try:
                 await self.session.room_io.room.disconnect()
-                logger.info("[FINALIZE] Complete. Disconnected.")
+                logger.info("[FINALIZE] Complete. Disconnected via room.")
             except Exception as e:
-                logger.warning(f"[FINALIZE] Error disconnecting: {e}")
+                logger.warning(f"[FINALIZE] Room disconnect failed ({e}), closing session directly")
+                try:
+                    await self.session.aclose()
+                    logger.info("[FINALIZE] Complete. Session closed.")
+                except Exception as e2:
+                    logger.error(f"[FINALIZE] Session close also failed: {e2}")
 
         except Exception as e:
             logger.error(f"[FINALIZE] Error in finalize chain: {e}")
@@ -1525,12 +1690,20 @@ async def entrypoint(ctx: agents.JobContext):
         keyterm=["Nowva", "Nova"],
     )
 
-    # Keep the website agent on its own model knob so it can diverge from the
-    # main voice agent without inheriting the shared LLM_MODEL setting.
-    llm = openai.LLM(
-        model=os.getenv("WEBSITE_LLM_MODEL", "gpt-5.4-nano"),
-        reasoning_effort=os.getenv("WEBSITE_LLM_REASONING_EFFORT", "low"),
-    )
+    # Select agent variant: v1 (multi-step) or v2 (single-prompt).
+    agent_variant = os.getenv("WEBSITE_AGENT_VARIANT", "v1").lower()
+
+    # V2 can run on its own model (defaults to gpt-5.4-nano); V1 keeps its own knob.
+    if agent_variant == "v2":
+        llm = openai.LLM(
+            model=os.getenv("WEBSITE_V2_LLM_MODEL", "gpt-5.4-nano"),
+            reasoning_effort=os.getenv("WEBSITE_V2_LLM_REASONING_EFFORT", "low"),
+        )
+    else:
+        llm = openai.LLM(
+            model=os.getenv("WEBSITE_LLM_MODEL", "gpt-5.4-mini"),
+            reasoning_effort=os.getenv("WEBSITE_LLM_REASONING_EFFORT", "low"),
+        )
 
     tts = elevenlabs.TTS(
         api_key=os.getenv("ELEVEN_API_KEY"),
@@ -1544,8 +1717,11 @@ async def entrypoint(ctx: agents.JobContext):
         chunk_length_schedule=[40, 120, 200, 260],
     )
 
-    # Create agent with state
-    agent = WebsiteVoiceAgent(state=state)
+    if agent_variant == "v2":
+        agent = WebsiteVoiceAgentV2(state=state)
+        logger.info("[WEBSITE AGENT] Using V2 (single-prompt) agent variant")
+    else:
+        agent = WebsiteVoiceAgent(state=state)
 
     # Retrieve prewarmed VAD or load fresh as fallback
     vad = ctx.proc.userdata.get("vad")
@@ -1629,22 +1805,6 @@ def prewarm(proc: agents.JobProcess):
 
 
 if __name__ == "__main__":
-    import signal
-
-    shutting_down = False
-
-    def signal_handler(signum, frame):
-        global shutting_down
-        if not shutting_down:
-            shutting_down = True
-            logger.info("\n[SHUTDOWN] Gracefully shutting down website agent...")
-            sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Run the agent using LiveKit's CLI
-    # The agent will automatically join any room created on this LiveKit server
     try:
         agents.cli.run_app(
             agents.WorkerOptions(
@@ -1656,8 +1816,6 @@ if __name__ == "__main__":
         )
     except KeyboardInterrupt:
         logger.info("\n[SHUTDOWN] Agent stopped by user")
-        sys.exit(0)
     except Exception as e:
         if "termios" not in str(e).lower():
             logger.error(f"[ERROR] {e}")
-        sys.exit(0)

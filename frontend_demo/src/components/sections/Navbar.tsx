@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { motion, useMotionValueEvent, useScroll, AnimatePresence } from 'framer-motion';
+import { trackEvent } from '@/lib/analytics';
 
 export const Navbar = () => {
   const [hidden, setHidden] = useState(false);
@@ -19,6 +20,7 @@ export const Navbar = () => {
   });
 
   const handleCTAClick = () => {
+    trackEvent('cta_click', { location: 'navbar' });
     document.getElementById('program-generator')?.scrollIntoView({ behavior: 'smooth' });
     setMobileOpen(false);
   };

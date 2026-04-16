@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { WorkWithUs } from './WorkWithUs';
+import { trackEvent } from '@/lib/analytics';
 
 export const Footer = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const handleCTAClick = () => {
+    trackEvent('cta_click', { location: 'footer' });
     document.getElementById('program-generator')?.scrollIntoView({ behavior: 'smooth' });
   };
 

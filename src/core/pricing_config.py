@@ -39,6 +39,11 @@ OPENAI_PRICING = {
         "input": 0.10 / 1_000_000,       # Estimated: cheaper than mini
         "output": 0.40 / 1_000_000,
         "cached_input": 0.05 / 1_000_000
+    },
+    "gpt-5.4-nano": {
+        "input": 0.10 / 1_000_000,       # Estimated: aligned with gpt-5-nano
+        "output": 0.40 / 1_000_000,
+        "cached_input": 0.05 / 1_000_000
     }
 }
 
@@ -73,6 +78,15 @@ VOYAGE_PRICING = {
 # Cohere (reranking)
 COHERE_PRICING = {
     "rerank-v3.5": 2.00 / 1000               # $2.00 per 1K searches
+}
+
+# Google Gemini (cascade pipeline LLM)
+GOOGLE_PRICING = {
+    "gemini-3.1-flash-lite": {
+        "input": 0.10 / 1_000_000,           # $0.10 per 1M tokens (est.)
+        "output": 0.40 / 1_000_000,          # $0.40 per 1M tokens (est.)
+        "cached_input": 0.025 / 1_000_000,   # 75% discount (est.)
+    },
 }
 
 
@@ -123,6 +137,20 @@ def calculate_cost(
         if cached_input_tokens > 0:
             cost += (input_tokens - cached_input_tokens) * pricing["input"]
             cost += cached_input_tokens * pricing["cached_input"]
+        else:
+            cost += input_tokens * pricing["input"]
+
+        cost += output_tokens * pricing["output"]
+        return cost
+
+    # Try Google Gemini pricing
+    elif model in GOOGLE_PRICING:
+        pricing = GOOGLE_PRICING[model]
+        cost = 0.0
+
+        if cached_input_tokens > 0:
+            cost += (input_tokens - cached_input_tokens) * pricing["input"]
+            cost += cached_input_tokens * pricing.get("cached_input", pricing["input"])
         else:
             cost += input_tokens * pricing["input"]
 

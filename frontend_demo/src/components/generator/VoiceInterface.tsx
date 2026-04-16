@@ -4,6 +4,7 @@ import { Mic, Phone, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { authFetch } from '@/api/client';
+import { trackEvent } from '@/lib/analytics';
 import {
   LiveKitRoom,
   useVoiceAssistant,
@@ -41,6 +42,7 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
 
     setConnectionState('requesting-token');
     setError(null);
+    trackEvent('voice_session_start');
 
     try {
       const response = await authFetch(`${apiUrl}/api/livekit/token`, {
@@ -102,6 +104,7 @@ export const VoiceInterface = ({ onComplete }: VoiceInterfaceProps) => {
   }
 
   const handleProgramGenerating = useCallback(() => {
+    trackEvent('program_generated', { path: 'voice' });
     setProgramGenerated(true);
     setConnectionState('completing');
     // Disconnect after 5 seconds

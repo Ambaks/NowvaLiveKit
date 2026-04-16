@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card';
 import { Onboarding } from './onboarding/Onboarding';
 import type { OnboardingData } from './onboarding/Onboarding';
 import { programsApi } from '@/api/programs';
+import { trackEvent } from '@/lib/analytics';
 
 interface FormInterfaceProps {
   prefillData?: Record<string, unknown> | null;
@@ -51,6 +52,7 @@ export const FormInterface = ({ prefillData }: FormInterfaceProps) => {
       };
 
       await programsApi.generateProgram(requestData);
+      trackEvent('program_generated', { path: 'form' });
       setState('submitted');
     } catch (err) {
       console.error('Error starting program generation:', err);

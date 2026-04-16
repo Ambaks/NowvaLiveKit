@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Input } from '@/components/ui/Input';
 import { Zap, CheckCircle2, Loader2, ArrowRight } from 'lucide-react';
 import { authApi } from '@/api/auth';
+import { trackEvent } from '@/lib/analytics';
 
 interface EmailGateProps {
   onSubmit: (email: string) => void;
@@ -48,9 +49,11 @@ export const EmailGate: React.FC<EmailGateProps> = ({ onSubmit }) => {
       await checkEligibility(email);
       await authApi.emailStart(email);
       localStorage.setItem('nowva_user_email', email);
+      trackEvent('email_submit', { result: 'success' });
       onSubmit(email);
     } catch (err) {
       console.error('Email submission failed:', err);
+      trackEvent('email_submit', { result: 'failure' });
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setIsLoading(false);

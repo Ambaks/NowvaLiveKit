@@ -88,9 +88,10 @@ async def startup_event():
     except Exception as e:
         print(f"⚠️  Failed to clean up stuck jobs: {e}")
 
-    print("📚 API Docs: http://localhost:8000/docs")
-    print("🔍 ReDoc: http://localhost:8000/redoc")
-    print("💚 Health Check: http://localhost:8000/api/health")
+    port = os.getenv("FASTAPI_PORT", "8001")
+    print(f"📚 API Docs: http://localhost:{port}/docs")
+    print(f"🔍 ReDoc: http://localhost:{port}/redoc")
+    print(f"💚 Health Check: http://localhost:{port}/api/health")
     print("="*80 + "\n")
 
 

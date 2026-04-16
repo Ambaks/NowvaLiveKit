@@ -1,8 +1,10 @@
 import { motion } from 'framer-motion';
 import { RackVisualization } from './RackVisualization';
+import { trackEvent } from '@/lib/analytics';
 
 export const Hero = () => {
   const handleCTAClick = () => {
+    trackEvent('cta_click', { location: 'hero' });
     document.getElementById('program-generator')?.scrollIntoView({ behavior: 'smooth' });
   };
 

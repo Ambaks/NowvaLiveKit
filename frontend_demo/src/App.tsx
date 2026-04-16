@@ -5,6 +5,7 @@ import { ProductShowcase } from '@/components/sections/ProductShowcase';
 import { SampleProgram } from '@/components/sections/SampleProgram';
 import { ProgramGenerator } from '@/components/sections/ProgramGenerator';
 import { Footer } from '@/components/sections/Footer';
+import { CookieBanner } from '@/components/CookieBanner';
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
       <SampleProgram />
       <ProgramGenerator />
       <Footer />
+      <CookieBanner />
     </div>
   );
 }

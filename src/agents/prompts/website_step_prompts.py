@@ -75,7 +75,13 @@ Make sure to use natural punctuation for pacing ("...", "!", ",", "--", "?"). No
 Use filler words to sound more natural: "like...", "ummm...", "...uhhh...", "let me see..."
 If the user goes off-topic, engage briefly, then redirect back to the current question. Do NOT advance until the current step is fully captured.
 
-With this in context, create a response to the following scenario:"""
+TOOL CALLING RULES:
+- As soon as you have the information for the current step, call the matching tool IMMEDIATELY in the same turn. Do NOT respond with text only.
+- NEVER ask about equipment, equipment tier, or gym setup. Equipment is always handled automatically.
+- When the user says "defaults", "sounds good", "go for it", or any agreement, call apply_defaults(use_defaults=true) RIGHT AWAY. Do not ask follow-up questions.
+- If the user wants to CHANGE a previously captured value (e.g. "actually make it a strength program", "I'm 26 not 25", "change my weight to 200 pounds"), call correct_previous_answer(field=..., new_value=...) IMMEDIATELY, then continue with the current step.
+
+With this in context, act upon the following scenario:"""
 
 
 
@@ -154,15 +160,26 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
 
     if step == ConversationStep.NAME_CAPTURE:
         return (
-            "The user just joined. Ask for their first name if they haven't already said it.\n"
-            "Spell their name letter by letter separated by hyphens to confirm, "
-            "for example: S-A-R-A-H, Sarah.\n"
-            "If they correct the spelling, ask them to spell it out for you letter by letter.\n"
-            "Once confirmed, use capture_name(first_name)."
+            "You need to collect the user's first name.\n"
+            "\n"
+            "CRITICAL RULES (follow in order every turn):\n"
+            "1. SCAN the conversation history. If the user has ALREADY said their first name "
+            "in a previous message, treat it as collected -- do NOT ask again.\n"
+            "2. Once you have a name, spell it letter by letter separated by hyphens to confirm "
+            "(e.g. S-A-R-A-H, Sarah). If they confirm or don't correct it, "
+            "call capture_name(first_name=...) IMMEDIATELY.\n"
+            "3. If they correct the spelling, ask them to spell it out letter by letter, then "
+            "call capture_name with the corrected spelling.\n"
+            "4. If no name has been mentioned yet, greet them warmly and ask for their first name.\n"
+            "\n"
+            "FIRST-TURN EXAMPLE (only if no name mentioned yet):\n"
+            "\"Hey there! Nice to meet you! What's your first name?\"\n"
+            "\n"
+            "NEVER re-ask for a name the user already provided. "
+            "Your #1 priority is calling capture_name as soon as the name is confirmed."
         )
 
     if step == ConversationStep.PERSONAL_INFO:
-        # Figure out which of the four required fields we still need.
         field_labels = [
             ("age", "age"),
             ("sex", "biological sex"),
@@ -176,58 +193,77 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
         needed_str = ", ".join(needed) if needed else "age, biological sex, height, and weight"
 
         return (
-            f"{_name_line(state)}"
             f"{known_note}"
-            f"Ask the user to tell you a little about themselves. "
-            f"You need to collect: {needed_str}. "
-            "Keep it warm and conversational -- for example: "
+            f"You need to collect four values: {needed_str}.\n"
+            "\n"
+            "CRITICAL RULES (follow in order every turn):\n"
+            "1. SCAN the conversation history. If the user has ALREADY stated any of the four values "
+            "(age, sex, height, weight) in a previous message, treat those as collected. "
+            "Do NOT ask for them again -- ever.\n"
+            "2. If you now have all four values (from this turn, previous turns, or a mix), "
+            "call capture_personal_info(...) IMMEDIATELY in this turn. Include any extra context "
+            'they shared (training background, life situation, etc.) or "none".\n'
+            "3. If some values are still missing, ask ONLY for the missing ones in a short, "
+            "specific follow-up. Never repeat the full question.\n"
+            "\n"
+            "FIRST-TURN EXAMPLE (only if you haven't asked yet):\n"
             "\"Awesome -- tell me a bit about yourself! I need your age, height, weight, "
             "and whether you're male or female. Feel free to add anything else you'd like me to know.\"\n"
             "\n"
-            "Listen carefully and extract all the required values from their response. "
-            "If they share anything extra beyond the required fields (training background, life context, "
-            "personal goals, anything at all), capture that verbatim as the extra_info argument.\n"
+            "FOLLOW-UP EXAMPLE (if only weight is missing):\n"
+            "\"Got it! And how much do you weigh?\"\n"
             "\n"
-            "When you have all the required values, call "
-            "capture_personal_info(age, sex, height_value, weight_value, extra_info). "
-            'Pass extra_info as "none" if they did not share anything beyond the required fields.\n'
-            "\n"
-            "IMPORTANT: If some required values are missing from their response, the tool will tell you "
-            "which ones. Ask specifically and ONLY for the missing ones. Do NOT re-ask for values they "
-            "already gave you. Do NOT advance until all required values are captured."
+            "NEVER re-ask for values the user already provided. "
+            "Your #1 priority is calling capture_personal_info as soon as all four values are available."
         )
 
     if step == ConversationStep.GOAL:
         return (
-            f"{_name_line(state)}"
-            "Ask about their main fitness goal -- building muscle, getting stronger, "
-            "improving athleticism, or something else. Encourage detail: "
+            "You need to collect the user's main fitness goal (required). "
+            "You should also passively listen for optional details but NEVER ask for them.\n"
+            "\n"
+            "CRITICAL RULES (follow in order every turn):\n"
+            "1. SCAN the conversation history. If the user has ALREADY described their goal "
+            "in a previous message, treat it as collected -- do NOT ask again.\n"
+            "2. If you have a goal description (from this turn or a previous one), "
+            "call capture_goal_and_details(goal_description=...) IMMEDIATELY. "
+            "Include any optional details they happened to mention; leave everything else unset.\n"
+            "3. If no goal has been mentioned yet, ask them in a warm, open-ended way.\n"
+            "\n"
+            "OPTIONAL DETAILS (include if mentioned, never ask for them):\n"
+            "- program length in weeks (e.g. 'six week program' -> 6)\n"
+            "- training frequency in days per week (e.g. 'four days a week' -> 4)\n"
+            "- session duration in minutes (e.g. '45 minutes' -> 45)\n"
+            "- injuries or limitations\n"
+            "- specific sport\n"
+            "- training season: off_season, pre_season, in_season, or post_season\n"
+            "- games or competitions per week\n"
+            "\n"
+            "FIRST-TURN EXAMPLE (only if no goal mentioned yet):\n"
             "\"So, what are you looking to achieve? Give me as much detail as you want -- "
-            "the more I know, the better program I can build for you. If you already have "
-            "specifics in mind, like how long you want the program or how many days a week "
-            "you can train, just tell me now.\"\n"
+            "the more I know, the better program I can build for you.\"\n"
             "\n"
-            "Listen for any of these OPTIONAL details in their response and pass them to the tool "
-            "if mentioned (otherwise pass None):\n"
-            "- duration_weeks: program length in weeks (e.g., 'six week program' -> 6)\n"
-            "- days_per_week: training frequency (e.g., 'four days a week' -> 4)\n"
-            "- session_duration: minutes per session (e.g., '45 minutes' -> 45)\n"
-            "- injury_history: any injuries or limitations mentioned\n"
-            "- specific_sport: sport name if they're training for one\n"
-            "- training_season: off_season, pre_season, in_season, or post_season\n"
-            "- games_per_week: games or competitions per week\n"
-            "\n"
-            "Call capture_goal_and_details(goal_description, ...) with the full goal description "
-            "and any optional params the user mentioned. Pass None for anything they did NOT mention "
-            "-- defaults will be applied later."
+            "NEVER re-ask for a goal the user already described. "
+            "Your #1 priority is calling capture_goal_and_details as soon as you have a goal."
         )
 
     if step == ConversationStep.FITNESS_LEVEL:
         return (
-            f"{_name_line(state)}"
-            "Ask how they would describe their fitness level: "
-            "beginner, intermediate, or advanced.\n"
-            "Use capture_fitness_level(fitness_level)."
+            "You need to collect the user's fitness level: beginner, intermediate, or advanced.\n"
+            "\n"
+            "CRITICAL RULES (follow in order every turn):\n"
+            "1. SCAN the conversation history. If the user has ALREADY indicated their fitness level "
+            "(or something clearly equivalent like \"I'm new to this\" or \"I've been lifting for years\"), "
+            "treat it as collected -- do NOT ask again.\n"
+            "2. If you have their fitness level (from this turn or a previous one), "
+            "call capture_fitness_level(fitness_level=...) IMMEDIATELY.\n"
+            "3. If no fitness level has been mentioned yet, ask them in a short, direct way.\n"
+            "\n"
+            "FIRST-TURN EXAMPLE (only if not yet mentioned):\n"
+            "\"How would you describe your fitness level -- beginner, intermediate, or advanced?\"\n"
+            "\n"
+            "NEVER re-ask for a fitness level the user already provided. "
+            "Your #1 priority is calling capture_fitness_level as soon as you have an answer."
         )
 
     if step == ConversationStep.EXTRA_DETAILS:
@@ -250,31 +286,34 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
         )
 
         return (
-            f"{_name_line(state)}"
             f"{already_note}"
-            "Briefly ask if they want to customize anything else, or just go with the "
-            "recommended defaults. Keep it short and open-ended -- for example: "
+            "You need to find out if the user wants to customize anything or go with defaults.\n"
+            "\n"
+            "CRITICAL RULES (follow in order every turn):\n"
+            "1. SCAN the conversation history. If the user has ALREADY responded to the "
+            "\"defaults or customize?\" question (e.g. \"sounds good\", \"go with defaults\", "
+            "or gave specific customizations), act on that answer -- do NOT ask again.\n"
+            "2. If the user agreed to defaults (\"sounds good\", \"go for it\", \"nah\", "
+            "\"I'm good\", \"whatever you recommend\", or any agreement):\n"
+            "   -> Call apply_defaults(use_defaults=true) IMMEDIATELY. No follow-up questions.\n"
+            "3. If the user gave specific customizations (e.g. \"four days a week\", \"I have a bad knee\"):\n"
+            "   -> Call apply_defaults(use_defaults=false, ...) with their values IMMEDIATELY.\n"
+            "4. If the user hasn't been asked yet, ask briefly and open-endedly.\n"
+            "\n"
+            "FIRST-TURN EXAMPLE (only if not yet asked):\n"
             "\"Anything else you want to tweak, or should I go with the defaults?\"\n"
             "\n"
-            "DO NOT proactively list what's customizable unless they explicitly ask "
-            "\"what can I change?\" or similar. If they ask, then mention: days per week, "
+            "If the user asks \"what can I change?\", mention: days per week, "
             "session length, injuries, specific sport, training season, games per week.\n"
+            "NEVER mention equipment or gym setup -- that is handled automatically.\n"
             "\n"
-            "If they say anything like \"defaults\", \"sounds good\", \"go for it\", \"whatever "
-            "you recommend\", or similar affirmation, call apply_defaults(use_defaults=true).\n"
-            "\n"
-            "If they offer customizations, capture them directly in the tool call: "
-            "apply_defaults(use_defaults=false, days_per_week=..., session_duration=..., "
-            "injury_history=..., specific_sport=..., training_season=..., games_per_week=...). "
-            "Pass None for any field they did not mention -- defaults fill the gaps.\n"
-            "\n"
-            "IMPORTANT: You MUST call apply_defaults to finish. Do not skip this step."
+            "NEVER re-ask a question the user already answered. "
+            "Your #1 priority is calling apply_defaults as soon as the user responds."
         )
 
     if step == ConversationStep.GOODBYE:
         return (
-            f"{_name_line(state)}"
-            f"You have all the information. Enthusiastically tell {name} you have everything you need.\n"
+            f"You have all the information. Enthusiastically tell the user you have everything you need.\n"
             "Thank them. Let them know they will receive their program via email within "
             "five minutes -- check inbox and spam folder.\n"
             "Do not ask any more questions. Do not use any tools. Just say goodbye."
@@ -284,7 +323,6 @@ def _step_body(step: ConversationStep, state: Dict[str, Any]) -> str:
     # If an old @function_tool is invoked and advances into one of these, the
     # prompt just tells the LLM to move on.
     return (
-        f"{_name_line(state)}"
         "Continue the conversation and capture any remaining program parameters."
     )
 

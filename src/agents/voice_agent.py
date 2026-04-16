@@ -18,7 +18,7 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, groq, cartesia, silero, noise_cancellation
+from livekit.plugins import deepgram, google, cartesia, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from core.agent_state import AgentState
@@ -84,8 +84,8 @@ async def entrypoint(ctx: agents.JobContext):
         ],
     )
 
-    llm = groq.LLM(
-        model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
+    llm = google.LLM(
+        model=os.getenv("LLM_MODEL", "gemini-3.1-flash-lite"),
     )
 
     tts = cartesia.TTS(
