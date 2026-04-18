@@ -47,6 +47,11 @@ class ForwardLeanRule(FaultRule):
 
         self._last_fault_frame: int = -150  # ~5s at 30fps — avoid spamming
 
+    def scale_for_proportions(self, proportions) -> None:
+        self.mild_threshold *= proportions.forward_lean_scale
+        self.moderate_threshold *= proportions.forward_lean_scale
+        self.severe_threshold *= proportions.forward_lean_scale
+
     @property
     def fault_type(self) -> FaultType:
         return FaultType.FORWARD_LEAN

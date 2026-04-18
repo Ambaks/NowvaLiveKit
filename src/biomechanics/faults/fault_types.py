@@ -16,11 +16,17 @@ from biomechanics.utils.types import JointAngles, FaultEvent, FaultSeverity
 class FaultType(str, Enum):
     """Enumeration of all detectable form faults."""
     DEPTH = "depth"
+    RANGE_OF_MOTION = "range_of_motion"
     BILATERAL_ASYMMETRY = "bilateral_asymmetry"
     HEEL_RISE = "heel_rise"
     FORWARD_LEAN = "forward_lean"
     KNEE_VALGUS = "knee_valgus"
     BACK_ROUNDING = "back_rounding"
+    LOCKOUT = "lockout"
+    ELBOW_FLARE = "elbow_flare"
+    BAR_PATH = "bar_path"
+    SHOULDER_STABILITY = "shoulder_stability"
+    TRUNK_STABILITY = "trunk_stability"
     TEMPO = "tempo"  # Tempo-related faults (too fast, stalling)
 
 
@@ -109,7 +115,26 @@ class FaultRule(ABC):
     Each rule evaluates joint angles and history to detect a specific
     type of form fault. Rules are stateless — all state is passed
     in via the history parameter.
+
+    Some rules (bar_path, bar_tilt_asymmetry) also need per-frame context
+    beyond joint angles — notably a real barbell detection. Rather than
+    threading optional kwargs through every rule signature, the engine
+    calls ``set_frame_context(...)`` before each ``evaluate(...)`` to set
+    attributes on the rule; rules that care read them, others ignore.
     """
+
+    # Per-frame context set by RuleEngine before each evaluate() call.
+    # Rules that don't need it simply never read it.
+    _bar_detection = None  # type: Optional["BarbellDetection"]
+
+    def set_frame_context(self, bar_detection=None) -> None:
+        """Update per-frame auxiliary context for this rule.
+
+        Called by the engine once per frame, before ``evaluate()``. Subclasses
+        may override to react to context changes, but the default is just to
+        stash references as attributes.
+        """
+        self._bar_detection = bar_detection
 
     @property
     @abstractmethod
@@ -159,6 +184,14 @@ class FaultRule(ABC):
             rep_number=rep_number,
             details=details or {},
         )
+
+    def scale_for_proportions(self, proportions) -> None:
+        """Adjust thresholds based on user body proportions. Default: no-op.
+
+        Subclasses (e.g. KneeValgusRule, HeelRiseRule) override to scale
+        their specific thresholds using the BodyProportions data.
+        """
+        pass
 
     def _get_severity(self, value: float, thresholds: Dict[str, float]) -> tuple[FaultSeverity, float]:
         """

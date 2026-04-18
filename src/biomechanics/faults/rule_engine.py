@@ -7,15 +7,10 @@ and deduplicates consecutive same-fault frames.
 
 import logging
 from collections import deque
-from typing import List, Optional, Dict, Type
+from typing import List, Optional, Dict
 
-from biomechanics.utils.types import JointAngles, FaultEvent
+from biomechanics.utils.types import JointAngles, FaultEvent, BarbellDetection
 from biomechanics.faults.fault_types import FaultRule, FaultType
-from biomechanics.faults.rules.depth import DepthRule
-from biomechanics.faults.rules.symmetry import SymmetryRule
-from biomechanics.faults.rules.heel_rise import HeelRiseRule
-from biomechanics.faults.rules.forward_lean import ForwardLeanRule
-from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.utils.bone_constraints import BodyProportions
 from biomechanics.config import BiomechanicsConfig, get_config
 
@@ -49,111 +44,47 @@ class RuleEngine:
         Args:
             config: Pipeline configuration (uses global if not provided)
             history_maxlen: Maximum frames to keep in history (default 90 = ~3s at 30fps)
-            rules: Optional pre-built list of fault rules. When provided,
-                   skips the default _create_rules() call. Used by
-                   ExerciseProfile to inject exercise-specific rules.
+            rules: List of fault rules from the exercise profile. Required —
+                   the profile is the single source of truth for which rules
+                   apply to each exercise.
         """
         self.config = config or get_config()
         self.history: deque = deque(maxlen=history_maxlen)
 
-        # Use injected rules if provided, otherwise build defaults
-        self.rules: List[FaultRule] = rules if rules is not None else self._create_rules()
+        if rules is None:
+            raise ValueError(
+                "RuleEngine requires rules from the exercise profile. "
+                "Pass rules=profile.create_fault_rules(config)."
+            )
+        self.rules: List[FaultRule] = rules
 
         # Deduplication tracking
         self._last_faults: Dict[str, int] = {}  # fault_type -> last frame
         self._dedup_frames: int = 15  # Minimum frames between same fault
 
         # Baseline calibration — after first clean rep, adjust thresholds
-        # to the user's natural movement pattern
+        # to the user's natural movement pattern. The profile owns the
+        # exercise-specific tracking logic; RuleEngine just holds the state
+        # dict and calls the profile hooks.
         self._calibrated: bool = False
         self._calibration_reps: int = 0
         self._calibration_target: int = 1  # Calibrate after 1 clean rep
-        self._peak_trunk_flexion: float = 180.0  # Track minimum (most lean)
-        self._peak_hip_adduction: float = 0.0
-        self._rep_peak_hip_adductions: List[float] = []
-        self._current_rep_peak_adduction: float = 0.0
-        self._peak_knee_valgus: float = 0.0
-        self._rep_peak_knee_valgus: List[float] = []
-        self._current_rep_peak_valgus: float = 0.0
-        self._toe_available_during_calibration: bool = False
-        self._peak_asymmetry: float = 0.0
-        self._peak_dorsiflexion_drop: float = 0.0
-        self._baseline_dorsiflexion_l: float = 0.0
-        self._baseline_dorsiflexion_r: float = 0.0
-        self._baseline_set: bool = False
-
-    def _create_rules(self) -> List[FaultRule]:
-        """Create all fault rules with config thresholds."""
-        faults_config = self.config.faults
-
-        return [
-            DepthRule(
-                quarter_threshold=60.0,
-                half_threshold=faults_config.depth.parallel,
-                parallel_threshold=faults_config.depth.below_parallel,
-            ),
-            SymmetryRule(
-                mild_threshold=faults_config.bilateral_asymmetry.mild,
-                moderate_threshold=faults_config.bilateral_asymmetry.moderate,
-                severe_threshold=faults_config.bilateral_asymmetry.severe,
-            ),
-            HeelRiseRule(
-                threshold_degrees=faults_config.heel_rise.threshold_cm * 5,  # Convert cm to degrees approx
-            ),
-            ForwardLeanRule(
-                mild_threshold=faults_config.forward_lean.mild,
-                moderate_threshold=faults_config.forward_lean.moderate,
-                severe_threshold=faults_config.forward_lean.severe,
-            ),
-            KneeValgusRule(
-                mild_threshold=faults_config.knee_valgus.mild,
-                moderate_threshold=faults_config.knee_valgus.moderate,
-                severe_threshold=faults_config.knee_valgus.severe,
-            ),
-        ]
+        self._calibration_state: Dict = {}  # Profile-owned state bag
+        self._profile = None  # Set by pipeline after construction
 
     def apply_body_proportion_scaling(self, proportions: BodyProportions) -> None:
         """Scale fault thresholds based on the user's body proportions.
 
         Called once by the pipeline after bone-length calibration completes.
-        Runs *before* the first-rep baseline calibration so the baseline
-        adjustments layer on top of the anatomy-scaled values.
+        Delegates to each rule's scale_for_proportions() method — rules that
+        don't need scaling simply inherit the no-op default.
         """
         for rule in self.rules:
-            if isinstance(rule, KneeValgusRule):
-                rule.mild_threshold *= proportions.valgus_scale
-                rule.moderate_threshold *= proportions.valgus_scale
-                rule.severe_threshold *= proportions.valgus_scale
-                logger.info(
-                    "[RULE ENGINE] Proportion scaling — knee valgus: "
-                    "hip/femur=%.3f, scale=%.2f → thresholds %.1f/%.1f/%.1f",
-                    proportions.hip_to_femur_ratio,
-                    proportions.valgus_scale,
-                    rule.mild_threshold,
-                    rule.moderate_threshold,
-                    rule.severe_threshold,
-                )
-            elif isinstance(rule, HeelRiseRule):
-                rule.threshold_degrees *= proportions.heel_rise_scale
-                logger.info(
-                    "[RULE ENGINE] Proportion scaling — heel rise: "
-                    "tibia_ratio=%.2f, scale=%.2f → threshold %.1f°",
-                    proportions.tibia_to_reference_ratio,
-                    proportions.heel_rise_scale,
-                    rule.threshold_degrees,
-                )
-            elif isinstance(rule, ForwardLeanRule):
-                rule.mild_threshold *= proportions.forward_lean_scale
-                rule.moderate_threshold *= proportions.forward_lean_scale
-                rule.severe_threshold *= proportions.forward_lean_scale
-                logger.info(
-                    "[RULE ENGINE] Proportion scaling — forward lean: "
-                    "femur/torso scale=%.2f → thresholds %.1f/%.1f/%.1f",
-                    proportions.forward_lean_scale,
-                    rule.mild_threshold,
-                    rule.moderate_threshold,
-                    rule.severe_threshold,
-                )
+            rule.scale_for_proportions(proportions)
+            logger.info(
+                "[RULE ENGINE] Proportion scaling applied to %s",
+                rule.fault_type.value if hasattr(rule.fault_type, 'value') else rule.fault_type,
+            )
 
     def reset(self) -> None:
         """Reset engine state (clear history and rule states)."""
@@ -182,6 +113,7 @@ class RuleEngine:
         angles: JointAngles,
         in_rep: bool = False,
         rep_number: int = 0,
+        bar_detection: Optional[BarbellDetection] = None,
     ) -> List[FaultEvent]:
         """
         Evaluate all rules for the current frame.
@@ -190,6 +122,9 @@ class RuleEngine:
             angles: Current frame's joint angles
             in_rep: Whether currently in a rep
             rep_number: Current rep number
+            bar_detection: Optional real barbell detection for this frame.
+                Rules that care (BarPathRule, BarTiltAsymmetryRule) pick it up
+                via ``set_frame_context``; others ignore it.
 
         Returns:
             List of detected faults (deduplicated)
@@ -200,6 +135,7 @@ class RuleEngine:
         faults: List[FaultEvent] = []
 
         for rule in self.rules:
+            rule.set_frame_context(bar_detection=bar_detection)
             fault = rule.evaluate(
                 angles=angles,
                 history=self.history,
@@ -221,129 +157,33 @@ class RuleEngine:
         return frame_index - last_frame >= self._dedup_frames
 
     # ------------------------------------------------------------------
-    # Baseline calibration
+    # Baseline calibration (delegates to profile)
     # ------------------------------------------------------------------
+
+    def set_profile(self, profile) -> None:
+        """Set the exercise profile for calibration delegation."""
+        self._profile = profile
 
     def record_frame_for_calibration(self, angles: JointAngles) -> None:
         """Track peak angle values during reps for baseline calibration."""
         if self._calibrated:
             return
-
-        # Set dorsiflexion baseline at start of tracking
-        if not self._baseline_set:
-            self._baseline_dorsiflexion_l = angles.ankle_dorsiflexion_l
-            self._baseline_dorsiflexion_r = angles.ankle_dorsiflexion_r
-            self._baseline_set = True
-
-        # Track peaks
-        self._peak_trunk_flexion = min(self._peak_trunk_flexion, angles.trunk_flexion)
-        frame_adduction = max(abs(angles.hip_adduction_l), abs(angles.hip_adduction_r))
-        self._current_rep_peak_adduction = max(self._current_rep_peak_adduction, frame_adduction)
-
-        # Track knee valgus from toe when available
-        foot_conf = min(angles.foot_confidence_l, angles.foot_confidence_r)
-        if foot_conf >= 0.3:
-            self._toe_available_during_calibration = True
-            frame_valgus = max(abs(angles.knee_valgus_l), abs(angles.knee_valgus_r))
-            self._current_rep_peak_valgus = max(self._current_rep_peak_valgus, frame_valgus)
-
-        self._peak_asymmetry = max(
-            self._peak_asymmetry,
-            abs(angles.hip_flexion_l - angles.hip_flexion_r),
-            abs(angles.knee_flexion_l - angles.knee_flexion_r),
-        )
-
-        # Dorsiflexion drop (heel rise proxy)
-        drop_l = self._baseline_dorsiflexion_l - angles.ankle_dorsiflexion_l
-        drop_r = self._baseline_dorsiflexion_r - angles.ankle_dorsiflexion_r
-        self._peak_dorsiflexion_drop = max(
-            self._peak_dorsiflexion_drop, max(drop_l, drop_r)
-        )
+        if self._profile is not None:
+            self._profile.record_calibration_frame(angles, self._calibration_state)
 
     def on_rep_complete_calibration(self, is_clean: bool) -> None:
         """Called after a rep completes to advance calibration."""
         if self._calibrated:
             return
 
-        # Save this rep's peak adduction and valgus, reset for next rep
-        if self._current_rep_peak_adduction > 0:
-            self._rep_peak_hip_adductions.append(self._current_rep_peak_adduction)
-        self._current_rep_peak_adduction = 0.0
-
-        if self._current_rep_peak_valgus > 0:
-            self._rep_peak_knee_valgus.append(self._current_rep_peak_valgus)
-        self._current_rep_peak_valgus = 0.0
-
         if is_clean:
             self._calibration_reps += 1
 
         if self._calibration_reps >= self._calibration_target:
-            self._apply_baseline()
-
-    def _apply_baseline(self) -> None:
-        """Adjust rule thresholds based on observed baseline peaks."""
-        self._calibrated = True
-        faults_config = self.config.faults
-
-        # Compute average of per-rep peak hip adduction values
-        if self._rep_peak_hip_adductions:
-            self._peak_hip_adduction = sum(self._rep_peak_hip_adductions) / len(self._rep_peak_hip_adductions)
-            logger.info(
-                "[RULE ENGINE] Hip adduction per-rep peaks: %s → avg=%.1f°",
-                [f"{v:.1f}" for v in self._rep_peak_hip_adductions],
-                self._peak_hip_adduction,
-            )
-
-        for rule in self.rules:
-            if isinstance(rule, ForwardLeanRule):
-                rule.mild_threshold = min(rule.mild_threshold, self._peak_trunk_flexion - 10.0)
-                rule.moderate_threshold = min(rule.moderate_threshold, self._peak_trunk_flexion - 15.0)
-                rule.severe_threshold = min(rule.severe_threshold, self._peak_trunk_flexion - 20.0)
-                logger.info(
-                    "[RULE ENGINE] Forward lean baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
-                    self._peak_trunk_flexion, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
-                )
-
-            elif isinstance(rule, KneeValgusRule):
-                if self._toe_available_during_calibration and self._rep_peak_knee_valgus:
-                    peak = sum(self._rep_peak_knee_valgus) / len(self._rep_peak_knee_valgus)
-                    self._peak_knee_valgus = peak
-                    rule.mild_threshold = peak + 5.0
-                    rule.moderate_threshold = peak + 10.0
-                    rule.severe_threshold = peak + 15.0
-                    logger.info(
-                        "[RULE ENGINE] Knee valgus baseline (toe): peak=%.1f° → thresholds %.1f/%.1f/%.1f",
-                        peak, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
-                    )
-                else:
-                    rule.mild_threshold = self._peak_hip_adduction + 5.0
-                    rule.moderate_threshold = self._peak_hip_adduction + 10.0
-                    rule.severe_threshold = self._peak_hip_adduction + 15.0
-                    logger.info(
-                        "[RULE ENGINE] Knee valgus baseline (hip adduction): peak=%.1f° → thresholds %.1f/%.1f/%.1f",
-                        self._peak_hip_adduction, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
-                    )
-
-            elif isinstance(rule, SymmetryRule):
-                rule.mild_threshold = max(faults_config.bilateral_asymmetry.mild, self._peak_asymmetry + 5.0)
-                rule.moderate_threshold = max(faults_config.bilateral_asymmetry.moderate, self._peak_asymmetry + 10.0)
-                rule.severe_threshold = max(faults_config.bilateral_asymmetry.severe, self._peak_asymmetry + 15.0)
-                logger.info(
-                    "[RULE ENGINE] Symmetry baseline: peak=%.1f° → thresholds %.1f/%.1f/%.1f",
-                    self._peak_asymmetry, rule.mild_threshold, rule.moderate_threshold, rule.severe_threshold,
-                )
-
-            elif isinstance(rule, HeelRiseRule):
-                rule.threshold_degrees = max(
-                    faults_config.heel_rise.threshold_cm * 5,
-                    self._peak_dorsiflexion_drop + 10.0,
-                )
-                logger.info(
-                    "[RULE ENGINE] Heel rise baseline: peak_drop=%.1f° → threshold %.1f°",
-                    self._peak_dorsiflexion_drop, rule.threshold_degrees,
-                )
-
-        logger.info("[RULE ENGINE] Baseline calibration complete")
+            self._calibrated = True
+            if self._profile is not None:
+                self._profile.apply_baseline(self.rules, self._calibration_state)
+            logger.info("[RULE ENGINE] Baseline calibration complete")
 
     @property
     def calibrated(self) -> bool:

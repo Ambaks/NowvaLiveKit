@@ -197,10 +197,24 @@ class TestStandingGateBlocksCalibration:
         assert bc.body_proportions is not None
 
 
+def _make_engine_with_squat_rules() -> RuleEngine:
+    """Build an engine with the squat-profile rule set (config-driven defaults).
+
+    The proportion-scaling assertions below depend on those config defaults,
+    not on the bare-class defaults — the profile is what production uses.
+    """
+    from biomechanics.config import BiomechanicsConfig
+    from biomechanics.profiles.squat import SquatProfile
+
+    profile = SquatProfile()
+    rules = profile.create_fault_rules(BiomechanicsConfig())
+    return RuleEngine(rules=rules)
+
+
 class TestRuleEngineProportionScaling:
 
     def test_valgus_thresholds_scaled(self):
-        engine = RuleEngine()
+        engine = _make_engine_with_squat_rules()
 
         proportions = BodyProportions(
             hip_width=0.30,
@@ -225,7 +239,7 @@ class TestRuleEngineProportionScaling:
         assert valgus_rule.severe_threshold == pytest.approx(18.0 * 1.2, abs=0.1)
 
     def test_heel_rise_threshold_scaled(self):
-        engine = RuleEngine()
+        engine = _make_engine_with_squat_rules()
 
         proportions = BodyProportions(
             hip_width=0.20,
@@ -249,7 +263,7 @@ class TestRuleEngineProportionScaling:
         assert heel_rule.threshold_degrees == pytest.approx(15.0 * 1.2, abs=0.1)
 
     def test_forward_lean_thresholds_scaled(self):
-        engine = RuleEngine()
+        engine = _make_engine_with_squat_rules()
 
         proportions = BodyProportions(
             hip_width=0.20,
@@ -267,9 +281,11 @@ class TestRuleEngineProportionScaling:
         engine.apply_body_proportion_scaling(proportions)
 
         fwd_rule = engine.get_rule(FaultType.FORWARD_LEAN)
-        assert fwd_rule.mild_threshold == pytest.approx(45.0 * 1.2, abs=0.1)
-        assert fwd_rule.moderate_threshold == pytest.approx(55.0 * 1.2, abs=0.1)
-        assert fwd_rule.severe_threshold == pytest.approx(65.0 * 1.2, abs=0.1)
+        # 180-convention defaults from FaultsConfig.forward_lean (mild=135,
+        # moderate=125, severe=115) scaled by forward_lean_scale=1.2.
+        assert fwd_rule.mild_threshold == pytest.approx(135.0 * 1.2, abs=0.1)
+        assert fwd_rule.moderate_threshold == pytest.approx(125.0 * 1.2, abs=0.1)
+        assert fwd_rule.severe_threshold == pytest.approx(115.0 * 1.2, abs=0.1)
 
 
 class TestForwardLeanProportions:
@@ -360,8 +376,10 @@ class TestIKSolverProportions:
 class TestForwardLeanRuleEnabled:
 
     def test_forward_lean_rule_in_engine(self):
-        """ForwardLeanRule should now be active in the rule engine."""
-        engine = RuleEngine()
+        """ForwardLeanRule should be active in the squat-profile rule set."""
+        engine = _make_engine_with_squat_rules()
         fwd_rule = engine.get_rule(FaultType.FORWARD_LEAN)
         assert fwd_rule is not None
-        assert engine.rule_count == 5
+        # Squat profile registers depth, symmetry, bar-tilt asymmetry, heel
+        # rise, forward lean, knee valgus = 6 rules.
+        assert engine.rule_count == 6

@@ -11,6 +11,15 @@ from biomechanics.profiles.registry import get_profile, register_profile, PROFIL
 
 # Import profile modules to trigger @register_profile decorators
 import biomechanics.profiles.squat  # noqa: F401
+import biomechanics.profiles.deadlift  # noqa: F401
+import biomechanics.profiles.romanian_deadlift  # noqa: F401
+import biomechanics.profiles.lunge  # noqa: F401
+import biomechanics.profiles.bulgarian_split_squat  # noqa: F401
+import biomechanics.profiles.overhead_press  # noqa: F401
+import biomechanics.profiles.barbell_row  # noqa: F401
+import biomechanics.profiles.barbell_curl  # noqa: F401
+import biomechanics.profiles.overhead_tricep_extension  # noqa: F401
+import biomechanics.profiles.skull_crusher  # noqa: F401
 
 __all__ = [
     "ExerciseProfile",

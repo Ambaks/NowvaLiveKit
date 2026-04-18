@@ -45,6 +45,9 @@ class HeelRiseRule(FaultRule):
     def fault_type(self) -> FaultType:
         return FaultType.HEEL_RISE
 
+    def scale_for_proportions(self, proportions) -> None:
+        self.threshold_degrees *= proportions.heel_rise_scale
+
     def reset(self) -> None:
         """Reset baseline tracking for new rep."""
         self._baseline_dorsiflexion_l = 0.0

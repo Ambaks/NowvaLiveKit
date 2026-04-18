@@ -106,6 +106,67 @@ class MultiViewPose(BaseModel):
 
 
 # =============================================================================
+# BARBELL DETECTION TYPES
+# =============================================================================
+
+class BarbellDetection(BaseModel):
+    """
+    A single-frame YOLO detection of a barbell, with two keypoints
+    (left and right ends of the bar) plus the bbox confidence.
+
+    Coordinates are in image pixel space (x right, y down).
+    """
+    left_end: Keypoint2D
+    right_end: Keypoint2D
+    bbox_conf: float = 0.0
+    bbox_xyxy: Optional[Tuple[float, float, float, float]] = None  # (x1, y1, x2, y2)
+    timestamp: float = 0.0
+    frame_index: int = 0
+
+    @property
+    def center(self) -> Tuple[float, float]:
+        return (
+            (self.left_end.x + self.right_end.x) / 2.0,
+            (self.left_end.y + self.right_end.y) / 2.0,
+        )
+
+    @property
+    def tilt_degrees(self) -> float:
+        """Signed tilt of the bar in image coords. 0 = horizontal. Positive = right end below left end."""
+        import math
+        dx = self.right_end.x - self.left_end.x
+        dy = self.right_end.y - self.left_end.y
+        return math.degrees(math.atan2(dy, dx))
+
+    @property
+    def bar_length_px(self) -> float:
+        dx = self.right_end.x - self.left_end.x
+        dy = self.right_end.y - self.left_end.y
+        return float((dx * dx + dy * dy) ** 0.5)
+
+
+class BarTrackState(BaseModel):
+    """
+    Per-frame output of BarPathTracker.
+
+    Raw detection may be None for frames where YOLO found nothing; the Kalman
+    state still carries forward so smoothed_* fields remain valid.
+    """
+    raw: Optional[BarbellDetection] = None
+    smoothed_left: Tuple[float, float]
+    smoothed_right: Tuple[float, float]
+    smoothed_center: Tuple[float, float]
+    tilt_degrees: float = 0.0
+    velocity_mps: Tuple[float, float] = (0.0, 0.0)
+    acceleration_mps2: Tuple[float, float] = (0.0, 0.0)
+    px_per_meter: Optional[float] = None
+    path_history: List[Tuple[float, float]] = Field(default_factory=list)
+    rep_phase_hint: str = "standing"  # "descending" | "ascending" | "standing"
+    timestamp: float = 0.0
+    frame_index: int = 0
+
+
+# =============================================================================
 # 3D POSE TYPES
 # =============================================================================
 
@@ -190,6 +251,22 @@ class JointAngles(BaseModel):
     foot_confidence_l: float = 0.0
     foot_confidence_r: float = 0.0
 
+    # Shoulder angles (degrees)
+    shoulder_flexion_l: float = 0.0   # arm forward/back relative to trunk
+    shoulder_flexion_r: float = 0.0
+    shoulder_abduction_l: float = 0.0  # arm lateral (out-to-side) from trunk
+    shoulder_abduction_r: float = 0.0
+
+    # Elbow angles (degrees, 0 = fully extended, 180 = fully flexed)
+    elbow_flexion_l: float = 0.0
+    elbow_flexion_r: float = 0.0
+
+    # Wrist positions in shoulder-relative coords (cm)
+    wrist_y_l: float = 0.0    # vertical: + = above shoulder, - = below
+    wrist_y_r: float = 0.0
+    wrist_x_l: float = 0.0    # horizontal forward-back
+    wrist_x_r: float = 0.0
+
     # Trunk angles
     trunk_flexion: float = 0.0
     trunk_lateral_flexion: float = 0.0
@@ -220,6 +297,16 @@ class JointAngles(BaseModel):
             "knee_valgus_r": self.knee_valgus_r,
             "foot_confidence_l": self.foot_confidence_l,
             "foot_confidence_r": self.foot_confidence_r,
+            "shoulder_flexion_l": self.shoulder_flexion_l,
+            "shoulder_flexion_r": self.shoulder_flexion_r,
+            "shoulder_abduction_l": self.shoulder_abduction_l,
+            "shoulder_abduction_r": self.shoulder_abduction_r,
+            "elbow_flexion_l": self.elbow_flexion_l,
+            "elbow_flexion_r": self.elbow_flexion_r,
+            "wrist_y_l": self.wrist_y_l,
+            "wrist_y_r": self.wrist_y_r,
+            "wrist_x_l": self.wrist_x_l,
+            "wrist_x_r": self.wrist_x_r,
             "trunk_flexion": self.trunk_flexion,
             "trunk_lateral_flexion": self.trunk_lateral_flexion,
             "trunk_rotation": self.trunk_rotation,
@@ -246,6 +333,26 @@ class JointAngles(BaseModel):
     def hip_asymmetry(self) -> float:
         """Absolute difference in hip flexion between sides."""
         return abs(self.hip_flexion_l - self.hip_flexion_r)
+
+    @property
+    def avg_elbow_flexion(self) -> float:
+        """Average elbow flexion (useful for curl/press depth)."""
+        return (self.elbow_flexion_l + self.elbow_flexion_r) / 2
+
+    @property
+    def elbow_asymmetry(self) -> float:
+        """Absolute difference in elbow flexion between sides."""
+        return abs(self.elbow_flexion_l - self.elbow_flexion_r)
+
+    @property
+    def avg_shoulder_flexion(self) -> float:
+        """Average shoulder flexion."""
+        return (self.shoulder_flexion_l + self.shoulder_flexion_r) / 2
+
+    @property
+    def avg_wrist_y(self) -> float:
+        """Average wrist vertical position relative to shoulders (cm)."""
+        return (self.wrist_y_l + self.wrist_y_r) / 2
 
 
 # =============================================================================
@@ -355,9 +462,10 @@ class RepData(BaseModel):
     start_frame: int
     end_frame: int
 
-    # Depth metrics (for squats)
-    max_depth_angle: float = 0.0  # Maximum knee flexion achieved
-    min_depth_angle: float = 0.0  # Starting knee flexion
+    # Depth metric — max value of the profile's depth signal per rep.
+    # For squats: max knee flexion. For curls: max elbow flexion. Etc.
+    max_depth_angle: float = 0.0
+    min_depth_angle: float = 0.0
 
     # Timing
     descent_time: float = 0.0  # Time in seconds for eccentric phase
@@ -366,7 +474,10 @@ class RepData(BaseModel):
     # Quality
     faults: List[FaultEvent] = Field(default_factory=list)
 
-    # Symmetry
+    # Asymmetry — keyed by joint name (e.g. {"knee": 3.2, "hip": 1.1})
+    asymmetry: Dict[str, float] = Field(default_factory=dict)
+
+    # Deprecated: kept for backward compat with frontend/set_finalizer
     avg_knee_asymmetry: float = 0.0
     avg_hip_asymmetry: float = 0.0
 
@@ -387,7 +498,7 @@ class RepData(BaseModel):
 
     @property
     def tempo_ratio(self) -> float:
-        """Ratio of descent to ascent time (ideal is ~1.5-2.0 for controlled squats)."""
+        """Ratio of descent to ascent time."""
         if self.ascent_time > 0:
             return self.descent_time / self.ascent_time
         return 0.0
@@ -450,6 +561,10 @@ class PipelineFrame(BaseModel):
     # Layer 4: Fault Detection
     faults: List[FaultEvent] = Field(default_factory=list)
     rep_data: Optional[RepData] = None  # Set when rep completes
+
+    # Barbell detection + tracking (populated when barbell_tracking.enabled=True)
+    bar_detection: Optional[BarbellDetection] = None
+    bar_track: Optional[BarTrackState] = None
 
     # BiLSTM rep counting (optional, populated when bilstm.enabled=True)
     bilstm_probability: Optional[float] = None

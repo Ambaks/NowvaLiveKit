@@ -100,6 +100,42 @@ class BiLSTMConfig(BaseModel):
     ema_alpha: float = 0.2
 
 
+class BarbellTrackingConfig(BaseModel):
+    """
+    Real-time barbell detection & tracking configuration.
+
+    Uses a YOLO11n-pose model with 2 keypoints (left end, right end of the bar)
+    plus a bounding box. Smoothed with a constant-velocity Kalman filter per
+    endpoint so position/velocity stay stable through detection dropouts.
+    """
+    enabled: bool = False
+    model_path: str = "models/barbell_keypoints.pt"
+    conf_threshold: float = 0.25
+    imgsz: int = 640
+    device: str = "auto"             # "auto" | "cpu" | "cuda" | "mps"
+
+    # Real-world calibration: length of a standard Olympic barbell
+    bar_length_m: float = 2.2
+
+    # Kalman noise parameters (constant-velocity model, px units)
+    kalman_q: float = 1e-2            # process noise
+    kalman_r: float = 1.0             # measurement noise
+
+    path_history_len: int = 120       # ~4 s at 30 FPS
+
+    # Tilt color coding for overlay
+    tilt_warn_deg: float = 2.0
+    tilt_error_deg: float = 5.0
+
+    # Tilt-based bilateral asymmetry fault thresholds
+    tilt_asym_mild_deg: float = 2.0
+    tilt_asym_moderate_deg: float = 4.0
+    tilt_asym_severe_deg: float = 7.0
+    tilt_asym_mild_cm: float = 3.0
+    tilt_asym_moderate_cm: float = 6.0
+    tilt_asym_severe_cm: float = 10.0
+
+
 class RepDetectionConfig(BaseModel):
     """Rep detection configuration."""
     entry_threshold: float = 30.0
@@ -220,6 +256,7 @@ class BiomechanicsConfig(BaseModel):
     coaching: CoachingConfig = Field(default_factory=CoachingConfig)
     ipc: IPCConfig = Field(default_factory=IPCConfig)
     bilstm: BiLSTMConfig = Field(default_factory=BiLSTMConfig)
+    barbell_tracking: BarbellTrackingConfig = Field(default_factory=BarbellTrackingConfig)
     velocity_clamp: VelocityClampConfig = Field(default_factory=VelocityClampConfig)
     bone_constraints: BoneConstraintsConfig = Field(default_factory=BoneConstraintsConfig)
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
@@ -333,6 +370,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "bilstm" in raw_config:
         config_dict["bilstm"] = BiLSTMConfig(**raw_config["bilstm"])
+
+    if "barbell_tracking" in raw_config:
+        config_dict["barbell_tracking"] = BarbellTrackingConfig(**raw_config["barbell_tracking"])
 
     if "velocity_clamp" in raw_config:
         config_dict["velocity_clamp"] = VelocityClampConfig(**raw_config["velocity_clamp"])

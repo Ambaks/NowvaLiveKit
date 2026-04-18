@@ -40,6 +40,7 @@ openmim>=0.3.0
 # Biomechanics Pipeline
 onnxruntime>=1.17.0                    # RTMPose ONNX inference
 mediapipe>=0.10.9                      # MediaPipe pose fallback
+ultralytics>=8.0.0                     # YOLO11n-pose barbell detector
 pyyaml>=6.0.0                          # Config file parsing
 
 # Numerical Computing

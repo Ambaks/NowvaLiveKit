@@ -18,9 +18,19 @@ import numpy as np
 from biomechanics.config import BiomechanicsConfig, load_pipeline_config
 from biomechanics.pose.mediapipe_fallback import MediaPipePoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
-from biomechanics.faults import RuleEngine, HipPositionRepCounter
+from biomechanics.faults import RuleEngine
 from biomechanics.profiles import get_profile
-from biomechanics.utils.types import PipelineFrame, Skeleton2D, Skeleton3D, JointAngles, FaultEvent, CocoKeypoints, DEPTH_CLASS_NAMES
+from biomechanics.utils.types import (
+    PipelineFrame,
+    Skeleton2D,
+    Skeleton3D,
+    JointAngles,
+    FaultEvent,
+    CocoKeypoints,
+    DEPTH_CLASS_NAMES,
+    BarbellDetection,
+    BarTrackState,
+)
 from biomechanics.utils.filters import JointAngleFilter
 from biomechanics.utils.derivatives import DerivativeTracker
 from biomechanics.utils.confidence_blend import ConfidenceBlender
@@ -154,13 +164,35 @@ class BiomechanicsPipeline:
                 max_extrapolation_deg=self.config.predictive_state.max_extrapolation_deg,
             )
 
+        # Layer 3b (optional): Barbell detection + Kalman-smoothed tracking.
+        # Runs on the raw frame independently of pose; feeds BarPathRule
+        # and BarTiltAsymmetryRule via bar_detection kwarg.
+        self._barbell_detector = None
+        self._bar_tracker = None
+        if self.config.barbell_tracking.enabled:
+            from biomechanics.barbell_tracking import BarbellDetector, BarPathTracker
+
+            bt = self.config.barbell_tracking
+            self._barbell_detector = BarbellDetector(
+                model_path=bt.model_path,
+                conf_threshold=bt.conf_threshold,
+                imgsz=bt.imgsz,
+                device=bt.device,
+            )
+            self._bar_tracker = BarPathTracker(
+                bar_length_m=bt.bar_length_m,
+                kalman_q=bt.kalman_q,
+                kalman_r=bt.kalman_r,
+                path_history_len=bt.path_history_len,
+            )
+
         # Layer 4: Fault detection (rules provided by exercise profile)
         profile_rules = self._profile.create_fault_rules(self.config)
         self._rule_engine = RuleEngine(rules=profile_rules)
+        self._rule_engine.set_profile(self._profile)
 
-        # Layer 5: Rep counting (signal source determined by exercise profile)
-        rep_counter_config = self._profile.create_rep_counter_config(self.config)
-        self._rep_counter = HipPositionRepCounter(config=rep_counter_config)
+        # Layer 5: Rep counting (strategy determined by exercise profile)
+        self._rep_counter = self._profile.create_rep_counter(self.config)
 
         # Layer 6 (optional): BiLSTM rep counting
         self._bilstm = None
@@ -195,7 +227,7 @@ class BiomechanicsPipeline:
         self.last_frame: Optional[np.ndarray] = None
 
     @property
-    def rep_counter(self) -> HipPositionRepCounter:
+    def rep_counter(self):
         """Expose rep counter for external access (e.g. dashboard)."""
         return self._rep_counter
 
@@ -247,7 +279,23 @@ class BiomechanicsPipeline:
                 latency_ms=latency_ms,
             )
 
+        bar_detection: Optional[BarbellDetection] = None
+        bar_track: Optional[BarTrackState] = None
+
         self.last_frame = frame
+
+        # --- Barbell detection + tracking (independent of pose) ---
+        if self._barbell_detector is not None:
+            t0 = time.perf_counter()
+            try:
+                bar_detection = self._barbell_detector.detect(
+                    frame, timestamp=now, frame_index=self._frame_index
+                )
+            except Exception:
+                bar_detection = None
+            if self._bar_tracker is not None:
+                bar_track = self._bar_tracker.update(bar_detection, timestamp=now)
+            latency_ms["barbell"] = (time.perf_counter() - t0) * 1000.0
 
         # --- Pose estimation ---
         t0 = time.perf_counter()
@@ -268,6 +316,8 @@ class BiomechanicsPipeline:
                 frame_index=self._frame_index,
                 timestamp=now,
                 skeleton_2d=skeleton_2d,
+                bar_detection=bar_detection,
+                bar_track=bar_track,
                 latency_ms=latency_ms,
             )
 
@@ -298,6 +348,8 @@ class BiomechanicsPipeline:
                 timestamp=now,
                 skeleton_2d=skeleton_2d,
                 skeleton_3d=skeleton_3d,
+                bar_detection=bar_detection,
+                bar_track=bar_track,
                 latency_ms=latency_ms,
             )
 
@@ -321,9 +373,6 @@ class BiomechanicsPipeline:
                 self._ik_solver.set_body_proportions(proportions)
                 self._proportions_applied = True
 
-        # --- Compute rep signal (exercise-specific, from profile) ---
-        rep_signal = self._profile.get_rep_signal(skeleton_3d)
-
         # --- IK solve ---
         t0 = time.perf_counter()
         raw_angles = self._ik_solver.solve(skeleton_3d)
@@ -334,6 +383,9 @@ class BiomechanicsPipeline:
         # Compute derivatives (velocity, acceleration)
         derivatives = self._derivative_tracker.update(angles)
         latency_ms["ik"] = (time.perf_counter() - t0) * 1000.0
+
+        # --- Compute rep signal (exercise-specific, from profile) ---
+        rep_signal = self._profile.get_rep_signal(skeleton_3d, angles)
 
         # --- Fault detection + rep counting ---
         t0 = time.perf_counter()
@@ -349,6 +401,7 @@ class BiomechanicsPipeline:
             eval_angles,
             in_rep=self._rep_counter.in_rep,
             rep_number=self._rep_counter.rep_count + 1,
+            bar_detection=bar_detection,
         )
 
         # Calibration uses ACTUAL angles
@@ -448,6 +501,8 @@ class BiomechanicsPipeline:
             bilstm_depth_class=bilstm_depth_class,
             bilstm_depth_class_name=bilstm_depth_class_name,
             bilstm_class_probabilities=bilstm_class_probs,
+            bar_detection=bar_detection,
+            bar_track=bar_track,
             latency_ms=latency_ms,
         )
 

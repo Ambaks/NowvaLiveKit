@@ -189,10 +189,8 @@ class TestSymmetryRule:
         """Mild asymmetry (5-10°) should produce MILD fault."""
         angles = create_joint_angles(
             frame=0,
-            hip_flexion_l=60.0,
-            hip_flexion_r=53.0,  # 7° asymmetry
             knee_flexion_l=70.0,
-            knee_flexion_r=70.0,
+            knee_flexion_r=63.0,  # 7° asymmetry on the default (knee) getter
         )
         fault = symmetry_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
@@ -213,8 +211,8 @@ class TestSymmetryRule:
         """Severe asymmetry (>15°) should produce SEVERE fault."""
         angles = create_joint_angles(
             frame=0,
-            hip_flexion_l=80.0,
-            hip_flexion_r=60.0,  # 20° asymmetry
+            knee_flexion_l=90.0,
+            knee_flexion_r=70.0,  # 20° asymmetry on the default (knee) getter
         )
         fault = symmetry_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
@@ -224,7 +222,7 @@ class TestSymmetryRule:
         """Fault details should identify which side is heavier."""
         angles = create_joint_angles(
             frame=0,
-            knee_flexion_l=85.0,  # Left deeper
+            knee_flexion_l=90.0,  # Left deeper (20° asymmetry → severe)
             knee_flexion_r=70.0,
         )
         fault = symmetry_rule.evaluate(angles, history, in_rep=True)
@@ -247,35 +245,38 @@ class TestForwardLeanRule:
         """Forward lean rule should report FORWARD_LEAN fault type."""
         assert forward_lean_rule.fault_type == FaultType.FORWARD_LEAN
 
+    # trunk_flexion uses the 180-convention: 180° = upright, lower = more lean.
+    # Default thresholds: mild < 145°, moderate < 135°, severe < 125°.
+
     def test_no_fault_when_upright(self, forward_lean_rule, history):
-        """No fault when trunk flexion is acceptable."""
-        angles = create_joint_angles(frame=0, trunk_flexion=25.0)
+        """No fault when trunk is near-upright (above mild threshold)."""
+        angles = create_joint_angles(frame=0, trunk_flexion=170.0)
         fault = forward_lean_rule.evaluate(angles, history, in_rep=True)
         assert fault is None
 
     def test_no_fault_when_not_in_rep(self, forward_lean_rule, history):
         """No fault when not in rep even with lean."""
-        angles = create_joint_angles(frame=0, trunk_flexion=50.0)
+        angles = create_joint_angles(frame=0, trunk_flexion=130.0)
         fault = forward_lean_rule.evaluate(angles, history, in_rep=False)
         assert fault is None
 
     def test_mild_forward_lean(self, forward_lean_rule, history):
-        """Mild forward lean (35-45°) should produce MILD fault."""
-        angles = create_joint_angles(frame=0, trunk_flexion=40.0)
+        """Mild forward lean (between mild and moderate thresholds)."""
+        angles = create_joint_angles(frame=0, trunk_flexion=140.0)
         fault = forward_lean_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
         assert fault.severity == FaultSeverity.MILD
 
     def test_moderate_forward_lean(self, forward_lean_rule, history):
-        """Moderate forward lean (45-55°) should produce MODERATE fault."""
-        angles = create_joint_angles(frame=0, trunk_flexion=50.0)
+        """Moderate forward lean (between moderate and severe thresholds)."""
+        angles = create_joint_angles(frame=0, trunk_flexion=130.0)
         fault = forward_lean_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
         assert fault.severity == FaultSeverity.MODERATE
 
     def test_severe_forward_lean(self, forward_lean_rule, history):
-        """Severe forward lean (>55°) should produce SEVERE fault."""
-        angles = create_joint_angles(frame=0, trunk_flexion=60.0)
+        """Severe forward lean (below severe threshold)."""
+        angles = create_joint_angles(frame=0, trunk_flexion=120.0)
         fault = forward_lean_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
         assert fault.severity == FaultSeverity.SEVERE
@@ -508,7 +509,17 @@ class TestRuleEngine:
 
     @pytest.fixture
     def engine(self):
-        return RuleEngine()
+        # RuleEngine requires an explicit rule list (profiles are the source of
+        # truth in production, but the tests build the set they care about).
+        return RuleEngine(
+            rules=[
+                DepthRule(),
+                SymmetryRule(),
+                HeelRiseRule(),
+                ForwardLeanRule(),
+                KneeValgusRule(),
+            ],
+        )
 
     def test_initialization(self, engine):
         """Engine should initialize with all rules."""

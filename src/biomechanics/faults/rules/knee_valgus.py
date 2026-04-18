@@ -47,6 +47,11 @@ class KneeValgusRule(FaultRule):
     def fault_type(self) -> FaultType:
         return FaultType.KNEE_VALGUS
 
+    def scale_for_proportions(self, proportions) -> None:
+        self.mild_threshold *= proportions.valgus_scale
+        self.moderate_threshold *= proportions.valgus_scale
+        self.severe_threshold *= proportions.valgus_scale
+
     def evaluate(
         self,
         angles: JointAngles,

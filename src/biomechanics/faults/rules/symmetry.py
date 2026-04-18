@@ -1,28 +1,24 @@
 """
 Bilateral Asymmetry Fault Detection Rule
 
-Compares left vs right hip and knee flexion angles to detect
-weight shifts and imbalanced movement patterns.
+Compares left vs right joint angles to detect weight shifts
+and imbalanced movement patterns. Parameterized with getter
+lambdas so one class works for any joint pair.
 """
 
 from collections import deque
-from typing import Optional
+from typing import Callable, Optional
 
 from biomechanics.utils.types import JointAngles, FaultEvent, FaultSeverity
-from biomechanics.faults.fault_types import FaultRule, FaultType, DEFAULT_THRESHOLDS, FAULT_MESSAGES
+from biomechanics.faults.fault_types import FaultRule, FaultType, FAULT_MESSAGES
 
 
 class SymmetryRule(FaultRule):
     """
-    Rule for detecting bilateral asymmetry.
+    Rule for detecting bilateral asymmetry between any left/right joint pair.
 
-    Compares left vs right joint angles to identify:
-    - Weight shifting to one side
-    - Uneven descent patterns
-    - Compensatory movement
-
-    Fires when the absolute difference between L/R exceeds thresholds.
-    Evaluates both hip and knee asymmetry, reporting the larger deviation.
+    By default compares hip and knee flexion (squat behavior). Override
+    ``left_getter`` / ``right_getter`` to compare elbows, wrists, etc.
 
     Severity thresholds:
     - Mild: 5-10° difference
@@ -32,16 +28,23 @@ class SymmetryRule(FaultRule):
 
     def __init__(
         self,
+        left_getter: Optional[Callable[[JointAngles], float]] = None,
+        right_getter: Optional[Callable[[JointAngles], float]] = None,
+        joint_name: str = "knee",
         mild_threshold: float = 5.0,
         moderate_threshold: float = 10.0,
         severe_threshold: float = 15.0,
     ):
+        # Primary joint pair (defaults to knee flexion for backward compat)
+        self._left_getter = left_getter or (lambda a: a.knee_flexion_l)
+        self._right_getter = right_getter or (lambda a: a.knee_flexion_r)
+        self._joint_name = joint_name
+
         self.mild_threshold = mild_threshold
         self.moderate_threshold = moderate_threshold
         self.severe_threshold = severe_threshold
 
-        # Track asymmetry history for smoothing
-        self._last_fault_frame: int = -30  # Prevent rapid re-firing
+        self._last_fault_frame: int = -30
 
     @property
     def fault_type(self) -> FaultType:
@@ -67,20 +70,16 @@ class SymmetryRule(FaultRule):
         if angles.frame_index - self._last_fault_frame < 30:
             return None
 
-        # Calculate asymmetries
-        hip_asymmetry = abs(angles.hip_flexion_l - angles.hip_flexion_r)
-        knee_asymmetry = abs(angles.knee_flexion_l - angles.knee_flexion_r)
+        # Calculate asymmetry from the configured getter pair
+        left_val = self._left_getter(angles)
+        right_val = self._right_getter(angles)
+        asymmetry = abs(left_val - right_val)
 
-        # Use the larger asymmetry
-        max_asymmetry = max(hip_asymmetry, knee_asymmetry)
-        asymmetry_type = "hip" if hip_asymmetry > knee_asymmetry else "knee"
-
-        # Check against thresholds
-        if max_asymmetry < self.mild_threshold:
+        if asymmetry < self.mild_threshold:
             return None
 
         severity, score = self._get_severity(
-            max_asymmetry,
+            asymmetry,
             {
                 "mild": self.mild_threshold,
                 "moderate": self.moderate_threshold,
@@ -93,11 +92,7 @@ class SymmetryRule(FaultRule):
 
         self._last_fault_frame = angles.frame_index
 
-        # Determine which side is higher (more flexed)
-        if asymmetry_type == "hip":
-            heavier_side = "left" if angles.hip_flexion_l > angles.hip_flexion_r else "right"
-        else:
-            heavier_side = "left" if angles.knee_flexion_l > angles.knee_flexion_r else "right"
+        heavier_side = "left" if left_val > right_val else "right"
 
         message_key = severity.value
         message = FAULT_MESSAGES[FaultType.BILATERAL_ASYMMETRY].get(
@@ -111,10 +106,8 @@ class SymmetryRule(FaultRule):
             angles=angles,
             rep_number=rep_number,
             details={
-                "hip_asymmetry": hip_asymmetry,
-                "knee_asymmetry": knee_asymmetry,
-                "max_asymmetry": max_asymmetry,
-                "asymmetry_type": asymmetry_type,
+                "joint": self._joint_name,
+                "asymmetry": asymmetry,
                 "heavier_side": heavier_side,
             },
         )

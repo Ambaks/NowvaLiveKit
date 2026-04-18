@@ -7,22 +7,15 @@ Counts reps using a configurable signal and its causal velocity in a
 The signal is exercise-specific and provided by the active ExerciseProfile:
     - Squats:    hip vertical position (cm, relative to ankle)
     - Deadlifts: trunk flexion angle
-    - Bench:     elbow flexion angle
-
-For squats (default signal):
-    hip_position_cm = (hip_mid_y - ankle_mid_y) * 100
-    More negative  → standing (hip far above ankle)
-    Less negative  → squat bottom (hip close to ankle)
-
-    Descent → velocity POSITIVE  (position increasing toward zero)
-    Ascent  → velocity NEGATIVE  (position decreasing away from zero)
+    - Curls:     elbow flexion angle
+    - OHP:       wrist Y position relative to shoulder
 
 State machine:
     IDLE  →  DESCENDING  →  BOTTOM  →  ASCENDING  →  IDLE
 """
 
 from enum import Enum
-from typing import Optional, List, Tuple
+from typing import Callable, Dict, Optional, List, Tuple
 import time
 
 from biomechanics.config import HipPositionCounterConfig
@@ -30,27 +23,45 @@ from biomechanics.utils.types import JointAngles, FaultEvent, RepData
 from biomechanics.utils.filters import OneEuroFilter, ExponentialMovingAverage
 
 
-class HipPositionState(str, Enum):
-    """State machine states — string values match RepState for compatibility."""
+class SignalRepState(str, Enum):
+    """State machine states."""
     IDLE = "idle"
     DESCENDING = "descending"
     BOTTOM = "bottom"
     ASCENDING = "ascending"
 
+# Backward compat alias
+HipPositionState = SignalRepState
 
-class HipPositionRepCounter:
+
+class SignalRepCounter:
     """
-    Real-time rep counter driven by hip vertical position.
+    Real-time rep counter driven by a configurable signal.
 
-    Drop-in replacement for RepCounter — exposes the same public interface
-    (in_rep, phase, rep_count, update, snapshot_rep_metrics, etc.) so the
-    pipeline, dashboard, and BiLSTM enrichment code work without changes.
+    The signal is provided per-frame by the active ExerciseProfile's
+    get_rep_signal() method. Depth and asymmetry metrics are extracted
+    via pluggable callables from the profile.
+
+    Exposes the same public interface (in_rep, phase, rep_count, update,
+    snapshot_rep_metrics, etc.) so the pipeline, dashboard, and BiLSTM
+    enrichment code work without changes.
     """
 
-    def __init__(self, config: Optional[HipPositionCounterConfig] = None):
+    def __init__(
+        self,
+        config: Optional[HipPositionCounterConfig] = None,
+        depth_metric_fn: Optional[Callable[[JointAngles], float]] = None,
+        asymmetry_fn: Optional[Callable[[JointAngles], Dict[str, float]]] = None,
+    ):
         self.config = config or HipPositionCounterConfig()
-        self.state = HipPositionState.IDLE
+        self.state = SignalRepState.IDLE
         self.rep_count = 0
+
+        # Pluggable metric extractors (default: squat knee-based)
+        self._depth_metric_fn = depth_metric_fn or (lambda a: a.avg_knee_flexion)
+        self._asymmetry_fn = asymmetry_fn or (
+            lambda a: {"knee": a.knee_asymmetry, "hip": a.hip_asymmetry}
+        )
 
         # ---- signal processing ----
         self._pos_filter = OneEuroFilter(
@@ -68,8 +79,8 @@ class HipPositionRepCounter:
         # ---- state dwell tracking ----
         self._frames_in_state: int = 0
 
-        # ---- current-rep hip tracking ----
-        self._max_position_in_rep: float = 0.0  # peak (least-negative) = squat bottom
+        # ---- current-rep signal tracking ----
+        self._max_position_in_rep: float = 0.0  # peak signal = rep bottom
 
         # ---- current-rep metric tracking (from JointAngles) ----
         self._rep_start_time: float = 0.0
@@ -79,8 +90,7 @@ class HipPositionRepCounter:
         self._min_depth_angle: float = 180.0
         self._bottom_time: float = 0.0
         self._current_faults: List[FaultEvent] = []
-        self._knee_asymmetry_sum: float = 0.0
-        self._hip_asymmetry_sum: float = 0.0
+        self._asymmetry_sums: Dict[str, float] = {}
         self._angle_samples: int = 0
 
     # ------------------------------------------------------------------
@@ -90,9 +100,9 @@ class HipPositionRepCounter:
     @property
     def in_rep(self) -> bool:
         return self.state in (
-            HipPositionState.DESCENDING,
-            HipPositionState.BOTTOM,
-            HipPositionState.ASCENDING,
+            SignalRepState.DESCENDING,
+            SignalRepState.BOTTOM,
+            SignalRepState.ASCENDING,
         )
 
     @property
@@ -104,7 +114,7 @@ class HipPositionRepCounter:
     # ------------------------------------------------------------------
 
     def reset(self) -> None:
-        self.state = HipPositionState.IDLE
+        self.state = SignalRepState.IDLE
         self.rep_count = 0
         self._reset_rep_tracking()
         self._frames_in_state = 0
@@ -122,14 +132,9 @@ class HipPositionRepCounter:
         self._current_faults.clear()
 
     def snapshot_rep_metrics(self) -> dict:
-        avg_knee = (
-            self._knee_asymmetry_sum / self._angle_samples
-            if self._angle_samples > 0 else 0.0
-        )
-        avg_hip = (
-            self._hip_asymmetry_sum / self._angle_samples
-            if self._angle_samples > 0 else 0.0
-        )
+        avg_asymmetry = {}
+        for key, total in self._asymmetry_sums.items():
+            avg_asymmetry[key] = total / self._angle_samples if self._angle_samples > 0 else 0.0
         now = time.time()
         return {
             "max_depth_angle": self._max_depth_angle,
@@ -139,8 +144,10 @@ class HipPositionRepCounter:
             "ascent_time": (now - self._bottom_time)
                 if self._bottom_time > 0 else 0.0,
             "faults": self._current_faults.copy(),
-            "avg_knee_asymmetry": avg_knee,
-            "avg_hip_asymmetry": avg_hip,
+            "asymmetry": avg_asymmetry,
+            # Backward compat
+            "avg_knee_asymmetry": avg_asymmetry.get("knee", 0.0),
+            "avg_hip_asymmetry": avg_asymmetry.get("hip", 0.0),
             "in_rep": self.in_rep,
         }
 
@@ -213,15 +220,15 @@ class HipPositionRepCounter:
         completed_rep: Optional[RepData] = None
         feedback: Optional[str] = None
 
-        if self.state == HipPositionState.IDLE:
+        if self.state == SignalRepState.IDLE:
             # Update standing baseline while idle
             self._standing_baseline = self._baseline_ema.filter(smoothed_pos)
 
             if velocity > self.config.entry_vel_threshold:
-                self._change_state(HipPositionState.DESCENDING)
+                self._change_state(SignalRepState.DESCENDING)
                 self._start_rep(smoothed_pos, timestamp, angles)
 
-        elif self.state == HipPositionState.DESCENDING:
+        elif self.state == SignalRepState.DESCENDING:
             # Track peak position (squat bottom = local max)
             if smoothed_pos > self._max_position_in_rep:
                 self._max_position_in_rep = smoothed_pos
@@ -229,9 +236,9 @@ class HipPositionRepCounter:
 
             if self._frames_in_state >= self.config.min_frames_descending:
                 if abs(velocity) < self.config.bottom_vel_threshold:
-                    self._change_state(HipPositionState.BOTTOM)
+                    self._change_state(SignalRepState.BOTTOM)
 
-        elif self.state == HipPositionState.BOTTOM:
+        elif self.state == SignalRepState.BOTTOM:
             # Still track depth in case bottom drifts deeper
             if smoothed_pos > self._max_position_in_rep:
                 self._max_position_in_rep = smoothed_pos
@@ -239,9 +246,9 @@ class HipPositionRepCounter:
 
             if self._frames_in_state >= self.config.min_frames_bottom:
                 if velocity < -self.config.ascending_vel_threshold:
-                    self._change_state(HipPositionState.ASCENDING)
+                    self._change_state(SignalRepState.ASCENDING)
 
-        elif self.state == HipPositionState.ASCENDING:
+        elif self.state == SignalRepState.ASCENDING:
             if self._frames_in_state >= self.config.min_frames_ascending:
                 returned = smoothed_pos < self._standing_baseline + self.config.standing_return_cm
                 if returned:
@@ -256,7 +263,7 @@ class HipPositionRepCounter:
                     elif depth < self.config.min_depth_cm:
                         feedback = "go_deeper"
 
-                    self._change_state(HipPositionState.IDLE)
+                    self._change_state(SignalRepState.IDLE)
                     self._reset_rep_tracking()
 
         return completed_rep, feedback
@@ -283,24 +290,24 @@ class HipPositionRepCounter:
         self._min_depth_angle = 180.0
         self._bottom_time = 0.0
         self._current_faults = []
-        self._knee_asymmetry_sum = 0.0
-        self._hip_asymmetry_sum = 0.0
+        self._asymmetry_sums = {}
         self._angle_samples = 0
 
         if angles is not None:
             self._track_angles(angles)
 
     def _track_angles(self, angles: JointAngles) -> None:
-        knee = angles.avg_knee_flexion
+        depth = self._depth_metric_fn(angles)
 
-        if knee > self._max_depth_angle:
-            self._max_depth_angle = knee
+        if depth > self._max_depth_angle:
+            self._max_depth_angle = depth
 
-        if knee < self._min_depth_angle:
-            self._min_depth_angle = knee
+        if depth < self._min_depth_angle:
+            self._min_depth_angle = depth
 
-        self._knee_asymmetry_sum += angles.knee_asymmetry
-        self._hip_asymmetry_sum += angles.hip_asymmetry
+        asym = self._asymmetry_fn(angles)
+        for key, val in asym.items():
+            self._asymmetry_sums[key] = self._asymmetry_sums.get(key, 0.0) + val
         self._angle_samples += 1
 
     def _reset_rep_tracking(self) -> None:
@@ -312,8 +319,7 @@ class HipPositionRepCounter:
         self._min_depth_angle = 180.0
         self._bottom_time = 0.0
         self._current_faults = []
-        self._knee_asymmetry_sum = 0.0
-        self._hip_asymmetry_sum = 0.0
+        self._asymmetry_sums = {}
         self._angle_samples = 0
 
     def _create_rep_data(
@@ -327,14 +333,9 @@ class HipPositionRepCounter:
             (end_time - self._bottom_time)
             if self._bottom_time > 0 else 0.0
         )
-        avg_knee_asym = (
-            self._knee_asymmetry_sum / self._angle_samples
-            if self._angle_samples > 0 else 0.0
-        )
-        avg_hip_asym = (
-            self._hip_asymmetry_sum / self._angle_samples
-            if self._angle_samples > 0 else 0.0
-        )
+        avg_asymmetry = {}
+        for key, total in self._asymmetry_sums.items():
+            avg_asymmetry[key] = total / self._angle_samples if self._angle_samples > 0 else 0.0
 
         return RepData(
             rep_number=self.rep_count,
@@ -347,6 +348,12 @@ class HipPositionRepCounter:
             descent_time=descent_time,
             ascent_time=ascent_time,
             faults=self._current_faults.copy(),
-            avg_knee_asymmetry=avg_knee_asym,
-            avg_hip_asymmetry=avg_hip_asym,
+            asymmetry=avg_asymmetry,
+            # Backward compat
+            avg_knee_asymmetry=avg_asymmetry.get("knee", 0.0),
+            avg_hip_asymmetry=avg_asymmetry.get("hip", 0.0),
         )
+
+
+# Backward compat alias — pipeline and other consumers may still import this name
+HipPositionRepCounter = SignalRepCounter

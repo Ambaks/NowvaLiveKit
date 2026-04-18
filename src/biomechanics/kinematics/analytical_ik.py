@@ -113,6 +113,21 @@ class AnalyticalIKSolver(IKSolver):
         angles.pelvis_list = self._compute_pelvis_list(kpts)
         angles.pelvis_rotation = self._compute_pelvis_rotation(kpts)
 
+        # Upper-body angles
+        angles.elbow_flexion_l = self._compute_elbow_flexion(kpts, side="left")
+        angles.elbow_flexion_r = self._compute_elbow_flexion(kpts, side="right")
+        angles.shoulder_flexion_l = self._compute_shoulder_flexion(kpts, side="left")
+        angles.shoulder_flexion_r = self._compute_shoulder_flexion(kpts, side="right")
+        angles.shoulder_abduction_l = self._compute_shoulder_abduction(kpts, side="left")
+        angles.shoulder_abduction_r = self._compute_shoulder_abduction(kpts, side="right")
+
+        # Wrist positions relative to shoulder midpoint
+        wrist_pos = self._compute_wrist_positions(kpts)
+        angles.wrist_y_l = wrist_pos["wrist_y_l"]
+        angles.wrist_y_r = wrist_pos["wrist_y_r"]
+        angles.wrist_x_l = wrist_pos["wrist_x_l"]
+        angles.wrist_x_r = wrist_pos["wrist_x_r"]
+
         return angles
 
     def _extract_keypoints(self, skeleton: Skeleton3D) -> dict:
@@ -554,3 +569,124 @@ class AnalyticalIKSolver(IKSolver):
             angle = -angle
 
         return angle
+
+    # ------------------------------------------------------------------
+    # Upper-body angle computations
+    # ------------------------------------------------------------------
+
+    def _compute_elbow_flexion(self, kpts: dict, side: str) -> float:
+        """
+        Compute elbow flexion angle.
+
+        0 degrees = fully extended (straight arm)
+        Positive = flexion (bending the elbow)
+        Convention matches knee flexion: 180 - joint_angle.
+        """
+        shoulder = self._get_point(kpts, f"{side}_shoulder")
+        elbow = self._get_point(kpts, f"{side}_elbow")
+        wrist = self._get_point(kpts, f"{side}_wrist")
+
+        if shoulder is None or elbow is None or wrist is None:
+            return 0.0
+
+        angle = joint_angle_3_points(shoulder, elbow, wrist)
+        return 180.0 - angle
+
+    def _compute_shoulder_flexion(self, kpts: dict, side: str) -> float:
+        """
+        Compute shoulder flexion angle (sagittal plane).
+
+        Measures the angle between the upper arm and the trunk vector.
+        0 degrees = arm hanging at side (aligned with trunk)
+        90 degrees = arm horizontal in front
+        180 degrees = arm fully overhead
+        """
+        shoulder = self._get_point(kpts, f"{side}_shoulder")
+        elbow = self._get_point(kpts, f"{side}_elbow")
+        hip = self._get_point(kpts, f"{side}_hip")
+
+        if shoulder is None or elbow is None or hip is None:
+            return 0.0
+
+        # Trunk vector (hip to shoulder) — points upward along torso
+        trunk_vec = shoulder - hip
+
+        # Upper arm vector (shoulder to elbow) — points along the arm
+        upper_arm_vec = elbow - shoulder
+
+        # Angle between trunk and upper arm
+        # When arm hangs down, upper_arm is roughly opposite to trunk → ~180°
+        # We want 0° for hanging, so: flexion = 180 - raw_angle
+        raw_angle = angle_between_vectors(trunk_vec, upper_arm_vec)
+        return 180.0 - raw_angle
+
+    def _compute_shoulder_abduction(self, kpts: dict, side: str) -> float:
+        """
+        Compute shoulder abduction angle (frontal plane).
+
+        Measures how far the upper arm deviates laterally from the trunk.
+        0 degrees = arm hanging at side
+        90 degrees = arm horizontal out to the side
+        """
+        shoulder = self._get_point(kpts, f"{side}_shoulder")
+        elbow = self._get_point(kpts, f"{side}_elbow")
+        hip = self._get_point(kpts, f"{side}_hip")
+
+        if shoulder is None or elbow is None or hip is None:
+            return 0.0
+
+        # Trunk vector (hip to shoulder)
+        trunk_vec = shoulder - hip
+
+        # Upper arm vector (shoulder to elbow)
+        upper_arm_vec = elbow - shoulder
+
+        # Project both vectors onto the frontal plane (XY, remove Z/depth)
+        trunk_frontal = np.array([trunk_vec[0], trunk_vec[1], 0.0])
+        arm_frontal = np.array([upper_arm_vec[0], upper_arm_vec[1], 0.0])
+
+        trunk_norm = np.linalg.norm(trunk_frontal)
+        arm_norm = np.linalg.norm(arm_frontal)
+
+        if trunk_norm < 1e-6 or arm_norm < 1e-6:
+            return 0.0
+
+        # Angle between trunk and arm in frontal plane
+        # When arm hangs down, arm_frontal is opposite to trunk_frontal → ~180°
+        raw_angle = angle_between_vectors(trunk_frontal, arm_frontal)
+        return 180.0 - raw_angle
+
+    def _compute_wrist_positions(self, kpts: dict) -> dict:
+        """
+        Compute wrist positions relative to the shoulder midpoint.
+
+        Returns dict with wrist_y_l, wrist_y_r (vertical, cm),
+        wrist_x_l, wrist_x_r (forward-back, cm).
+
+        Convention:
+        - wrist_y: positive = above shoulder, negative = below
+        - wrist_x: positive = forward of shoulder, negative = behind
+        """
+        left_shoulder = self._get_point(kpts, "left_shoulder")
+        right_shoulder = self._get_point(kpts, "right_shoulder")
+        left_wrist = self._get_point(kpts, "left_wrist")
+        right_wrist = self._get_point(kpts, "right_wrist")
+
+        result = {"wrist_y_l": 0.0, "wrist_y_r": 0.0,
+                  "wrist_x_l": 0.0, "wrist_x_r": 0.0}
+
+        if left_shoulder is None or right_shoulder is None:
+            return result
+
+        shoulder_mid = midpoint(left_shoulder, right_shoulder)
+
+        # Y-axis is downward in MediaPipe, so shoulder_mid_y - wrist_y = above
+        if left_wrist is not None:
+            result["wrist_y_l"] = (shoulder_mid[1] - left_wrist[1]) * 100.0
+            result["wrist_x_l"] = (left_wrist[2] - shoulder_mid[2]) * 100.0
+
+        if right_wrist is not None:
+            result["wrist_y_r"] = (shoulder_mid[1] - right_wrist[1]) * 100.0
+            result["wrist_x_r"] = (right_wrist[2] - shoulder_mid[2]) * 100.0
+
+        return result

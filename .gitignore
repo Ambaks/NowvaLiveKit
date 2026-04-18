@@ -150,3 +150,9 @@ programs/*.md
 # Generated audio cues
 src/assets/cues/
 nowva_pitch.pptx
+
+# Graphify files
+graphify-out/*
+
+# Claude
+claude.md
