@@ -1,0 +1,1279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Squat Fault Visualizer</title>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: #0a0a1a;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+}
+
+#scene-container {
+    flex: 1;
+    position: relative;
+}
+
+#controls {
+    width: 380px;
+    background: #12122a;
+    border-left: 1px solid #2a2a4a;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #a0a0ff;
+    margin-bottom: 4px;
+}
+
+.section {
+    background: #1a1a35;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 14px;
+    transition: opacity 0.3s;
+}
+
+.section.locked {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+.section-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.section-title .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.section-title .lock-icon {
+    margin-left: auto;
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.fault-section .section-title { color: #ff6b6b; }
+.fault-section .dot { background: #ff6b6b; }
+.depth-section .section-title { color: #4ecdc4; }
+.depth-section .dot { background: #4ecdc4; }
+.body-section .section-title { color: #ffd93d; }
+.body-section .dot { background: #ffd93d; }
+.anim-section .section-title { color: #a0a0ff; }
+.anim-section .dot { background: #a0a0ff; }
+.baseline-section .section-title { color: #2ecc71; }
+.baseline-section .dot { background: #2ecc71; }
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.slider-row label {
+    font-size: 12px;
+    color: #b0b0cc;
+    min-width: 100px;
+    flex-shrink: 0;
+}
+
+.slider-row input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    background: #2a2a4a;
+    border-radius: 2px;
+    outline: none;
+}
+
+.slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #6060ff;
+    cursor: pointer;
+}
+
+.slider-row .value {
+    font-size: 12px;
+    color: #8080cc;
+    min-width: 42px;
+    text-align: right;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.threshold-bar {
+    height: 6px;
+    border-radius: 3px;
+    margin: 4px 0 8px 108px;
+    display: flex;
+    overflow: hidden;
+}
+
+.threshold-bar .band {
+    height: 100%;
+}
+
+.threshold-legend {
+    display: flex;
+    gap: 12px;
+    margin: 0 0 4px 108px;
+    font-size: 10px;
+    color: #888;
+}
+
+.threshold-legend span::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.legend-ok::before { background: #2ecc71; }
+.legend-mild::before { background: #f1c40f; }
+.legend-moderate::before { background: #e67e22; }
+.legend-severe::before { background: #e74c3c; }
+
+.btn {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #6060ff, #4040cc);
+    color: white;
+}
+.btn-primary:hover { background: linear-gradient(135deg, #7070ff, #5050dd); }
+
+.btn-diagnose {
+    background: linear-gradient(135deg, #2ecc71, #27ae60);
+    color: white;
+}
+.btn-diagnose:hover { background: linear-gradient(135deg, #3ddb80, #2ecc71); }
+
+.btn-stop {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: white;
+}
+.btn-stop:hover { background: linear-gradient(135deg, #f05545, #e74c3c); }
+
+.btn-secondary {
+    background: #2a2a4a;
+    color: #b0b0cc;
+    border: 1px solid #3a3a5a;
+}
+.btn-secondary:hover { background: #3a3a5a; }
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.btn-row {
+    display: flex;
+    gap: 8px;
+}
+
+.anim-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.anim-controls button {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid #3a3a5a;
+    background: #2a2a4a;
+    color: #e0e0e0;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.anim-controls button:hover { background: #3a3a5a; }
+
+#phase-scrubber {
+    flex: 1;
+}
+
+#info-overlay {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(18, 18, 42, 0.85);
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    line-height: 1.6;
+    pointer-events: none;
+}
+
+#info-overlay .label { color: #888; }
+#info-overlay .val { color: #a0a0ff; }
+#info-overlay .fault-active { color: #ff6b6b; font-weight: 600; }
+#info-overlay .fault-none { color: #2ecc71; }
+
+.severity-indicator {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 4px;
+    font-weight: 600;
+}
+.sev-none { background: #1a3a2a; color: #2ecc71; }
+.sev-mild { background: #3a3a1a; color: #f1c40f; }
+.sev-moderate { background: #3a2a1a; color: #e67e22; }
+.sev-severe { background: #3a1a1a; color: #e74c3c; }
+
+#ground-label {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    font-size: 11px;
+    color: #555;
+    pointer-events: none;
+}
+
+/* State badge */
+#state-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+.state-setup { background: #2a2a4a; color: #a0a0ff; }
+.state-diagnosing { background: #1a3a2a; color: #2ecc71; animation: pulse 1s ease-in-out infinite; }
+.state-testing { background: #3a2a1a; color: #ffd93d; }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Baseline results */
+.baseline-results {
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    line-height: 1.8;
+}
+.baseline-results .bl-label { color: #888; }
+.baseline-results .bl-val { color: #2ecc71; font-weight: 600; }
+.baseline-results .bl-thresh { color: #e0e0e0; }
+
+/* Progress bar for diagnosis */
+#diagnosis-progress {
+    height: 4px;
+    background: #2a2a4a;
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+    display: none;
+}
+#diagnosis-progress .fill {
+    height: 100%;
+    background: linear-gradient(90deg, #2ecc71, #27ae60);
+    border-radius: 2px;
+    transition: width 0.05s linear;
+    width: 0%;
+}
+</style>
+</head>
+<body>
+
+<div id="scene-container">
+    <canvas id="three-canvas"></canvas>
+    <div id="info-overlay"></div>
+    <div id="ground-label">Drag to orbit | Scroll to zoom</div>
+</div>
+
+<div id="controls">
+    <div>
+        <h1>Squat Fault Visualizer <span id="state-badge" class="state-setup">SETUP</span></h1>
+    </div>
+
+    <!-- Body Proportions (editable in SETUP) -->
+    <div class="section body-section" id="proportions-section">
+        <div class="section-title">
+            <span class="dot"></span> Body Proportions
+            <span class="lock-icon" id="proportions-lock" style="display:none">Locked</span>
+        </div>
+        <div class="slider-row">
+            <label>Body scale</label>
+            <input type="range" id="body-scale" min="0.7" max="1.3" value="1.0" step="0.01">
+            <span class="value" id="body-scale-val">1.00</span>
+        </div>
+        <div class="slider-row">
+            <label>Torso ratio</label>
+            <input type="range" id="torso-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="torso-ratio-val">1.00</span>
+        </div>
+        <div class="slider-row">
+            <label>Thigh ratio</label>
+            <input type="range" id="thigh-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="thigh-ratio-val">1.00</span>
+        </div>
+        <div class="slider-row">
+            <label>Shin ratio</label>
+            <input type="range" id="shin-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="shin-ratio-val">1.00</span>
+        </div>
+        <div class="slider-row">
+            <label>Arm ratio</label>
+            <input type="range" id="arm-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="arm-ratio-val">1.00</span>
+        </div>
+        <button class="btn btn-diagnose" id="diagnose-btn" style="width:100%; margin-top:8px">Lock Proportions & Run Diagnosis</button>
+        <div id="diagnosis-progress"><div class="fill"></div></div>
+    </div>
+
+    <!-- Stance -->
+    <div class="section body-section" id="stance-section">
+        <div class="section-title"><span class="dot"></span> Stance</div>
+        <div class="slider-row">
+            <label>Stance width</label>
+            <input type="range" id="stance-width" min="0.8" max="2.5" value="1.2" step="0.05">
+            <span class="value" id="stance-width-val">1.20x</span>
+        </div>
+        <div class="slider-row">
+            <label>Toe-out angle</label>
+            <input type="range" id="toe-out" min="0" max="45" value="15" step="1">
+            <span class="value" id="toe-out-val">15°</span>
+        </div>
+    </div>
+
+    <!-- Squat Depth & Mobility -->
+    <div class="section depth-section" id="depth-section">
+        <div class="section-title"><span class="dot"></span> Squat Depth & Mobility</div>
+        <div class="slider-row">
+            <label>Max knee flex</label>
+            <input type="range" id="max-knee-flex" min="20" max="140" value="100" step="1">
+            <span class="value" id="max-knee-flex-val">100°</span>
+        </div>
+        <div class="slider-row">
+            <label>Dorsiflexion ratio</label>
+            <input type="range" id="dorsi-ratio" min="0.0" max="0.4" value="0.15" step="0.01">
+            <span class="value" id="dorsi-ratio-val">0.15</span>
+        </div>
+    </div>
+
+    <!-- Baseline Results (shown after diagnosis) -->
+    <div class="section baseline-section" id="baseline-section" style="display:none">
+        <div class="section-title"><span class="dot"></span> Baseline (from diagnosis)</div>
+        <div class="baseline-results" id="baseline-results"></div>
+    </div>
+
+    <!-- Forward Lean (enabled after diagnosis) -->
+    <div class="section fault-section locked" id="lean-section">
+        <div class="section-title"><span class="dot"></span> Forward Lean</div>
+        <div class="slider-row">
+            <label>Trunk offset</label>
+            <input type="range" id="forward-lean" min="0" max="60" value="0" step="1">
+            <span class="value" id="forward-lean-val">0°</span>
+        </div>
+        <div class="threshold-legend">
+            <span class="legend-ok">OK</span>
+            <span class="legend-mild">Mild</span>
+            <span class="legend-moderate">Moderate</span>
+            <span class="legend-severe">Severe</span>
+        </div>
+        <div class="threshold-bar" id="lean-threshold-bar"></div>
+        <div class="slider-row">
+            <label>Fault probability</label>
+            <input type="range" id="lean-prob" min="0" max="100" value="30" step="5">
+            <span class="value" id="lean-prob-val">30%</span>
+        </div>
+        <div class="slider-row">
+            <label>Min severity (°)</label>
+            <input type="range" id="lean-min" min="0" max="60" value="10" step="1">
+            <span class="value" id="lean-min-val">10°</span>
+        </div>
+        <div class="slider-row">
+            <label>Max severity (°)</label>
+            <input type="range" id="lean-max" min="0" max="60" value="45" step="1">
+            <span class="value" id="lean-max-val">45°</span>
+        </div>
+    </div>
+
+    <!-- Knee Valgus (enabled after diagnosis) -->
+    <div class="section fault-section locked" id="valgus-section">
+        <div class="section-title"><span class="dot"></span> Knee Valgus</div>
+        <div class="slider-row">
+            <label>Valgus offset</label>
+            <input type="range" id="knee-valgus" min="0" max="25" value="0" step="0.5">
+            <span class="value" id="knee-valgus-val">0°</span>
+        </div>
+        <div class="threshold-legend">
+            <span class="legend-ok">OK</span>
+            <span class="legend-mild">Mild</span>
+            <span class="legend-moderate">Moderate</span>
+            <span class="legend-severe">Severe</span>
+        </div>
+        <div class="threshold-bar" id="valgus-threshold-bar"></div>
+        <div class="slider-row">
+            <label>Fault probability</label>
+            <input type="range" id="valgus-prob" min="0" max="100" value="25" step="5">
+            <span class="value" id="valgus-prob-val">25%</span>
+        </div>
+        <div class="slider-row">
+            <label>Min severity (°)</label>
+            <input type="range" id="valgus-min" min="0" max="25" value="5" step="0.5">
+            <span class="value" id="valgus-min-val">5°</span>
+        </div>
+        <div class="slider-row">
+            <label>Max severity (°)</label>
+            <input type="range" id="valgus-max" min="0" max="25" value="20" step="0.5">
+            <span class="value" id="valgus-max-val">20°</span>
+        </div>
+    </div>
+
+    <!-- Animation (enabled after diagnosis) -->
+    <div class="section anim-section locked" id="anim-section">
+        <div class="section-title"><span class="dot"></span> Animation</div>
+        <div class="anim-controls">
+            <button id="play-btn" title="Play/Pause">&#9654;</button>
+            <input type="range" id="phase-scrubber" min="0" max="1" value="0" step="0.005">
+            <span class="value" id="phase-val" style="min-width: 36px;">0.00</span>
+        </div>
+        <div class="slider-row">
+            <label>Speed</label>
+            <input type="range" id="anim-speed" min="0.1" max="3.0" value="0.8" step="0.1">
+            <span class="value" id="anim-speed-val">0.8x</span>
+        </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="btn-row" id="action-row-setup">
+        <button class="btn btn-primary" id="export-btn" style="flex:1" disabled>Export Config JSON</button>
+        <button class="btn btn-secondary" id="reset-btn">Reset</button>
+    </div>
+    <div class="btn-row" id="action-row-testing" style="display:none">
+        <button class="btn btn-diagnose" id="start-anim-btn" style="flex:1">Start Animation</button>
+        <button class="btn btn-stop" id="stop-btn">Stop & Reset</button>
+        <button class="btn btn-primary" id="export-btn-2">Export</button>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const BONE_CONNECTIONS = [
+    [0, 1], [0, 2], [1, 3], [2, 4],
+    [5, 6],
+    [5, 7], [7, 9],
+    [6, 8], [8, 10],
+    [5, 11], [6, 12],
+    [11, 12],
+    [11, 13], [13, 15],
+    [12, 14], [14, 16],
+];
+
+// These will be updated after diagnosis
+let LEAN_THRESHOLDS = { mild: 15, moderate: 25, severe: 35 };
+let VALGUS_THRESHOLDS = { mild: 8, moderate: 13, severe: 18 };
+
+const REF = {
+    hip_width: 0.22,
+    thigh_len: 0.42,
+    shin_len: 0.40,
+    torso_len: 0.50,
+    shoulder_width: 0.36,
+    upper_arm: 0.30,
+    forearm: 0.26,
+    head_offset: 0.22,
+    neck_len: 0.10,
+};
+
+// =========================================================================
+// Three.js Setup
+// =========================================================================
+const canvas = document.getElementById('three-canvas');
+const container = document.getElementById('scene-container');
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x0a0a1a);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 50);
+camera.position.set(2.5, 1.2, 2.5);
+camera.lookAt(0, 0.7, 0);
+
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 0.7, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 1;
+controls.maxDistance = 8;
+
+scene.add(new THREE.AmbientLight(0x404060, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(3, 5, 3);
+scene.add(dirLight);
+
+const gridHelper = new THREE.GridHelper(4, 20, 0x222244, 0x1a1a30);
+scene.add(gridHelper);
+
+const groundGeo = new THREE.PlaneGeometry(4, 4);
+const groundMat = new THREE.MeshBasicMaterial({ color: 0x0d0d20, transparent: true, opacity: 0.5 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.005;
+scene.add(ground);
+
+// =========================================================================
+// Skeleton Meshes
+// =========================================================================
+const jointMeshes = [];
+const jointColors = [];
+const boneMeshes = [];
+
+const JOINT_RADIUS = 0.018;
+const BONE_RADIUS = 0.006;
+
+const matNormal = new THREE.MeshPhongMaterial({ color: 0x40e0a0, emissive: 0x103020 });
+const matFault = new THREE.MeshPhongMaterial({ color: 0xff4444, emissive: 0x401010 });
+const matBaseline = new THREE.MeshPhongMaterial({ color: 0x60a0ff, emissive: 0x102040 });
+const matBone = new THREE.MeshPhongMaterial({ color: 0x3090d0, emissive: 0x102030 });
+const matBoneFault = new THREE.MeshPhongMaterial({ color: 0xff6666, emissive: 0x301010 });
+const matBoneBaseline = new THREE.MeshPhongMaterial({ color: 0x5080c0, emissive: 0x101830 });
+
+const sphereGeo = new THREE.SphereGeometry(JOINT_RADIUS, 12, 8);
+
+for (let i = 0; i < 17; i++) {
+    const mesh = new THREE.Mesh(sphereGeo, matNormal.clone());
+    scene.add(mesh);
+    jointMeshes.push(mesh);
+    jointColors.push('normal');
+}
+
+for (const [a, b] of BONE_CONNECTIONS) {
+    const geo = new THREE.CylinderGeometry(BONE_RADIUS, BONE_RADIUS, 1, 6);
+    geo.translate(0, 0.5, 0);
+    const mesh = new THREE.Mesh(geo, matBone.clone());
+    scene.add(mesh);
+    boneMeshes.push({ mesh, a, b });
+}
+
+// =========================================================================
+// Forward Kinematics
+// =========================================================================
+
+function computeSquatPose(phase, params) {
+    const {
+        maxKneeFlex, forwardLean, kneeValgus,
+        stanceWidth, toeOut, dorsiRatio,
+        bodyScale, torsoRatio, thighRatio, shinRatio, armRatio
+    } = params;
+
+    const deg2rad = Math.PI / 180;
+    const rad2deg = 180 / Math.PI;
+
+    const profile = Math.pow(Math.sin(Math.PI * phase), 2);
+
+    const kneeFlexDeg = maxKneeFlex * profile;
+    const kneeFlexRad = kneeFlexDeg * deg2rad;
+
+    const ankleDF = dorsiRatio * kneeFlexRad;
+    const baseTrunkLean = 0.35 * kneeFlexRad;
+
+    const extraLeanRad = (forwardLean * deg2rad) * profile;
+    const valgusRad = (kneeValgus * deg2rad) * profile;
+
+    const toeOutRad = toeOut * deg2rad;
+
+    const hw  = REF.hip_width * bodyScale;
+    const ankleZ = (hw / 2) * stanceWidth;
+    const thl = REF.thigh_len * bodyScale * thighRatio;
+    const shl = REF.shin_len * bodyScale * shinRatio;
+    const tl  = REF.torso_len * bodyScale * torsoRatio;
+    const sw  = REF.shoulder_width * bodyScale;
+    const ual = REF.upper_arm * bodyScale * armRatio;
+    const fal = REF.forearm * bodyScale * armRatio;
+    const headH = REF.head_offset * bodyScale;
+
+    const kpts = new Float64Array(17 * 3);
+
+    function set(idx, x, y, z) {
+        kpts[idx * 3]     = x;
+        kpts[idx * 3 + 1] = y;
+        kpts[idx * 3 + 2] = z;
+    }
+    function get(idx) {
+        return [kpts[idx * 3], kpts[idx * 3 + 1], kpts[idx * 3 + 2]];
+    }
+
+    const shinTilt = ankleDF;
+    const thighDirAngle = shinTilt - kneeFlexRad;
+    const valgusShift = shl * Math.sin(valgusRad);
+
+    function placeLeg(side, ankleX, ankleYPos, ankleZPos) {
+        const sgn = side;
+        const fx = Math.cos(toeOutRad);
+        const fz = sgn * Math.sin(toeOutRad);
+        const lx = -fz;
+        const lz = fx;
+        const medialSign = (side < 0) ? 1 : -1;
+        const mx = medialSign * lx;
+        const mz = medialSign * lz;
+
+        const kneeX = ankleX + shl * Math.sin(shinTilt) * fx + valgusShift * mx;
+        const kneeY = ankleYPos + shl * Math.cos(shinTilt);
+        const kneeZ = ankleZPos + shl * Math.sin(shinTilt) * fz + valgusShift * mz;
+
+        const thighFwd = thl * Math.sin(thighDirAngle);
+        const thighUp  = thl * Math.cos(thighDirAngle);
+        const hipX = kneeX + thighFwd * fx;
+        const hipY = kneeY + thighUp;
+        const hipZ = kneeZ + thighFwd * fz;
+
+        return { kneeX, kneeY, kneeZ, hipX, hipY, hipZ };
+    }
+
+    set(15, 0, 0, -ankleZ);
+    set(16, 0, 0,  ankleZ);
+
+    const L = placeLeg(-1, 0, 0, -ankleZ);
+    const R = placeLeg(+1, 0, 0,  ankleZ);
+
+    set(13, L.kneeX, L.kneeY, L.kneeZ);
+    set(14, R.kneeX, R.kneeY, R.kneeZ);
+
+    const hipY = (L.hipY + R.hipY) / 2;
+    const hipX = (L.hipX + R.hipX) / 2;
+    set(11, hipX, hipY, -hw / 2);
+    set(12, hipX, hipY,  hw / 2);
+
+    const lHip = get(11);
+    const rHip = get(12);
+    const hipMidX = (lHip[0] + rHip[0]) / 2;
+    const hipMidY = (lHip[1] + rHip[1]) / 2;
+
+    const totalTrunkLean = baseTrunkLean + extraLeanRad;
+    const shoulderMidX = hipMidX + tl * Math.sin(totalTrunkLean);
+    const shoulderMidY = hipMidY + tl * Math.cos(totalTrunkLean);
+
+    set(5, shoulderMidX, shoulderMidY, -sw / 2);
+    set(6, shoulderMidX, shoulderMidY,  sw / 2);
+
+    const headX = shoulderMidX + headH * Math.sin(totalTrunkLean) * 0.5;
+    const headY = shoulderMidY + headH;
+
+    set(0, headX, headY, 0);
+    set(1, headX, headY + 0.02, -0.03 * bodyScale);
+    set(2, headX, headY + 0.02,  0.03 * bodyScale);
+    set(3, headX, headY - 0.01, -0.06 * bodyScale);
+    set(4, headX, headY - 0.01,  0.06 * bodyScale);
+
+    const lShoulder = get(5);
+    const rShoulder = get(6);
+
+    const armForwardAngle = totalTrunkLean + 1.2;
+    const armDownAngle = 0.3;
+
+    const elbowFwdX = ual * Math.sin(armForwardAngle);
+    const elbowFwdY = -ual * Math.sin(armDownAngle);
+    set(7, lShoulder[0] + elbowFwdX, lShoulder[1] + elbowFwdY, lShoulder[2]);
+    set(8, rShoulder[0] + elbowFwdX, rShoulder[1] + elbowFwdY, rShoulder[2]);
+
+    const lElbow = get(7);
+    const rElbow = get(8);
+    set(9,  lElbow[0] + fal * 0.15, lElbow[1] - fal * 0.3, lElbow[2]);
+    set(10, rElbow[0] + fal * 0.15, rElbow[1] - fal * 0.3, rElbow[2]);
+
+    const avgKneeDeg = kneeFlexDeg;
+    const trunkAngleDeg = 180 - (totalTrunkLean * rad2deg);
+    const valgusActiveDeg = kneeValgus * profile;
+    const dorsiDeg = ankleDF * rad2deg;
+
+    return { kpts, avgKneeDeg, trunkAngleDeg, valgusActiveDeg, dorsiDeg };
+}
+
+// =========================================================================
+// Fault classification
+// =========================================================================
+
+function classifyLean(trunkAngleDeg) {
+    const offset = 180 - trunkAngleDeg;
+    if (offset >= LEAN_THRESHOLDS.severe) return 'severe';
+    if (offset >= LEAN_THRESHOLDS.moderate) return 'moderate';
+    if (offset >= LEAN_THRESHOLDS.mild) return 'mild';
+    return 'none';
+}
+
+function classifyValgus(valgusDeg) {
+    if (valgusDeg >= VALGUS_THRESHOLDS.severe) return 'severe';
+    if (valgusDeg >= VALGUS_THRESHOLDS.moderate) return 'moderate';
+    if (valgusDeg >= VALGUS_THRESHOLDS.mild) return 'mild';
+    return 'none';
+}
+
+function sevBadge(sev) {
+    return `<span class="severity-indicator sev-${sev}">${sev.toUpperCase()}</span>`;
+}
+
+// =========================================================================
+// State Machine: SETUP → DIAGNOSING → TESTING
+// =========================================================================
+let appState = 'setup'; // 'setup' | 'diagnosing' | 'testing'
+let playing = false;
+let phase = 0;
+let lastTime = performance.now();
+
+let baseline = null; // { peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi }
+
+function getProportionParams() {
+    return {
+        bodyScale: parseFloat(document.getElementById('body-scale').value),
+        torsoRatio: parseFloat(document.getElementById('torso-ratio').value),
+        thighRatio: parseFloat(document.getElementById('thigh-ratio').value),
+        shinRatio: parseFloat(document.getElementById('shin-ratio').value),
+        armRatio: parseFloat(document.getElementById('arm-ratio').value),
+    };
+}
+
+function getParams() {
+    return {
+        maxKneeFlex: parseFloat(document.getElementById('max-knee-flex').value),
+        forwardLean: appState === 'testing' ? parseFloat(document.getElementById('forward-lean').value) : 0,
+        kneeValgus: appState === 'testing' ? parseFloat(document.getElementById('knee-valgus').value) : 0,
+        stanceWidth: parseFloat(document.getElementById('stance-width').value),
+        toeOut: parseFloat(document.getElementById('toe-out').value),
+        dorsiRatio: parseFloat(document.getElementById('dorsi-ratio').value),
+        ...getProportionParams(),
+    };
+}
+
+function setAppState(newState) {
+    appState = newState;
+    const badge = document.getElementById('state-badge');
+    const propSection = document.getElementById('proportions-section');
+    const propLock = document.getElementById('proportions-lock');
+    const leanSection = document.getElementById('lean-section');
+    const valgusSection = document.getElementById('valgus-section');
+    const animSection = document.getElementById('anim-section');
+    const baselineSection = document.getElementById('baseline-section');
+    const diagnoseBtn = document.getElementById('diagnose-btn');
+    const exportBtn = document.getElementById('export-btn');
+    const actionSetup = document.getElementById('action-row-setup');
+    const actionTesting = document.getElementById('action-row-testing');
+    const progressBar = document.getElementById('diagnosis-progress');
+
+    if (newState === 'setup') {
+        badge.textContent = 'SETUP';
+        badge.className = 'state-setup';
+        propSection.classList.remove('locked');
+        propLock.style.display = 'none';
+        diagnoseBtn.style.display = '';
+        diagnoseBtn.disabled = false;
+        leanSection.classList.add('locked');
+        valgusSection.classList.add('locked');
+        animSection.classList.add('locked');
+        baselineSection.style.display = 'none';
+        exportBtn.disabled = true;
+        actionSetup.style.display = '';
+        actionTesting.style.display = 'none';
+        progressBar.style.display = 'none';
+        playing = false;
+        phase = 0;
+    } else if (newState === 'diagnosing') {
+        badge.textContent = 'DIAGNOSING';
+        badge.className = 'state-diagnosing';
+        propSection.classList.add('locked');
+        propLock.style.display = '';
+        diagnoseBtn.style.display = 'none';
+        leanSection.classList.add('locked');
+        valgusSection.classList.add('locked');
+        animSection.classList.add('locked');
+        progressBar.style.display = '';
+    } else if (newState === 'testing') {
+        badge.textContent = 'TESTING';
+        badge.className = 'state-testing';
+        propSection.classList.add('locked');
+        propLock.style.display = '';
+        diagnoseBtn.style.display = 'none';
+        leanSection.classList.remove('locked');
+        valgusSection.classList.remove('locked');
+        animSection.classList.remove('locked');
+        baselineSection.style.display = '';
+        exportBtn.disabled = false;
+        actionSetup.style.display = 'none';
+        actionTesting.style.display = '';
+        progressBar.style.display = 'none';
+        playing = false;
+        document.getElementById('play-btn').innerHTML = '&#9654;';
+        document.getElementById('start-anim-btn').style.display = '';
+    }
+}
+
+// =========================================================================
+// Diagnosis: run one clean squat, capture baseline
+// =========================================================================
+
+function runDiagnosis() {
+    setAppState('diagnosing');
+
+    const params = getParams();
+    const progressFill = document.querySelector('#diagnosis-progress .fill');
+
+    let peakTrunkOffset = 0;
+    let peakValgus = 0;
+    let peakKneeFlex = 0;
+    let peakDorsi = 0;
+
+    const STEPS = 200;
+    let step = 0;
+
+    function diagStep() {
+        if (step > STEPS) {
+            finishDiagnosis(peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi);
+            return;
+        }
+
+        const t = step / STEPS;
+        phase = t;
+
+        const result = computeSquatPose(t, params);
+
+        const trunkOffset = 180 - result.trunkAngleDeg;
+        if (trunkOffset > peakTrunkOffset) peakTrunkOffset = trunkOffset;
+        if (result.valgusActiveDeg > peakValgus) peakValgus = result.valgusActiveDeg;
+        if (result.avgKneeDeg > peakKneeFlex) peakKneeFlex = result.avgKneeDeg;
+        if (result.dorsiDeg > peakDorsi) peakDorsi = result.dorsiDeg;
+
+        progressFill.style.width = (t * 100) + '%';
+        step++;
+
+        requestAnimationFrame(diagStep);
+    }
+
+    phase = 0;
+    requestAnimationFrame(diagStep);
+}
+
+function finishDiagnosis(peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi) {
+    baseline = { peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi };
+
+    // Compute thresholds from baseline (matching pipeline: squat.py apply_baseline)
+    LEAN_THRESHOLDS = {
+        mild: peakTrunkOffset + 10,
+        moderate: peakTrunkOffset + 15,
+        severe: peakTrunkOffset + 20,
+    };
+
+    VALGUS_THRESHOLDS = {
+        mild: peakValgus + 5,
+        moderate: peakValgus + 10,
+        severe: peakValgus + 15,
+    };
+
+    // Display baseline results
+    const resultsEl = document.getElementById('baseline-results');
+    resultsEl.innerHTML = `
+        <span class="bl-label">Peak trunk offset:</span> <span class="bl-val">${peakTrunkOffset.toFixed(1)}°</span><br>
+        <span class="bl-label">Peak knee flex:</span> <span class="bl-val">${peakKneeFlex.toFixed(1)}°</span><br>
+        <span class="bl-label">Peak dorsiflexion:</span> <span class="bl-val">${peakDorsi.toFixed(1)}°</span><br>
+        <span class="bl-label">Baseline valgus:</span> <span class="bl-val">${peakValgus.toFixed(1)}°</span><br>
+        <hr style="border-color:#2a2a4a; margin:6px 0">
+        <span class="bl-label">Lean thresholds:</span> <span class="bl-thresh">${LEAN_THRESHOLDS.mild.toFixed(0)}° / ${LEAN_THRESHOLDS.moderate.toFixed(0)}° / ${LEAN_THRESHOLDS.severe.toFixed(0)}°</span><br>
+        <span class="bl-label">Valgus thresholds:</span> <span class="bl-thresh">${VALGUS_THRESHOLDS.mild.toFixed(0)}° / ${VALGUS_THRESHOLDS.moderate.toFixed(0)}° / ${VALGUS_THRESHOLDS.severe.toFixed(0)}°</span>
+    `;
+
+    renderThresholdBars();
+    phase = 0;
+    setAppState('testing');
+}
+
+// =========================================================================
+// Update skeleton meshes
+// =========================================================================
+
+function updateSkeleton(poseResult) {
+    const { kpts, trunkAngleDeg, valgusActiveDeg } = poseResult;
+
+    const leanSev = classifyLean(trunkAngleDeg);
+    const valgusSev = classifyValgus(valgusActiveDeg);
+
+    const faultJoints = new Set();
+    if (leanSev !== 'none') {
+        [0, 1, 2, 3, 4, 5, 6].forEach(j => faultJoints.add(j));
+    }
+    if (valgusSev !== 'none') {
+        [13, 14].forEach(j => faultJoints.add(j));
+    }
+
+    const isBaseline = appState === 'diagnosing';
+
+    for (let i = 0; i < 17; i++) {
+        const x = kpts[i * 3];
+        const y = kpts[i * 3 + 1];
+        const z = kpts[i * 3 + 2];
+        jointMeshes[i].position.set(x, y, z);
+
+        let targetColor;
+        if (isBaseline) {
+            targetColor = 'baseline';
+        } else if (faultJoints.has(i)) {
+            targetColor = 'fault';
+        } else {
+            targetColor = 'normal';
+        }
+
+        if (targetColor !== jointColors[i]) {
+            const mat = targetColor === 'fault' ? matFault :
+                        targetColor === 'baseline' ? matBaseline : matNormal;
+            jointMeshes[i].material = mat.clone();
+            jointColors[i] = targetColor;
+        }
+    }
+
+    const faultBoneSet = new Set();
+    if (leanSev !== 'none') {
+        faultBoneSet.add('5-6');
+        faultBoneSet.add('5-11');
+        faultBoneSet.add('6-12');
+    }
+    if (valgusSev !== 'none') {
+        faultBoneSet.add('11-13');
+        faultBoneSet.add('13-15');
+        faultBoneSet.add('12-14');
+        faultBoneSet.add('14-16');
+    }
+
+    for (const bone of boneMeshes) {
+        const pa = jointMeshes[bone.a].position;
+        const pb = jointMeshes[bone.b].position;
+
+        const dir = new THREE.Vector3().subVectors(pb, pa);
+        const len = dir.length();
+        dir.normalize();
+
+        bone.mesh.position.copy(pa);
+        bone.mesh.scale.set(1, len, 1);
+        bone.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+
+        if (isBaseline) {
+            bone.mesh.material = matBoneBaseline;
+        } else {
+            const boneKey = `${bone.a}-${bone.b}`;
+            bone.mesh.material = faultBoneSet.has(boneKey) ? matBoneFault : matBone;
+        }
+    }
+
+    return { leanSev, valgusSev };
+}
+
+// =========================================================================
+// Info Overlay
+// =========================================================================
+
+function updateInfoOverlay(poseResult, sevs) {
+    const overlay = document.getElementById('info-overlay');
+    const { avgKneeDeg, trunkAngleDeg, valgusActiveDeg, dorsiDeg } = poseResult;
+    const leanOffset = (180 - trunkAngleDeg).toFixed(1);
+
+    let stateLabel = '';
+    if (appState === 'setup') stateLabel = '<span style="color:#6060ff">SETUP — adjust proportions</span>';
+    else if (appState === 'diagnosing') stateLabel = '<span style="color:#2ecc71">DIAGNOSING — baseline squat</span>';
+    else stateLabel = '<span style="color:#ffd93d">TESTING — faults active</span>';
+
+    let baselineInfo = '';
+    if (baseline && appState === 'testing') {
+        baselineInfo = `<span class="label">Baseline offset:</span> <span class="val">${baseline.peakTrunkOffset.toFixed(1)}°</span><br>`;
+    }
+
+    overlay.innerHTML = `
+        ${stateLabel}<br>
+        <span class="label">Knee Flex:</span> <span class="val">${avgKneeDeg.toFixed(1)}°</span><br>
+        <span class="label">Ankle Dorsi:</span> <span class="val">${dorsiDeg.toFixed(1)}°</span><br>
+        <span class="label">Trunk Angle:</span> <span class="val">${trunkAngleDeg.toFixed(1)}°</span>
+        (offset: ${leanOffset}°) ${appState === 'testing' && sevs.leanSev !== 'none' ? sevBadge(sevs.leanSev) : ''}<br>
+        ${baselineInfo}
+        <span class="label">Knee Valgus:</span> <span class="val">${valgusActiveDeg.toFixed(1)}°</span>
+        ${appState === 'testing' && sevs.valgusSev !== 'none' ? sevBadge(sevs.valgusSev) : ''}<br>
+        ${appState === 'testing' ? `<span class="label">Faults:</span>
+        ${sevs.leanSev !== 'none' || sevs.valgusSev !== 'none'
+            ? `<span class="fault-active">${[
+                sevs.leanSev !== 'none' ? 'Forward Lean' : '',
+                sevs.valgusSev !== 'none' ? 'Knee Valgus' : ''
+              ].filter(Boolean).join(', ')}</span>`
+            : '<span class="fault-none">Clean</span>'}<br>` : ''}
+        <span class="label">Phase:</span> <span class="val">${phase.toFixed(3)}</span>
+    `;
+}
+
+// =========================================================================
+// Threshold Bars
+// =========================================================================
+
+function renderThresholdBars() {
+    const leanBar = document.getElementById('lean-threshold-bar');
+    const lMax = 60;
+    leanBar.innerHTML = `
+        <div class="band" style="width:${LEAN_THRESHOLDS.mild/lMax*100}%; background:#2ecc71"></div>
+        <div class="band" style="width:${(LEAN_THRESHOLDS.moderate-LEAN_THRESHOLDS.mild)/lMax*100}%; background:#f1c40f"></div>
+        <div class="band" style="width:${(LEAN_THRESHOLDS.severe-LEAN_THRESHOLDS.moderate)/lMax*100}%; background:#e67e22"></div>
+        <div class="band" style="width:${Math.max(0,(lMax-LEAN_THRESHOLDS.severe))/lMax*100}%; background:#e74c3c"></div>
+    `;
+
+    const valgusBar = document.getElementById('valgus-threshold-bar');
+    const vMax = 25;
+    valgusBar.innerHTML = `
+        <div class="band" style="width:${VALGUS_THRESHOLDS.mild/vMax*100}%; background:#2ecc71"></div>
+        <div class="band" style="width:${(VALGUS_THRESHOLDS.moderate-VALGUS_THRESHOLDS.mild)/vMax*100}%; background:#f1c40f"></div>
+        <div class="band" style="width:${(VALGUS_THRESHOLDS.severe-VALGUS_THRESHOLDS.moderate)/vMax*100}%; background:#e67e22"></div>
+        <div class="band" style="width:${Math.max(0,(vMax-VALGUS_THRESHOLDS.severe))/vMax*100}%; background:#e74c3c"></div>
+    `;
+}
+
+// =========================================================================
+// Slider Bindings
+// =========================================================================
+
+function bindSlider(id, valId, suffix, decimals) {
+    const slider = document.getElementById(id);
+    const valSpan = document.getElementById(valId);
+    slider.addEventListener('input', () => {
+        const v = parseFloat(slider.value);
+        valSpan.textContent = decimals > 0 ? v.toFixed(decimals) + suffix : v + suffix;
+    });
+}
+
+bindSlider('forward-lean', 'forward-lean-val', '°', 0);
+bindSlider('knee-valgus', 'knee-valgus-val', '°', 1);
+bindSlider('max-knee-flex', 'max-knee-flex-val', '°', 0);
+bindSlider('dorsi-ratio', 'dorsi-ratio-val', '', 2);
+bindSlider('stance-width', 'stance-width-val', 'x', 2);
+bindSlider('toe-out', 'toe-out-val', '°', 0);
+bindSlider('body-scale', 'body-scale-val', '', 2);
+bindSlider('torso-ratio', 'torso-ratio-val', '', 2);
+bindSlider('thigh-ratio', 'thigh-ratio-val', '', 2);
+bindSlider('shin-ratio', 'shin-ratio-val', '', 2);
+bindSlider('arm-ratio', 'arm-ratio-val', '', 2);
+bindSlider('anim-speed', 'anim-speed-val', 'x', 1);
+bindSlider('lean-prob', 'lean-prob-val', '%', 0);
+bindSlider('lean-min', 'lean-min-val', '°', 0);
+bindSlider('lean-max', 'lean-max-val', '°', 0);
+bindSlider('valgus-prob', 'valgus-prob-val', '%', 0);
+bindSlider('valgus-min', 'valgus-min-val', '°', 1);
+bindSlider('valgus-max', 'valgus-max-val', '°', 1);
+
+// Phase scrubber
+const scrubber = document.getElementById('phase-scrubber');
+const phaseVal = document.getElementById('phase-val');
+scrubber.addEventListener('input', () => {
+    if (appState !== 'testing') return;
+    phase = parseFloat(scrubber.value);
+    phaseVal.textContent = phase.toFixed(2);
+    playing = false;
+    document.getElementById('play-btn').innerHTML = '&#9654;';
+});
+
+// Play/pause
+document.getElementById('play-btn').addEventListener('click', () => {
+    if (appState !== 'testing') return;
+    playing = !playing;
+    document.getElementById('play-btn').innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+});
+
+// Diagnose button
+document.getElementById('diagnose-btn').addEventListener('click', () => {
+    if (appState === 'setup') runDiagnosis();
+});
+
+// Start Animation button
+document.getElementById('start-anim-btn').addEventListener('click', () => {
+    if (appState !== 'testing') return;
+    playing = true;
+    document.getElementById('play-btn').innerHTML = '&#9646;&#9646;';
+    document.getElementById('start-anim-btn').style.display = 'none';
+});
+
+// Stop button → back to setup
+document.getElementById('stop-btn').addEventListener('click', () => {
+    playing = false;
+    phase = 0;
+    baseline = null;
+    LEAN_THRESHOLDS = { mild: 15, moderate: 25, severe: 35 };
+    VALGUS_THRESHOLDS = { mild: 8, moderate: 13, severe: 18 };
+
+    document.getElementById('forward-lean').value = 0;
+    document.getElementById('forward-lean-val').textContent = '0°';
+    document.getElementById('knee-valgus').value = 0;
+    document.getElementById('knee-valgus-val').textContent = '0°';
+
+    setAppState('setup');
+    renderThresholdBars();
+});
+
+// Reset (full reset including proportions)
+document.getElementById('reset-btn').addEventListener('click', () => {
+    playing = false;
+    phase = 0;
+    baseline = null;
+    LEAN_THRESHOLDS = { mild: 15, moderate: 25, severe: 35 };
+    VALGUS_THRESHOLDS = { mild: 8, moderate: 13, severe: 18 };
+
+    document.getElementById('forward-lean').value = 0;
+    document.getElementById('knee-valgus').value = 0;
+    document.getElementById('max-knee-flex').value = 100;
+    document.getElementById('dorsi-ratio').value = 0.15;
+    document.getElementById('stance-width').value = 1.2;
+    document.getElementById('toe-out').value = 15;
+    document.getElementById('body-scale').value = 1.0;
+    document.getElementById('torso-ratio').value = 1.0;
+    document.getElementById('thigh-ratio').value = 1.0;
+    document.getElementById('shin-ratio').value = 1.0;
+    document.getElementById('arm-ratio').value = 1.0;
+    document.getElementById('anim-speed').value = 0.8;
+    document.getElementById('lean-prob').value = 30;
+    document.getElementById('lean-min').value = 10;
+    document.getElementById('lean-max').value = 45;
+    document.getElementById('valgus-prob').value = 25;
+    document.getElementById('valgus-min').value = 5;
+    document.getElementById('valgus-max').value = 20;
+
+    document.querySelectorAll('input[type="range"]').forEach(el => {
+        el.dispatchEvent(new Event('input'));
+    });
+
+    setAppState('setup');
+    renderThresholdBars();
+});
+
+// Export (both buttons)
+function doExport() {
+    const config = {
+        baseline: baseline ? { ...baseline } : null,
+        computed_thresholds: {
+            forward_lean: { ...LEAN_THRESHOLDS },
+            knee_valgus: { ...VALGUS_THRESHOLDS },
+        },
+        faults: {
+            forward_lean: {
+                min_deg: parseFloat(document.getElementById('lean-min').value),
+                max_deg: parseFloat(document.getElementById('lean-max').value),
+                probability: parseFloat(document.getElementById('lean-prob').value) / 100,
+                thresholds: { ...LEAN_THRESHOLDS },
+            },
+            knee_valgus: {
+                min_deg: parseFloat(document.getElementById('valgus-min').value),
+                max_deg: parseFloat(document.getElementById('valgus-max').value),
+                probability: parseFloat(document.getElementById('valgus-prob').value) / 100,
+                thresholds: { ...VALGUS_THRESHOLDS },
+            },
+        },
+        body_proportions: getProportionParams(),
+        depth_range: [20, parseFloat(document.getElementById('max-knee-flex').value)],
+        stance_width_range: [0.9, parseFloat(document.getElementById('stance-width').value) + 0.3],
+        toe_out_range_deg: [0, parseFloat(document.getElementById('toe-out').value) + 10],
+    };
+
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fault_config.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+document.getElementById('export-btn').addEventListener('click', doExport);
+document.getElementById('export-btn-2').addEventListener('click', doExport);
+
+// =========================================================================
+// Render Loop
+// =========================================================================
+
+function resize() {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+renderThresholdBars();
+setAppState('setup');
+
+function animate(now) {
+    requestAnimationFrame(animate);
+
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    if (playing && appState === 'testing') {
+        const speed = parseFloat(document.getElementById('anim-speed').value);
+        phase += dt * speed * 0.5;
+        if (phase > 1) phase -= 1;
+        scrubber.value = phase;
+        phaseVal.textContent = phase.toFixed(2);
+    }
+
+    const params = getParams();
+    const poseResult = computeSquatPose(phase, params);
+    const sevs = updateSkeleton(poseResult);
+    updateInfoOverlay(poseResult, sevs);
+
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
