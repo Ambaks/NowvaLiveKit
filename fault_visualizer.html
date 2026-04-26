@@ -94,6 +94,8 @@ h1 {
 .anim-section .dot { background: #a0a0ff; }
 .baseline-section .section-title { color: #2ecc71; }
 .baseline-section .dot { background: #2ecc71; }
+.barbell-section .section-title { color: #f0a040; }
+.barbell-section .dot { background: #f0a040; }
 
 .slider-row {
     display: flex;
@@ -259,18 +261,49 @@ h1 {
 #info-overlay .val { color: #a0a0ff; }
 #info-overlay .fault-active { color: #ff6b6b; font-weight: 600; }
 #info-overlay .fault-none { color: #2ecc71; }
+#info-overlay .balance-ok { color: #2ecc71; font-weight: 600; }
+#info-overlay .balance-bad { color: #ff4444; font-weight: 600; }
+#info-overlay .torso-opt-good { color: #2ecc71; }
+#info-overlay .torso-opt-warn { color: #f1c40f; }
+#info-overlay .torso-opt-bad { color: #e74c3c; }
 
-.severity-indicator {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    margin-left: 4px;
-    font-weight: 600;
+#balance-error {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(40, 10, 10, 0.95);
+    border: 2px solid #e74c3c;
+    border-radius: 12px;
+    padding: 24px 32px;
+    text-align: center;
+    z-index: 100;
+    min-width: 280px;
+    pointer-events: all;
 }
-.sev-none { background: #1a3a2a; color: #2ecc71; }
-.sev-mild { background: #3a3a1a; color: #f1c40f; }
-.sev-moderate { background: #3a2a1a; color: #e67e22; }
-.sev-severe { background: #3a1a1a; color: #e74c3c; }
+#balance-error h2 {
+    color: #ff4444;
+    font-size: 22px;
+    margin-bottom: 10px;
+}
+#balance-error p {
+    color: #ccaaaa;
+    font-size: 13px;
+    margin-bottom: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+}
+#balance-error button {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 24px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+#balance-error button:hover { background: linear-gradient(135deg, #f05545, #e74c3c); }
 
 #ground-label {
     position: absolute;
@@ -334,6 +367,11 @@ h1 {
 <div id="scene-container">
     <canvas id="three-canvas"></canvas>
     <div id="info-overlay"></div>
+    <div id="balance-error">
+        <h2>Bad Balance</h2>
+        <p id="balance-error-msg">Center of mass is outside base of support.</p>
+        <button id="balance-retry-btn">Adjust &amp; Retry</button>
+    </div>
     <div id="ground-label">Drag to orbit | Scroll to zoom</div>
 </div>
 
@@ -369,11 +407,21 @@ h1 {
             <span class="value" id="shin-ratio-val">1.00</span>
         </div>
         <div class="slider-row">
-            <label>Arm ratio</label>
-            <input type="range" id="arm-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
-            <span class="value" id="arm-ratio-val">1.00</span>
+            <label>Upper arm ratio</label>
+            <input type="range" id="upper-arm-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="upper-arm-ratio-val">1.00</span>
         </div>
-        <button class="btn btn-diagnose" id="diagnose-btn" style="width:100%; margin-top:8px">Lock Proportions & Run Diagnosis</button>
+        <div class="slider-row">
+            <label>Forearm ratio</label>
+            <input type="range" id="forearm-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="forearm-ratio-val">1.00</span>
+        </div>
+        <div class="slider-row">
+            <label>Shoulder width</label>
+            <input type="range" id="shoulder-width-ratio" min="0.8" max="1.2" value="1.0" step="0.01">
+            <span class="value" id="shoulder-width-ratio-val">1.00</span>
+        </div>
+        <button class="btn btn-diagnose" id="diagnose-btn" style="width:100%; margin-top:8px">Lock Proportions &amp; Run Diagnosis</button>
         <div id="diagnosis-progress"><div class="fill"></div></div>
     </div>
 
@@ -392,9 +440,24 @@ h1 {
         </div>
     </div>
 
+    <!-- Barbell -->
+    <div class="section barbell-section" id="barbell-section">
+        <div class="section-title"><span class="dot"></span> Barbell</div>
+        <div class="slider-row">
+            <label>Weight (kg)</label>
+            <input type="range" id="barbell-weight" min="0" max="200" value="0" step="5">
+            <span class="value" id="barbell-weight-val">0 kg</span>
+        </div>
+        <div class="slider-row">
+            <label>Body mass (kg)</label>
+            <input type="range" id="body-mass" min="40" max="150" value="75" step="1">
+            <span class="value" id="body-mass-val">75 kg</span>
+        </div>
+    </div>
+
     <!-- Squat Depth & Mobility -->
     <div class="section depth-section" id="depth-section">
-        <div class="section-title"><span class="dot"></span> Squat Depth & Mobility</div>
+        <div class="section-title"><span class="dot"></span> Squat Depth &amp; Mobility</div>
         <div class="slider-row">
             <label>Max knee flex</label>
             <input type="range" id="max-knee-flex" min="20" max="140" value="100" step="1">
@@ -402,7 +465,7 @@ h1 {
         </div>
         <div class="slider-row">
             <label>Dorsiflexion ratio</label>
-            <input type="range" id="dorsi-ratio" min="0.0" max="0.4" value="0.15" step="0.01">
+            <input type="range" id="dorsi-ratio" min="0.0" max="0.60" value="0.15" step="0.01">
             <span class="value" id="dorsi-ratio-val">0.15</span>
         </div>
     </div>
@@ -413,14 +476,19 @@ h1 {
         <div class="baseline-results" id="baseline-results"></div>
     </div>
 
-    <!-- Forward Lean (enabled after diagnosis) -->
-    <div class="section fault-section locked" id="lean-section">
-        <div class="section-title"><span class="dot"></span> Forward Lean</div>
+    <!-- Torso Angle (always active — controls trunk lean directly) -->
+    <div class="section" id="torso-section">
+        <div class="section-title"><span class="dot"></span> Torso Angle</div>
         <div class="slider-row">
             <label>Trunk offset</label>
             <input type="range" id="forward-lean" min="0" max="60" value="0" step="1">
             <span class="value" id="forward-lean-val">0°</span>
         </div>
+    </div>
+
+    <!-- Forward Lean fault injection (enabled after diagnosis) -->
+    <div class="section fault-section locked" id="lean-section">
+        <div class="section-title"><span class="dot"></span> Forward Lean (fault thresholds)</div>
         <div class="threshold-legend">
             <span class="legend-ok">OK</span>
             <span class="legend-mild">Mild</span>
@@ -499,7 +567,7 @@ h1 {
     </div>
     <div class="btn-row" id="action-row-testing" style="display:none">
         <button class="btn btn-diagnose" id="start-anim-btn" style="flex:1">Start Animation</button>
-        <button class="btn btn-stop" id="stop-btn">Stop & Reset</button>
+        <button class="btn btn-stop" id="stop-btn">Stop &amp; Reset</button>
         <button class="btn btn-primary" id="export-btn-2">Export</button>
     </div>
 </div>
@@ -533,7 +601,27 @@ const REF = {
     forearm: 0.26,
     head_offset: 0.22,
     neck_len: 0.10,
+    foot_len: 0.26,
 };
+
+// Winter's biomechanics segment mass fractions
+const SEGMENT_MASS = {
+    head:        { joints: null,      frac: 0.081 },
+    trunk:       { joints: null,      frac: 0.497 },
+    upper_arm_l: { joints: [5, 7],   frac: 0.028 },
+    upper_arm_r: { joints: [6, 8],   frac: 0.028 },
+    forearm_l:   { joints: [7, 9],   frac: 0.022 },
+    forearm_r:   { joints: [8, 10],  frac: 0.022 },
+    thigh_l:     { joints: [11, 13], frac: 0.100 },
+    thigh_r:     { joints: [12, 14], frac: 0.100 },
+    shank_l:     { joints: [13, 15], frac: 0.047 },
+    shank_r:     { joints: [14, 16], frac: 0.047 },
+    foot_l:      { joints: [15, null], frac: 0.014 },
+    foot_r:      { joints: [16, null], frac: 0.014 },
+};
+
+let bodyMass = 75;  // kg
+let barbellWeight = 0; // kg
 
 // =========================================================================
 // Three.js Setup
@@ -573,8 +661,11 @@ ground.position.y = -0.005;
 scene.add(ground);
 
 // =========================================================================
-// Skeleton Meshes
+// Skeleton Group (wraps all joint/bone meshes for fall animation)
 // =========================================================================
+const skeletonGroup = new THREE.Group();
+scene.add(skeletonGroup);
+
 const jointMeshes = [];
 const jointColors = [];
 const boneMeshes = [];
@@ -593,7 +684,7 @@ const sphereGeo = new THREE.SphereGeometry(JOINT_RADIUS, 12, 8);
 
 for (let i = 0; i < 17; i++) {
     const mesh = new THREE.Mesh(sphereGeo, matNormal.clone());
-    scene.add(mesh);
+    skeletonGroup.add(mesh);
     jointMeshes.push(mesh);
     jointColors.push('normal');
 }
@@ -602,9 +693,166 @@ for (const [a, b] of BONE_CONNECTIONS) {
     const geo = new THREE.CylinderGeometry(BONE_RADIUS, BONE_RADIUS, 1, 6);
     geo.translate(0, 0.5, 0);
     const mesh = new THREE.Mesh(geo, matBone.clone());
-    scene.add(mesh);
+    skeletonGroup.add(mesh);
     boneMeshes.push({ mesh, a, b });
 }
+
+// =========================================================================
+// COM / BOS Visual Indicators
+// =========================================================================
+
+// COM sphere (red)
+const comSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 10, 7),
+    new THREE.MeshPhongMaterial({ color: 0xff2222, emissive: 0x550000, transparent: true, opacity: 0.9 })
+);
+scene.add(comSphere);
+comSphere.visible = false;
+
+// COM ground projection disc
+const comDiscGeo = new THREE.CircleGeometry(0.025, 16);
+const comDiscMat = new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.7 });
+const comDisc = new THREE.Mesh(comDiscGeo, comDiscMat);
+comDisc.rotation.x = -Math.PI / 2;
+comDisc.position.y = 0.001;
+scene.add(comDisc);
+comDisc.visible = false;
+
+// COM vertical dashed line (LineDashedMaterial)
+const comLineGeo = new THREE.BufferGeometry();
+comLineGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,2,0], 3));
+const comLineMat = new THREE.LineDashedMaterial({ color: 0xff3333, dashSize: 0.03, gapSize: 0.02, transparent: true, opacity: 0.6 });
+const comLine = new THREE.Line(comLineGeo, comLineMat);
+scene.add(comLine);
+comLine.visible = false;
+
+// BOS ground polygon
+const bosGeo = new THREE.BufferGeometry();
+const bosLineMat = new THREE.LineBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.5 });
+const bosLine = new THREE.LineLoop(bosGeo, bosLineMat);
+bosLine.position.y = 0.002;
+scene.add(bosLine);
+bosLine.visible = false;
+
+// Ghost torso line (cyan dashed, optimal trunk angle indicator)
+const ghostTorsoGeo = new THREE.BufferGeometry();
+ghostTorsoGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,1,0], 3));
+const ghostTorsoMat = new THREE.LineDashedMaterial({ color: 0x00e5ff, dashSize: 0.04, gapSize: 0.03, transparent: true, opacity: 0.55 });
+const ghostTorsoLine = new THREE.Line(ghostTorsoGeo, ghostTorsoMat);
+scene.add(ghostTorsoLine);
+ghostTorsoLine.visible = false;
+
+// Midfoot target marker — vertical dashed line showing bar tracking target
+const midfootLineGeo = new THREE.BufferGeometry();
+midfootLineGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 0,2,0], 3));
+const midfootLineMat = new THREE.LineDashedMaterial({ color: 0xf0a040, dashSize: 0.025, gapSize: 0.02, transparent: true, opacity: 0.45 });
+const midfootLine = new THREE.Line(midfootLineGeo, midfootLineMat);
+scene.add(midfootLine);
+midfootLine.visible = false;
+
+const midfootDiscGeo = new THREE.CircleGeometry(0.018, 12);
+const midfootDiscMat = new THREE.MeshBasicMaterial({ color: 0xf0a040, transparent: true, opacity: 0.5 });
+const midfootDisc = new THREE.Mesh(midfootDiscGeo, midfootDiscMat);
+midfootDisc.rotation.x = -Math.PI / 2;
+midfootDisc.position.y = 0.001;
+scene.add(midfootDisc);
+midfootDisc.visible = false;
+
+// =========================================================================
+// Barbell Group
+// =========================================================================
+const barbellGroup = new THREE.Group();
+scene.add(barbellGroup);
+
+const barMat = new THREE.MeshPhongMaterial({ color: 0x888899, emissive: 0x111122 });
+const plateMat = new THREE.MeshPhongMaterial({ color: 0x333344, emissive: 0x080810 });
+
+// Bar cylinder — oriented along Z axis (parallel to shoulder-shoulder line)
+const barGeo = new THREE.CylinderGeometry(0.014, 0.014, 1.6, 10);
+const barMesh = new THREE.Mesh(barGeo, barMat);
+barMesh.rotation.x = Math.PI / 2;
+barbellGroup.add(barMesh);
+
+// 4 weight plates (2 per side) — flat faces perpendicular to bar (Z axis)
+const plateMeshes = [];
+for (let i = 0; i < 4; i++) {
+    const pGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.04, 16);
+    const pMesh = new THREE.Mesh(pGeo, plateMat.clone());
+    pMesh.rotation.x = Math.PI / 2;
+    barbellGroup.add(pMesh);
+    plateMeshes.push(pMesh);
+}
+
+barbellGroup.visible = false;
+
+// =========================================================================
+// Fall Animation State
+// =========================================================================
+let isFalling = false;
+let fallTiltAngle = 0;
+const FALL_MAX_TILT = Math.PI * 0.4; // ~72 degrees
+let fallDir = new THREE.Vector3(1, 0, 0);
+let fallFrames = 0;
+const FALL_TOTAL_FRAMES = 60;
+let fallPivotY = 0;
+
+function triggerFallAnimation(comData, bosPolygon) {
+    if (isFalling) return;
+    isFalling = true;
+    playing = false;
+    document.getElementById('play-btn').innerHTML = '&#9654;';
+
+    // Compute BOS centroid
+    let cx = 0, cz = 0;
+    for (const pt of bosPolygon) { cx += pt.x; cz += pt.z; }
+    cx /= bosPolygon.length;
+    cz /= bosPolygon.length;
+
+    // Fall direction = COM ground projection away from BOS centroid
+    const dx = comData.groundX - cx;
+    const dz = comData.groundZ - cz;
+    const len = Math.sqrt(dx * dx + dz * dz) || 1;
+    fallDir.set(dx / len, 0, dz / len);
+    fallFrames = 0;
+    fallTiltAngle = 0;
+    fallPivotY = 0; // pivot at ground level
+
+    skeletonGroup.rotation.set(0, 0, 0);
+}
+
+function stepFallAnimation() {
+    if (!isFalling) return;
+    fallFrames++;
+    const t = Math.min(fallFrames / FALL_TOTAL_FRAMES, 1);
+    const eased = t * t * (3 - 2 * t); // smoothstep
+    fallTiltAngle = eased * FALL_MAX_TILT;
+
+    // Rotation axis is perpendicular to fallDir on XZ plane
+    const axisX = -fallDir.z;
+    const axisZ = fallDir.x;
+
+    // Rotate skeleton group around ground-level axis
+    const axis = new THREE.Vector3(axisX, 0, axisZ).normalize();
+    skeletonGroup.setRotationFromAxisAngle(axis, fallTiltAngle);
+
+    if (fallFrames >= FALL_TOTAL_FRAMES) {
+        isFalling = false;
+        // Show overlay
+        document.getElementById('balance-error').style.display = 'block';
+    }
+}
+
+function resetFromFall() {
+    isFalling = false;
+    fallTiltAngle = 0;
+    fallFrames = 0;
+    skeletonGroup.rotation.set(0, 0, 0);
+    document.getElementById('balance-error').style.display = 'none';
+}
+
+document.getElementById('balance-retry-btn').addEventListener('click', () => {
+    resetFromFall();
+});
 
 // =========================================================================
 // Forward Kinematics
@@ -614,7 +862,10 @@ function computeSquatPose(phase, params) {
     const {
         maxKneeFlex, forwardLean, kneeValgus,
         stanceWidth, toeOut, dorsiRatio,
-        bodyScale, torsoRatio, thighRatio, shinRatio, armRatio
+        bodyScale, torsoRatio, thighRatio, shinRatio,
+        upperArmRatio, forearmRatio, shoulderWidthRatio,
+        shoulderFlex, elbowFlex,
+        barbellWeight: bw
     } = params;
 
     const deg2rad = Math.PI / 180;
@@ -638,9 +889,9 @@ function computeSquatPose(phase, params) {
     const thl = REF.thigh_len * bodyScale * thighRatio;
     const shl = REF.shin_len * bodyScale * shinRatio;
     const tl  = REF.torso_len * bodyScale * torsoRatio;
-    const sw  = REF.shoulder_width * bodyScale;
-    const ual = REF.upper_arm * bodyScale * armRatio;
-    const fal = REF.forearm * bodyScale * armRatio;
+    const sw  = REF.shoulder_width * bodyScale * (shoulderWidthRatio || 1.0);
+    const ual = REF.upper_arm * bodyScale * (upperArmRatio || 1.0);
+    const fal = REF.forearm * bodyScale * (forearmRatio || 1.0);
     const headH = REF.head_offset * bodyScale;
 
     const kpts = new Float64Array(17 * 3);
@@ -700,7 +951,29 @@ function computeSquatPose(phase, params) {
     const hipMidX = (lHip[0] + rHip[0]) / 2;
     const hipMidY = (lHip[1] + rHip[1]) / 2;
 
-    const totalTrunkLean = baseTrunkLean + extraLeanRad;
+    let totalTrunkLean;
+    if (bw && bw > 0) {
+        // Solve for trunk lean that keeps barbell directly over midfoot.
+        // Midfoot x = ankle_x + (footLen/2 - heelOffset) along foot forward direction.
+        const heelOffset = 0.06;
+        const midfootX = (REF.foot_len / 2 - heelOffset) * Math.cos(toeOutRad);
+
+        // Bar x as a function of lean angle θ:
+        //   barX = hipMidX + (tl + 0.04)*sin(θ) - 0.05*cos(θ)
+        // Solve A*sin(θ) + B*cos(θ) = C  →  θ = asin(C/R) - φ
+        const A = tl + 0.04;
+        const B = -0.05;
+        const C = midfootX - hipMidX;
+        const R = Math.sqrt(A * A + B * B);
+        const phi = Math.atan2(B, A);
+        const sinArg = Math.max(-1, Math.min(1, C / R));
+        const barMidfootLean = Math.asin(sinArg) - phi;
+
+        totalTrunkLean = Math.max(0, barMidfootLean + extraLeanRad);
+    } else {
+        totalTrunkLean = baseTrunkLean + extraLeanRad;
+    }
+
     const shoulderMidX = hipMidX + tl * Math.sin(totalTrunkLean);
     const shoulderMidY = hipMidY + tl * Math.cos(totalTrunkLean);
 
@@ -719,25 +992,413 @@ function computeSquatPose(phase, params) {
     const lShoulder = get(5);
     const rShoulder = get(6);
 
-    const armForwardAngle = totalTrunkLean + 1.2;
-    const armDownAngle = 0.3;
+    if (bw && bw > 0) {
+        // Back squat grip: wrists grip the bar at ~1.3x shoulder width
+        // Bar position must match getBarbellPosition() offsets
+        const upAlongTrunk = 0.04;
+        const backPerpTrunk = 0.05;
+        const sL = Math.sin(totalTrunkLean);
+        const cL = Math.cos(totalTrunkLean);
+        const barX = shoulderMidX + upAlongTrunk * sL + backPerpTrunk * (-cL);
+        const barY = shoulderMidY + upAlongTrunk * cL + backPerpTrunk * sL;
+        const gripOffsetZ = sw * 0.65; // 1.3x shoulder width total grip
+        const wristLx = barX, wristLy = barY, wristLz = -gripOffsetZ;
+        const wristRx = barX, wristRy = barY, wristRz =  gripOffsetZ;
 
-    const elbowFwdX = ual * Math.sin(armForwardAngle);
-    const elbowFwdY = -ual * Math.sin(armDownAngle);
-    set(7, lShoulder[0] + elbowFwdX, lShoulder[1] + elbowFwdY, lShoulder[2]);
-    set(8, rShoulder[0] + elbowFwdX, rShoulder[1] + elbowFwdY, rShoulder[2]);
+        // Solve 2-bone IK for each arm: shoulder -> elbow -> wrist
+        // Elbow points down and back
+        function solveArmIK(sx, sy, sz, wx, wy, wz, upperLen, foreLen) {
+            const dx = wx - sx, dy = wy - sy, dz = wz - sz;
+            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            const clampedDist = Math.min(dist, upperLen + foreLen - 0.001);
 
-    const lElbow = get(7);
-    const rElbow = get(8);
-    set(9,  lElbow[0] + fal * 0.15, lElbow[1] - fal * 0.3, lElbow[2]);
-    set(10, rElbow[0] + fal * 0.15, rElbow[1] - fal * 0.3, rElbow[2]);
+            // Law of cosines: elbow angle
+            const cosElbow = (upperLen*upperLen + foreLen*foreLen - clampedDist*clampedDist) / (2 * upperLen * foreLen);
+            const elbowAngle = Math.acos(Math.max(-1, Math.min(1, cosElbow)));
+
+            // Angle at shoulder (law of cosines)
+            const cosShoulder = (upperLen*upperLen + clampedDist*clampedDist - foreLen*foreLen) / (2 * upperLen * clampedDist);
+            const shoulderAngle = Math.acos(Math.max(-1, Math.min(1, cosShoulder)));
+
+            // Direction from shoulder to wrist
+            const len = clampedDist || 1;
+            const ux = dx/len, uy = dy/len, uz = dz/len;
+
+            // Bend plane: elbow points downward/backward
+            // Use "down and back" vector as hint for bend plane
+            let hx = -Math.sin(totalTrunkLean), hy = -0.8, hz = 0;
+            const hLen = Math.sqrt(hx*hx + hy*hy + hz*hz);
+            hx /= hLen; hy /= hLen; hz /= hLen;
+
+            // Perpendicular to upper arm direction in bend plane
+            // p = hint - (hint dot u)*u
+            const dot = hx*ux + hy*uy + hz*uz;
+            let px = hx - dot*ux, py = hy - dot*uy, pz = hz - dot*uz;
+            const pLen = Math.sqrt(px*px + py*py + pz*pz) || 1;
+            px /= pLen; py /= pLen; pz /= pLen;
+
+            // Elbow position: rotate by shoulderAngle from shoulder toward p direction
+            const ex = sx + upperLen*(ux*Math.cos(shoulderAngle) + px*Math.sin(shoulderAngle));
+            const ey = sy + upperLen*(uy*Math.cos(shoulderAngle) + py*Math.sin(shoulderAngle));
+            const ez = sz + upperLen*(uz*Math.cos(shoulderAngle) + pz*Math.sin(shoulderAngle));
+
+            return { ex, ey, ez };
+        }
+
+        const lElbowResult = solveArmIK(lShoulder[0], lShoulder[1], lShoulder[2], wristLx, wristLy, wristLz, ual, fal);
+        const rElbowResult = solveArmIK(rShoulder[0], rShoulder[1], rShoulder[2], wristRx, wristRy, wristRz, ual, fal);
+
+        set(7, lElbowResult.ex, lElbowResult.ey, lElbowResult.ez);
+        set(8, rElbowResult.ex, rElbowResult.ey, rElbowResult.ez);
+        set(9, wristLx, wristLy, wristLz);
+        set(10, wristRx, wristRy, wristRz);
+    } else if (shoulderFlex !== undefined && shoulderFlex !== null) {
+        // Arm positioning from real data: shoulder flexion + elbow flexion
+        // shoulderFlex: 0° = arm along trunk, 90° = arm forward horizontal
+        // elbowFlex: 0° = straight, 90° = right angle bend
+        const sf = (shoulderFlex * profile) * deg2rad;
+        const ef = (elbowFlex != null ? elbowFlex * profile : 0) * deg2rad;
+
+        // Trunk-local frame: "down" along trunk, "forward" perpendicular
+        const trunkDirX = Math.sin(totalTrunkLean);
+        const trunkDirY = Math.cos(totalTrunkLean);
+        const trunkDownX = -trunkDirX;
+        const trunkDownY = -trunkDirY;
+        const trunkFwdX = trunkDirY;
+        const trunkFwdY = -trunkDirX;
+
+        // Upper arm direction: rotate from trunk-down by shoulder flex toward forward
+        const uaDirX = trunkDownX * Math.cos(sf) + trunkFwdX * Math.sin(sf);
+        const uaDirY = trunkDownY * Math.cos(sf) + trunkFwdY * Math.sin(sf);
+
+        for (const [sIdx, eIdx, wIdx] of [[5, 7, 9], [6, 8, 10]]) {
+            const s = get(sIdx);
+            const ex = s[0] + ual * uaDirX;
+            const ey = s[1] + ual * uaDirY;
+            set(eIdx, ex, ey, s[2]);
+
+            // Forearm: bend elbow in the same sagittal plane
+            const faDirX = uaDirX * Math.cos(ef) + (trunkFwdX * Math.cos(sf) - trunkDownX * Math.sin(sf)) * Math.sin(ef);
+            const faDirY = uaDirY * Math.cos(ef) + (trunkFwdY * Math.cos(sf) - trunkDownY * Math.sin(sf)) * Math.sin(ef);
+            set(wIdx, ex + fal * faDirX, ey + fal * faDirY, s[2]);
+        }
+    } else {
+        // Default hanging arms
+        const armForwardAngle = totalTrunkLean + 1.2;
+        const armDownAngle = 0.3;
+
+        const elbowFwdX = ual * Math.sin(armForwardAngle);
+        const elbowFwdY = -ual * Math.sin(armDownAngle);
+        set(7, lShoulder[0] + elbowFwdX, lShoulder[1] + elbowFwdY, lShoulder[2]);
+        set(8, rShoulder[0] + elbowFwdX, rShoulder[1] + elbowFwdY, rShoulder[2]);
+
+        const lElbow = get(7);
+        const rElbow = get(8);
+        set(9,  lElbow[0] + fal * 0.15, lElbow[1] - fal * 0.3, lElbow[2]);
+        set(10, rElbow[0] + fal * 0.15, rElbow[1] - fal * 0.3, rElbow[2]);
+    }
 
     const avgKneeDeg = kneeFlexDeg;
     const trunkAngleDeg = 180 - (totalTrunkLean * rad2deg);
     const valgusActiveDeg = kneeValgus * profile;
     const dorsiDeg = ankleDF * rad2deg;
+    const totalTrunkLeanDeg = totalTrunkLean * rad2deg;
 
-    return { kpts, avgKneeDeg, trunkAngleDeg, valgusActiveDeg, dorsiDeg };
+    return { kpts, avgKneeDeg, trunkAngleDeg, valgusActiveDeg, dorsiDeg, totalTrunkLeanDeg, hipMidX, hipMidY, shoulderMidX, shoulderMidY, toeOutRad, tl, sw, totalTrunkLean };
+}
+
+// =========================================================================
+// Center of Mass Computation
+// =========================================================================
+
+function computeCOM(kpts, bw, bodyMass) {
+    function get(idx) {
+        return { x: kpts[idx*3], y: kpts[idx*3+1], z: kpts[idx*3+2] };
+    }
+
+    const lShoulder = get(5);
+    const rShoulder = get(6);
+    const lHip = get(11);
+    const rHip = get(12);
+
+    // Midpoints for trunk computation
+    const shoulderMid = { x: (lShoulder.x+rShoulder.x)/2, y: (lShoulder.y+rShoulder.y)/2, z: (lShoulder.z+rShoulder.z)/2 };
+    const hipMid = { x: (lHip.x+rHip.x)/2, y: (lHip.y+rHip.y)/2, z: (lHip.z+rHip.z)/2 };
+
+    const segmentCOMs = {};
+
+    // Head: use joint 0 position
+    segmentCOMs.head = get(0);
+
+    // Trunk: midpoint of shoulder_mid and hip_mid
+    segmentCOMs.trunk = {
+        x: (shoulderMid.x + hipMid.x) / 2,
+        y: (shoulderMid.y + hipMid.y) / 2,
+        z: (shoulderMid.z + hipMid.z) / 2,
+    };
+
+    // Arm segments: midpoint of bounding joints
+    for (const [key, seg] of Object.entries(SEGMENT_MASS)) {
+        if (!seg.joints || seg.joints[0] === null) continue;
+        const a = get(seg.joints[0]);
+        if (seg.joints[1] === null) continue;
+        const b = get(seg.joints[1]);
+        if (key !== 'head' && key !== 'trunk' && !key.startsWith('foot')) {
+            segmentCOMs[key] = {
+                x: (a.x+b.x)/2,
+                y: (a.y+b.y)/2,
+                z: (a.z+b.z)/2,
+            };
+        }
+    }
+
+    // Feet: ankle + half foot-length forward in toe-out direction
+    // Left ankle = joint 15, right ankle = 16
+    const ankleL = get(15);
+    const ankleR = get(16);
+
+    // Determine toe-out from the current positions (approximate from shin direction)
+    const kneeL = get(13);
+    const kneeR = get(14);
+    const footLen = REF.foot_len;
+
+    // Compute forward direction for each foot from ankle-to-knee projection
+    function footForwardDir(ankle, knee) {
+        const dx = ankle.x - knee.x;
+        const dz = ankle.z - knee.z;
+        const len = Math.sqrt(dx*dx + dz*dz) || 1;
+        return { x: dx/len, z: dz/len };
+    }
+
+    const fwdL = footForwardDir(ankleL, kneeL);
+    const fwdR = footForwardDir(ankleR, kneeR);
+
+    segmentCOMs.foot_l = {
+        x: ankleL.x + fwdL.x * footLen * 0.5,
+        y: ankleL.y,
+        z: ankleL.z + fwdL.z * footLen * 0.5,
+    };
+    segmentCOMs.foot_r = {
+        x: ankleR.x + fwdR.x * footLen * 0.5,
+        y: ankleR.y,
+        z: ankleR.z + fwdR.z * footLen * 0.5,
+    };
+
+    // Weighted average
+    let totalFrac = 0;
+    const bodyFracs = {};
+    for (const [key, seg] of Object.entries(SEGMENT_MASS)) {
+        if (segmentCOMs[key]) {
+            bodyFracs[key] = seg.frac;
+            totalFrac += seg.frac;
+        }
+    }
+
+    // Normalize body fracs
+    for (const k of Object.keys(bodyFracs)) bodyFracs[k] /= totalFrac;
+
+    // Total system mass fraction split
+    const barFrac = bw > 0 ? bw / (bodyMass + bw) : 0;
+    const bodyFracTotal = 1 - barFrac;
+
+    let cx = 0, cy = 0, cz = 0;
+    for (const [key, frac] of Object.entries(bodyFracs)) {
+        const com = segmentCOMs[key];
+        if (!com) continue;
+        cx += com.x * frac * bodyFracTotal;
+        cy += com.y * frac * bodyFracTotal;
+        cz += com.z * frac * bodyFracTotal;
+    }
+
+    // Add barbell contribution if present
+    if (bw > 0 && window._barbellPos) {
+        cx += window._barbellPos.x * barFrac;
+        cy += window._barbellPos.y * barFrac;
+        cz += window._barbellPos.z * barFrac;
+    }
+
+    return { x: cx, y: cy, z: cz, groundX: cx, groundZ: cz };
+}
+
+// =========================================================================
+// Base of Support
+// =========================================================================
+
+function computeBaseOfSupport(kpts, toeOutRad, footLen) {
+    function get(idx) {
+        return { x: kpts[idx*3], y: kpts[idx*3+1], z: kpts[idx*3+2] };
+    }
+
+    const ankleL = get(15);
+    const ankleR = get(16);
+    const kneeL = get(13);
+    const kneeR = get(14);
+
+    // Half width of foot
+    const halfWidth = 0.05;
+    const heelOffset = 0.06; // behind ankle
+    const toeOffset = footLen - heelOffset;
+
+    function footRect(ankle, knee) {
+        // Forward direction from knee-to-ankle projection on XZ
+        const dx = ankle.x - knee.x;
+        const dz = ankle.z - knee.z;
+        const len = Math.sqrt(dx*dx + dz*dz) || 1;
+        const fx = dx/len, fz = dz/len;
+        // Lateral direction (perpendicular on XZ)
+        const lx = -fz, lz = fx;
+
+        // 4 corners of foot rectangle
+        return [
+            { x: ankle.x - fx*heelOffset - lx*halfWidth, z: ankle.z - fz*heelOffset - lz*halfWidth },
+            { x: ankle.x - fx*heelOffset + lx*halfWidth, z: ankle.z - fz*heelOffset + lz*halfWidth },
+            { x: ankle.x + fx*toeOffset  + lx*halfWidth, z: ankle.z + fz*toeOffset  + lz*halfWidth },
+            { x: ankle.x + fx*toeOffset  - lx*halfWidth, z: ankle.z + fz*toeOffset  - lz*halfWidth },
+        ];
+    }
+
+    const leftFoot  = footRect(ankleL, kneeL);
+    const rightFoot = footRect(ankleR, kneeR);
+
+    // Combine all 8 points and compute convex hull (simple gift-wrapping)
+    const allPts = [...leftFoot, ...rightFoot];
+    return convexHull2D(allPts);
+}
+
+function convexHull2D(points) {
+    if (points.length <= 3) return points;
+    // Find leftmost point
+    let start = 0;
+    for (let i = 1; i < points.length; i++) {
+        if (points[i].x < points[start].x || (points[i].x === points[start].x && points[i].z < points[start].z)) start = i;
+    }
+
+    const hull = [];
+    let cur = start;
+    do {
+        hull.push(points[cur]);
+        let next = (cur + 1) % points.length;
+        for (let i = 0; i < points.length; i++) {
+            if (i === cur || i === next) continue;
+            const cross = (points[next].x - points[cur].x) * (points[i].z - points[cur].z)
+                        - (points[next].z - points[cur].z) * (points[i].x - points[cur].x);
+            if (cross < 0) next = i;
+        }
+        cur = next;
+    } while (cur !== start && hull.length < points.length + 1);
+
+    return hull;
+}
+
+function isBalanced(comGround, bosPolygon) {
+    const px = comGround.groundX;
+    const pz = comGround.groundZ;
+
+    // Ray casting point-in-polygon
+    let inside = false;
+    const n = bosPolygon.length;
+    for (let i = 0, j = n-1; i < n; j = i++) {
+        const xi = bosPolygon[i].x, zi = bosPolygon[i].z;
+        const xj = bosPolygon[j].x, zj = bosPolygon[j].z;
+        const intersect = ((zi > pz) !== (zj > pz)) && (px < (xj - xi) * (pz - zi) / (zj - zi) + xi);
+        if (intersect) inside = !inside;
+    }
+
+    // Nearest edge distance (signed, approximate margin)
+    let minDist = Infinity;
+    for (let i = 0, j = n-1; i < n; j = i++) {
+        const ax = bosPolygon[j].x, az = bosPolygon[j].z;
+        const bx = bosPolygon[i].x, bz = bosPolygon[i].z;
+        const ex = bx-ax, ez = bz-az;
+        const t = Math.max(0, Math.min(1, ((px-ax)*ex + (pz-az)*ez) / (ex*ex+ez*ez+1e-9)));
+        const dx = px - (ax + t*ex), dz = pz - (az + t*ez);
+        const d = Math.sqrt(dx*dx+dz*dz);
+        if (d < minDist) minDist = d;
+    }
+
+    // Approximate BOS "radius" for margin ratio
+    let cx = 0, cz = 0;
+    for (const pt of bosPolygon) { cx += pt.x; cz += pt.z; }
+    cx /= n; cz /= n;
+    let avgR = 0;
+    for (const pt of bosPolygon) avgR += Math.sqrt((pt.x-cx)*(pt.x-cx)+(pt.z-cz)*(pt.z-cz));
+    avgR /= n;
+
+    const marginRatio = inside ? minDist / (avgR + 1e-9) : -minDist / (avgR + 1e-9);
+
+    return { inside, marginRatio };
+}
+
+// =========================================================================
+// Torso Uprightness Optimization
+// =========================================================================
+
+function computeOptimalTorsoAngle(params, bw, bMass) {
+    // Find minimum trunk lean at peak (phase=0.5) where COM stays inside BOS with 20% margin
+    const peakPhase = 0.5;
+    const SAFETY_MARGIN = 0.20;
+
+    for (let leanDeg = 0; leanDeg <= 60; leanDeg += 0.5) {
+        const testParams = { ...params, forwardLean: leanDeg };
+        const pose = computeSquatPose(peakPhase, testParams);
+        const bos = computeBaseOfSupport(pose.kpts, pose.toeOutRad, REF.foot_len);
+        const com = computeCOM(pose.kpts, bw, bMass);
+        const bal = isBalanced(com, bos);
+        if (bal.inside && bal.marginRatio >= SAFETY_MARGIN) {
+            return leanDeg;
+        }
+    }
+    return null; // Never balanced at this depth
+}
+
+// =========================================================================
+// Barbell Positioning
+// =========================================================================
+
+function getBarbellPosition(poseResult) {
+    // High-bar position: on upper traps, behind the neck, above shoulder line
+    // trunkDir (hip→shoulder): (sin L, cos L, 0); backDir (perpendicular, behind body): (-cos L, sin L, 0)
+    const { shoulderMidX, shoulderMidY, totalTrunkLean, sw } = poseResult;
+    const upAlongTrunk = 0.04;   // 4cm up toward head along trunk axis
+    const backPerpTrunk = 0.05;  // 5cm behind, perpendicular to trunk — clears neck
+    const s = Math.sin(totalTrunkLean);
+    const c = Math.cos(totalTrunkLean);
+    const bx = shoulderMidX + upAlongTrunk * s + backPerpTrunk * (-c);
+    const by = shoulderMidY + upAlongTrunk * c + backPerpTrunk * s;
+    const bz = 0; // centered between shoulders
+
+    window._barbellPos = { x: bx, y: by, z: bz };
+    return { x: bx, y: by, z: bz, trunkLean: totalTrunkLean, sw };
+}
+
+function updateBarbellVisuals(bw, barPos, sw) {
+    if (!bw || bw <= 0) {
+        barbellGroup.visible = false;
+        return;
+    }
+    barbellGroup.visible = true;
+
+    // Bar length = 1.2 * shoulder_width * 2
+    const barLen = sw * 2.4;
+    barMesh.scale.set(1, barLen, 1);
+
+    barbellGroup.position.set(barPos.x, barPos.y, barPos.z);
+    barbellGroup.rotation.set(0, 0, 0);
+
+    // Plate radius scales with weight: 0.05 at 0kg, 0.20 at 200kg
+    const plateR = 0.05 + (bw / 200) * 0.15;
+    const halfBar = barLen / 2;
+    const spacings = [0.10, 0.16]; // inner and outer plate positions along bar
+
+    for (let i = 0; i < 4; i++) {
+        const side = i < 2 ? -1 : 1; // L/R
+        const slot = i % 2;
+        const offsetZ = side * (halfBar - 0.06 - spacings[slot]);
+
+        // Update plate geometry scale (radius in X/Y plane, thickness along Z)
+        plateMeshes[i].scale.set(plateR / 0.05, plateR / 0.05, 1);
+        plateMeshes[i].position.set(0, 0, offsetZ);
+    }
 }
 
 // =========================================================================
@@ -766,12 +1427,15 @@ function sevBadge(sev) {
 // =========================================================================
 // State Machine: SETUP → DIAGNOSING → TESTING
 // =========================================================================
-let appState = 'setup'; // 'setup' | 'diagnosing' | 'testing'
+let appState = 'setup';
 let playing = false;
 let phase = 0;
 let lastTime = performance.now();
 
-let baseline = null; // { peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi }
+let baseline = null;
+
+// Track fall trigger guard (one trigger per animation cycle)
+let fallTriggeredThisCycle = false;
 
 function getProportionParams() {
     return {
@@ -779,20 +1443,31 @@ function getProportionParams() {
         torsoRatio: parseFloat(document.getElementById('torso-ratio').value),
         thighRatio: parseFloat(document.getElementById('thigh-ratio').value),
         shinRatio: parseFloat(document.getElementById('shin-ratio').value),
-        armRatio: parseFloat(document.getElementById('arm-ratio').value),
+        upperArmRatio: parseFloat(document.getElementById('upper-arm-ratio').value),
+        forearmRatio: parseFloat(document.getElementById('forearm-ratio').value),
+        shoulderWidthRatio: parseFloat(document.getElementById('shoulder-width-ratio').value),
     };
 }
 
 function getParams() {
-    return {
+    const params = {
         maxKneeFlex: parseFloat(document.getElementById('max-knee-flex').value),
-        forwardLean: appState === 'testing' ? parseFloat(document.getElementById('forward-lean').value) : 0,
+        forwardLean: appState === 'diagnosing' ? 0 : parseFloat(document.getElementById('forward-lean').value),
         kneeValgus: appState === 'testing' ? parseFloat(document.getElementById('knee-valgus').value) : 0,
         stanceWidth: parseFloat(document.getElementById('stance-width').value),
         toeOut: parseFloat(document.getElementById('toe-out').value),
         dorsiRatio: parseFloat(document.getElementById('dorsi-ratio').value),
+        barbellWeight: parseFloat(document.getElementById('barbell-weight').value),
+        bodyMass: parseFloat(document.getElementById('body-mass').value),
         ...getProportionParams(),
     };
+    if (document.body.dataset.shoulderFlex) {
+        params.shoulderFlex = parseFloat(document.body.dataset.shoulderFlex);
+    }
+    if (document.body.dataset.elbowFlex) {
+        params.elbowFlex = parseFloat(document.body.dataset.elbowFlex);
+    }
+    return params;
 }
 
 function setAppState(newState) {
@@ -827,6 +1502,8 @@ function setAppState(newState) {
         progressBar.style.display = 'none';
         playing = false;
         phase = 0;
+        fallTriggeredThisCycle = false;
+        resetFromFall();
     } else if (newState === 'diagnosing') {
         badge.textContent = 'DIAGNOSING';
         badge.className = 'state-diagnosing';
@@ -854,11 +1531,12 @@ function setAppState(newState) {
         playing = false;
         document.getElementById('play-btn').innerHTML = '&#9654;';
         document.getElementById('start-anim-btn').style.display = '';
+        fallTriggeredThisCycle = false;
     }
 }
 
 // =========================================================================
-// Diagnosis: run one clean squat, capture baseline
+// Diagnosis
 // =========================================================================
 
 function runDiagnosis() {
@@ -905,7 +1583,6 @@ function runDiagnosis() {
 function finishDiagnosis(peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi) {
     baseline = { peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi };
 
-    // Compute thresholds from baseline (matching pipeline: squat.py apply_baseline)
     LEAN_THRESHOLDS = {
         mild: peakTrunkOffset + 10,
         moderate: peakTrunkOffset + 15,
@@ -918,7 +1595,6 @@ function finishDiagnosis(peakTrunkOffset, peakValgus, peakKneeFlex, peakDorsi) {
         severe: peakValgus + 15,
     };
 
-    // Display baseline results
     const resultsEl = document.getElementById('baseline-results');
     resultsEl.innerHTML = `
         <span class="bl-label">Peak trunk offset:</span> <span class="bl-val">${peakTrunkOffset.toFixed(1)}°</span><br>
@@ -1015,12 +1691,70 @@ function updateSkeleton(poseResult) {
 }
 
 // =========================================================================
+// COM / BOS Visual Updates
+// =========================================================================
+
+function updateCOMBOSVisuals(comData, bosPolygon, balanced) {
+    if (!comData || !bosPolygon) {
+        comSphere.visible = false;
+        comDisc.visible = false;
+        comLine.visible = false;
+        bosLine.visible = false;
+        return;
+    }
+
+    // COM sphere
+    comSphere.position.set(comData.x, comData.y, comData.z);
+    comSphere.visible = true;
+
+    // Ground disc
+    comDisc.position.set(comData.groundX, 0.002, comData.groundZ);
+    comDisc.visible = true;
+
+    // Vertical dashed line
+    const linePositions = new Float32Array([comData.groundX, 0.003, comData.groundZ, comData.x, comData.y, comData.z]);
+    comLineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+    comLine.computeLineDistances();
+    comLine.visible = true;
+
+    // BOS polygon
+    const bosPositions = [];
+    for (const pt of bosPolygon) {
+        bosPositions.push(pt.x, 0.002, pt.z);
+    }
+    bosGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(bosPositions), 3));
+    bosLine.visible = true;
+
+    // Color code: green = balanced, red = unbalanced
+    comSphere.material.color.setHex(balanced.inside ? 0x22ff22 : 0xff2222);
+    comDisc.material.color.setHex(balanced.inside ? 0x22ff22 : 0xff2222);
+    bosLineMat.color.setHex(balanced.inside ? 0x44ff88 : 0xff6644);
+}
+
+function updateGhostTorso(poseResult, optimalLeanDeg) {
+    if (optimalLeanDeg === null || appState !== 'testing') {
+        ghostTorsoLine.visible = false;
+        return;
+    }
+
+    // Compute ghost torso at optimal lean angle
+    const testParams = { ...getParams(), forwardLean: optimalLeanDeg };
+    const ghostPose = computeSquatPose(phase, testParams);
+    const { hipMidX, hipMidY, shoulderMidX, shoulderMidY } = ghostPose;
+
+    const ghostPositions = new Float32Array([hipMidX, hipMidY, 0, shoulderMidX, shoulderMidY, 0]);
+    ghostTorsoGeo.setAttribute('position', new THREE.Float32BufferAttribute(ghostPositions, 3));
+    ghostTorsoLine.computeLineDistances();
+    ghostTorsoLine.visible = true;
+}
+
+// =========================================================================
 // Info Overlay
 // =========================================================================
 
-function updateInfoOverlay(poseResult, sevs) {
+function updateInfoOverlay(poseResult, sevs, comData, balanced, optimalLeanDeg) {
     const overlay = document.getElementById('info-overlay');
-    const { avgKneeDeg, trunkAngleDeg, valgusActiveDeg, dorsiDeg } = poseResult;
+    const { avgKneeDeg, trunkAngleDeg, valgusActiveDeg, dorsiDeg, totalTrunkLeanDeg } = poseResult;
     const leanOffset = (180 - trunkAngleDeg).toFixed(1);
 
     let stateLabel = '';
@@ -1033,6 +1767,33 @@ function updateInfoOverlay(poseResult, sevs) {
         baselineInfo = `<span class="label">Baseline offset:</span> <span class="val">${baseline.peakTrunkOffset.toFixed(1)}°</span><br>`;
     }
 
+    let balanceInfo = '';
+    if (comData && balanced) {
+        const marginPct = (balanced.marginRatio * 100).toFixed(1);
+        const cls = balanced.inside ? 'balance-ok' : 'balance-bad';
+        balanceInfo = `<span class="label">Balance:</span> <span class="${cls}">${balanced.inside ? 'OK' : 'UNSTABLE'}</span> (margin: ${marginPct}%)<br>
+        <span class="label">COM (x,z):</span> <span class="val">${comData.groundX.toFixed(3)}, ${comData.groundZ.toFixed(3)}</span><br>`;
+    }
+
+    let barTrackInfo = '';
+    if (barbellWeight > 0 && window._barbellPos) {
+        const heelOff = 0.06;
+        const mfX = (REF.foot_len / 2 - heelOff) * Math.cos(poseResult.toeOutRad);
+        const drift = (window._barbellPos.x - mfX) * 100;
+        const driftCls = Math.abs(drift) < 0.5 ? 'balance-ok' : 'balance-bad';
+        barTrackInfo = `<span class="label">Bar→midfoot drift:</span> <span class="${driftCls}">${drift.toFixed(1)} cm</span><br>`;
+    }
+
+    let torsoOptInfo = '';
+    if (appState === 'testing' && optimalLeanDeg !== null && optimalLeanDeg !== undefined) {
+        const currentLean = totalTrunkLeanDeg;
+        const diff = Math.abs(currentLean - optimalLeanDeg);
+        let cls = 'torso-opt-good';
+        if (diff > 15) cls = 'torso-opt-bad';
+        else if (diff > 5) cls = 'torso-opt-warn';
+        torsoOptInfo = `<span class="label">Optimal trunk lean:</span> <span class="${cls}">${optimalLeanDeg.toFixed(1)}° | Current: ${currentLean.toFixed(1)}°</span><br>`;
+    }
+
     overlay.innerHTML = `
         ${stateLabel}<br>
         <span class="label">Knee Flex:</span> <span class="val">${avgKneeDeg.toFixed(1)}°</span><br>
@@ -1042,6 +1803,9 @@ function updateInfoOverlay(poseResult, sevs) {
         ${baselineInfo}
         <span class="label">Knee Valgus:</span> <span class="val">${valgusActiveDeg.toFixed(1)}°</span>
         ${appState === 'testing' && sevs.valgusSev !== 'none' ? sevBadge(sevs.valgusSev) : ''}<br>
+        ${balanceInfo}
+        ${barTrackInfo}
+        ${torsoOptInfo}
         ${appState === 'testing' ? `<span class="label">Faults:</span>
         ${sevs.leanSev !== 'none' || sevs.valgusSev !== 'none'
             ? `<span class="fault-active">${[
@@ -1100,7 +1864,9 @@ bindSlider('body-scale', 'body-scale-val', '', 2);
 bindSlider('torso-ratio', 'torso-ratio-val', '', 2);
 bindSlider('thigh-ratio', 'thigh-ratio-val', '', 2);
 bindSlider('shin-ratio', 'shin-ratio-val', '', 2);
-bindSlider('arm-ratio', 'arm-ratio-val', '', 2);
+bindSlider('upper-arm-ratio', 'upper-arm-ratio-val', '', 2);
+bindSlider('forearm-ratio', 'forearm-ratio-val', '', 2);
+bindSlider('shoulder-width-ratio', 'shoulder-width-ratio-val', '', 2);
 bindSlider('anim-speed', 'anim-speed-val', 'x', 1);
 bindSlider('lean-prob', 'lean-prob-val', '%', 0);
 bindSlider('lean-min', 'lean-min-val', '°', 0);
@@ -1108,6 +1874,81 @@ bindSlider('lean-max', 'lean-max-val', '°', 0);
 bindSlider('valgus-prob', 'valgus-prob-val', '%', 0);
 bindSlider('valgus-min', 'valgus-min-val', '°', 1);
 bindSlider('valgus-max', 'valgus-max-val', '°', 1);
+bindSlider('barbell-weight', 'barbell-weight-val', ' kg', 0);
+bindSlider('body-mass', 'body-mass-val', ' kg', 0);
+
+// Apply URL query params (used by "Open in Sandbox" from replay viewer)
+(function applyURLParams() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (!urlParams.toString()) return;
+    let anyApplied = false;
+    const sliderMap = {
+        bodyScale:         { id: 'body-scale',           valId: 'body-scale-val',           suffix: '',  dec: 2 },
+        torsoRatio:        { id: 'torso-ratio',          valId: 'torso-ratio-val',          suffix: '',  dec: 2 },
+        thighRatio:        { id: 'thigh-ratio',          valId: 'thigh-ratio-val',          suffix: '',  dec: 2 },
+        shinRatio:         { id: 'shin-ratio',           valId: 'shin-ratio-val',           suffix: '',  dec: 2 },
+        upperArmRatio:     { id: 'upper-arm-ratio',      valId: 'upper-arm-ratio-val',      suffix: '',  dec: 2 },
+        forearmRatio:      { id: 'forearm-ratio',        valId: 'forearm-ratio-val',        suffix: '',  dec: 2 },
+        shoulderWidthRatio:{ id: 'shoulder-width-ratio', valId: 'shoulder-width-ratio-val', suffix: '',  dec: 2 },
+        stanceWidth:       { id: 'stance-width',         valId: 'stance-width-val',         suffix: 'x', dec: 2 },
+        toeOut:            { id: 'toe-out',              valId: 'toe-out-val',              suffix: '°', dec: 0 },
+        dorsiRatio:        { id: 'dorsi-ratio',          valId: 'dorsi-ratio-val',          suffix: '',  dec: 2 },
+        maxKneeFlex:       { id: 'max-knee-flex',        valId: 'max-knee-flex-val',        suffix: '°', dec: 0 },
+        forwardLean:       { id: 'forward-lean',         valId: 'forward-lean-val',         suffix: '°', dec: 0 },
+        kneeValgus:        { id: 'knee-valgus',          valId: 'knee-valgus-val',          suffix: '°', dec: 1 },
+    };
+    // Non-slider params stored as data attributes on body for FK consumption
+    const directParams = ['shoulderFlex', 'elbowFlex'];
+    for (const p of directParams) {
+        const val = urlParams.get(p);
+        if (val !== null) {
+            document.body.dataset[p] = val;
+            anyApplied = true;
+        }
+    }
+    for (const [param, cfg] of Object.entries(sliderMap)) {
+        const val = urlParams.get(param);
+        if (val === null) continue;
+        const slider = document.getElementById(cfg.id);
+        const valSpan = document.getElementById(cfg.valId);
+        if (slider) {
+            slider.value = val;
+            if (valSpan) {
+                const v = parseFloat(val);
+                valSpan.textContent = cfg.dec > 0 ? v.toFixed(cfg.dec) + cfg.suffix : v + cfg.suffix;
+            }
+            anyApplied = true;
+        }
+    }
+
+    if (anyApplied) {
+        // Run a synthetic diagnosis with 0 lean/0 valgus to compute baseline,
+        // then advance straight to testing with the athlete's real params.
+        const savedLean = document.getElementById('forward-lean').value;
+        const savedValgus = document.getElementById('knee-valgus').value;
+        document.getElementById('forward-lean').value = 0;
+        document.getElementById('knee-valgus').value = 0;
+
+        // Compute baseline peak angles from a clean squat at these proportions
+        const baseParams = getParams();
+        let peakTrunk = 0, peakValg = 0, peakKnee = 0, peakDorsi = 0;
+        for (let t = 0; t <= 1.0; t += 0.02) {
+            const r = computeSquatPose(t, baseParams);
+            const to = 180 - r.trunkAngleDeg;
+            if (to > peakTrunk) peakTrunk = to;
+            if (r.avgKneeDeg > peakKnee) peakKnee = r.avgKneeDeg;
+            if (r.dorsiDeg > peakDorsi) peakDorsi = r.dorsiDeg;
+        }
+
+        // Restore the athlete's actual lean/valgus values
+        document.getElementById('forward-lean').value = savedLean;
+        document.getElementById('forward-lean-val').textContent = savedLean + '°';
+        document.getElementById('knee-valgus').value = savedValgus;
+        document.getElementById('knee-valgus-val').textContent = parseFloat(savedValgus).toFixed(1) + '°';
+
+        finishDiagnosis(peakTrunk, peakValg, peakKnee, peakDorsi);
+    }
+})();
 
 // Phase scrubber
 const scrubber = document.getElementById('phase-scrubber');
@@ -1118,13 +1959,16 @@ scrubber.addEventListener('input', () => {
     phaseVal.textContent = phase.toFixed(2);
     playing = false;
     document.getElementById('play-btn').innerHTML = '&#9654;';
+    fallTriggeredThisCycle = false;
 });
 
 // Play/pause
 document.getElementById('play-btn').addEventListener('click', () => {
     if (appState !== 'testing') return;
+    if (isFalling) return;
     playing = !playing;
     document.getElementById('play-btn').innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+    if (playing) fallTriggeredThisCycle = false;
 });
 
 // Diagnose button
@@ -1136,15 +1980,18 @@ document.getElementById('diagnose-btn').addEventListener('click', () => {
 document.getElementById('start-anim-btn').addEventListener('click', () => {
     if (appState !== 'testing') return;
     playing = true;
+    fallTriggeredThisCycle = false;
     document.getElementById('play-btn').innerHTML = '&#9646;&#9646;';
     document.getElementById('start-anim-btn').style.display = 'none';
 });
 
-// Stop button → back to setup
+// Stop button -> back to setup
 document.getElementById('stop-btn').addEventListener('click', () => {
     playing = false;
     phase = 0;
     baseline = null;
+    isFalling = false;
+    fallTriggeredThisCycle = false;
     LEAN_THRESHOLDS = { mild: 15, moderate: 25, severe: 35 };
     VALGUS_THRESHOLDS = { mild: 8, moderate: 13, severe: 18 };
 
@@ -1153,8 +2000,17 @@ document.getElementById('stop-btn').addEventListener('click', () => {
     document.getElementById('knee-valgus').value = 0;
     document.getElementById('knee-valgus-val').textContent = '0°';
 
+    resetFromFall();
     setAppState('setup');
     renderThresholdBars();
+    barbellGroup.visible = false;
+    midfootLine.visible = false;
+    midfootDisc.visible = false;
+    comSphere.visible = false;
+    comDisc.visible = false;
+    comLine.visible = false;
+    bosLine.visible = false;
+    ghostTorsoLine.visible = false;
 });
 
 // Reset (full reset including proportions)
@@ -1162,6 +2018,8 @@ document.getElementById('reset-btn').addEventListener('click', () => {
     playing = false;
     phase = 0;
     baseline = null;
+    isFalling = false;
+    fallTriggeredThisCycle = false;
     LEAN_THRESHOLDS = { mild: 15, moderate: 25, severe: 35 };
     VALGUS_THRESHOLDS = { mild: 8, moderate: 13, severe: 18 };
 
@@ -1175,7 +2033,11 @@ document.getElementById('reset-btn').addEventListener('click', () => {
     document.getElementById('torso-ratio').value = 1.0;
     document.getElementById('thigh-ratio').value = 1.0;
     document.getElementById('shin-ratio').value = 1.0;
-    document.getElementById('arm-ratio').value = 1.0;
+    document.getElementById('upper-arm-ratio').value = 1.0;
+    document.getElementById('forearm-ratio').value = 1.0;
+    document.getElementById('shoulder-width-ratio').value = 1.0;
+    delete document.body.dataset.shoulderFlex;
+    delete document.body.dataset.elbowFlex;
     document.getElementById('anim-speed').value = 0.8;
     document.getElementById('lean-prob').value = 30;
     document.getElementById('lean-min').value = 10;
@@ -1183,22 +2045,62 @@ document.getElementById('reset-btn').addEventListener('click', () => {
     document.getElementById('valgus-prob').value = 25;
     document.getElementById('valgus-min').value = 5;
     document.getElementById('valgus-max').value = 20;
+    document.getElementById('barbell-weight').value = 0;
+    document.getElementById('barbell-weight-val').textContent = '0 kg';
+    document.getElementById('body-mass').value = 75;
+    document.getElementById('body-mass-val').textContent = '75 kg';
 
     document.querySelectorAll('input[type="range"]').forEach(el => {
         el.dispatchEvent(new Event('input'));
     });
 
+    resetFromFall();
     setAppState('setup');
     renderThresholdBars();
+    barbellGroup.visible = false;
+    midfootLine.visible = false;
+    midfootDisc.visible = false;
+    comSphere.visible = false;
+    comDisc.visible = false;
+    comLine.visible = false;
+    bosLine.visible = false;
+    ghostTorsoLine.visible = false;
 });
 
 // Export (both buttons)
 function doExport() {
+    const params = getParams();
+    const bw = params.barbellWeight;
+    const bMass = params.bodyMass;
+
+    let comExport = null;
+    let balanceExport = null;
+    let optimalExport = null;
+
+    try {
+        const peakPose = computeSquatPose(0.5, params);
+        const com = computeCOM(peakPose.kpts, bw, bMass);
+        const bos = computeBaseOfSupport(peakPose.kpts, peakPose.toeOutRad, REF.foot_len);
+        const bal = isBalanced(com, bos);
+        comExport = { x: com.x, y: com.y, z: com.z, groundX: com.groundX, groundZ: com.groundZ };
+        balanceExport = { inside: bal.inside, marginRatio: bal.marginRatio };
+        optimalExport = computeOptimalTorsoAngle(params, bw, bMass);
+    } catch (e) {}
+
     const config = {
         baseline: baseline ? { ...baseline } : null,
         computed_thresholds: {
             forward_lean: { ...LEAN_THRESHOLDS },
             knee_valgus: { ...VALGUS_THRESHOLDS },
+        },
+        physics: {
+            body_mass_kg: bMass,
+            barbell_weight_kg: bw,
+            peak_com: comExport,
+            peak_balance: balanceExport,
+            optimal_trunk_lean_deg: optimalExport,
+            bar_tracks_midfoot: bw > 0,
+            peak_trunk_lean_deg: bw > 0 && comExport ? computeSquatPose(0.5, params).totalTrunkLeanDeg : null,
         },
         faults: {
             forward_lean: {
@@ -1250,24 +2152,109 @@ resize();
 renderThresholdBars();
 setAppState('setup');
 
+// Cache for optimal torso angle (recompute when params change)
+let _cachedOptimalAngle = null;
+let _lastParamsKey = '';
+
+function getOptimalAngleCached(params) {
+    const key = JSON.stringify({
+        maxKneeFlex: params.maxKneeFlex,
+        stanceWidth: params.stanceWidth,
+        toeOut: params.toeOut,
+        dorsiRatio: params.dorsiRatio,
+        bodyScale: params.bodyScale,
+        torsoRatio: params.torsoRatio,
+        thighRatio: params.thighRatio,
+        shinRatio: params.shinRatio,
+        barbellWeight: params.barbellWeight,
+        bodyMass: params.bodyMass,
+    });
+    if (key !== _lastParamsKey) {
+        _lastParamsKey = key;
+        _cachedOptimalAngle = computeOptimalTorsoAngle(params, params.barbellWeight, params.bodyMass);
+    }
+    return _cachedOptimalAngle;
+}
+
 function animate(now) {
     requestAnimationFrame(animate);
 
     const dt = (now - lastTime) / 1000;
     lastTime = now;
 
+    // Step fall animation if active
+    if (isFalling) {
+        stepFallAnimation();
+        controls.update();
+        renderer.render(scene, camera);
+        return;
+    }
+
     if (playing && appState === 'testing') {
         const speed = parseFloat(document.getElementById('anim-speed').value);
         phase += dt * speed * 0.5;
-        if (phase > 1) phase -= 1;
+        if (phase > 1) {
+            phase -= 1;
+            fallTriggeredThisCycle = false;
+        }
         scrubber.value = phase;
         phaseVal.textContent = phase.toFixed(2);
     }
 
     const params = getParams();
+    barbellWeight = params.barbellWeight;
+    bodyMass = params.bodyMass;
+
     const poseResult = computeSquatPose(phase, params);
     const sevs = updateSkeleton(poseResult);
-    updateInfoOverlay(poseResult, sevs);
+
+    // Physics pipeline — runs in all states so users see live balance feedback
+    let comData = null, bosPolygon = null, balanced = null;
+
+    // Barbell visuals first (so COM uses updated bar position)
+    if (barbellWeight > 0) {
+        const barPos = getBarbellPosition(poseResult);
+        updateBarbellVisuals(barbellWeight, barPos, poseResult.sw);
+
+        // Midfoot target line — shows where the bar is tracking
+        const heelOffset = 0.06;
+        const midfootX = (REF.foot_len / 2 - heelOffset) * Math.cos(poseResult.toeOutRad);
+        const barTopY = barPos.y + 0.3;
+        const mfPositions = new Float32Array([midfootX, 0.003, 0, midfootX, barTopY, 0]);
+        midfootLineGeo.setAttribute('position', new THREE.Float32BufferAttribute(mfPositions, 3));
+        midfootLine.computeLineDistances();
+        midfootLine.visible = true;
+        midfootDisc.position.set(midfootX, 0.001, 0);
+        midfootDisc.visible = true;
+    } else {
+        barbellGroup.visible = false;
+        window._barbellPos = null;
+        midfootLine.visible = false;
+        midfootDisc.visible = false;
+    }
+
+    comData = computeCOM(poseResult.kpts, barbellWeight, bodyMass);
+    bosPolygon = computeBaseOfSupport(poseResult.kpts, poseResult.toeOutRad, REF.foot_len);
+    balanced = isBalanced(comData, bosPolygon);
+    updateCOMBOSVisuals(comData, bosPolygon, balanced);
+
+    // Compute optimal torso angle (cached per param set)
+    const optimalLeanDeg = appState === 'testing' ? getOptimalAngleCached(params) : null;
+
+    // Ghost torso line shows optimal trunk lean
+    updateGhostTorso(poseResult, optimalLeanDeg);
+
+    // Trigger fall if unbalanced and playing (only in testing to avoid setup-state spam)
+    if (appState === 'testing' && balanced && !balanced.inside && playing && !fallTriggeredThisCycle) {
+        fallTriggeredThisCycle = true;
+        const balErr = document.getElementById('balance-error-msg');
+        if (comData) {
+            balErr.textContent = `COM (${comData.groundX.toFixed(3)}, ${comData.groundZ.toFixed(3)}) is outside base of support.`;
+        }
+        triggerFallAnimation(comData, bosPolygon);
+    }
+
+    updateInfoOverlay(poseResult, sevs, comData, balanced, optimalLeanDeg);
 
     controls.update();
     renderer.render(scene, camera);

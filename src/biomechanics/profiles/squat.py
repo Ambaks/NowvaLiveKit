@@ -73,7 +73,7 @@ class SquatProfile(ExerciseProfile):
                 severe_cm=bt.tilt_asym_severe_cm,
             ),
             HeelRiseRule(
-                threshold_degrees=fc.heel_rise.threshold_cm * 5,
+                threshold_degrees=fc.heel_rise.threshold_cm * 10,
             ),
             ForwardLeanRule(
                 mild_threshold=fc.forward_lean.mild,
@@ -224,7 +224,7 @@ class SquatProfile(ExerciseProfile):
             elif ft_val == "heel_rise" and hasattr(rule, "threshold_degrees"):
                 peak_drop = state["peak_dorsiflexion_drop"]
                 rule.threshold_degrees = max(
-                    rule.threshold_degrees, peak_drop + 10.0
+                    rule.threshold_degrees, peak_drop + 20.0
                 )
                 logger.info(
                     "[SQUAT] Heel rise baseline: drop=%.1f° → threshold %.1f°",

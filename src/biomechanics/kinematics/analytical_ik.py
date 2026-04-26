@@ -358,15 +358,10 @@ class AnalyticalIKSolver(IKSolver):
         # Angle of shank from vertical
         shank_angle = angle_between_vectors(shank_vec, vertical)
 
-        # In neutral standing, shank is roughly vertical
-        # Dorsiflexion occurs when shank tilts forward (positive Z)
-        # This is an approximation since we don't have foot keypoints
-
-        # Check if shank tilts forward
         if shank_vec[2] > 0:
-            return shank_angle * 0.5  # Scale down as approximation
+            return shank_angle
         else:
-            return -shank_angle * 0.5
+            return -shank_angle
 
     def _compute_trunk_flexion(self, kpts: dict) -> float:
         """

@@ -31,7 +31,7 @@ _TEACHING_PERSONA = (
     "SHORT responses only — follow the word limits given. No emojis."
 )
 
-# Height threshold (cm) for wider stance suggestion.
+# Height threshold (cm) for wider stance suggestion. -> upgrade to dynamic later based on actual anthropometric data, but this is a start.
 _TALL_THRESHOLD_CM = 185
 
 

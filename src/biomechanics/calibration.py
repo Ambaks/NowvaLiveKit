@@ -71,7 +71,7 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
             "severe": peaks["asymmetry"] + 15.0,
         },
         "heel_rise": {
-            "threshold_degrees": peaks["dorsiflexion_drop"] + 10.0,
+            "threshold_degrees": peaks["dorsiflexion_drop"] + 20.0,
         },
         "depth": {
             "parallel_threshold": peaks.get("avg_depth", 0.0) - 10.0,
@@ -99,7 +99,7 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
                 "severe": faults_cfg.bilateral_asymmetry.severe,
             },
             "heel_rise": {
-                "threshold_degrees": faults_cfg.heel_rise.threshold_cm * 5,
+                "threshold_degrees": faults_cfg.heel_rise.threshold_cm * 10,
             },
             "depth": {
                 "quarter_threshold": 60.0,

@@ -31,7 +31,7 @@ class HeelRiseRule(FaultRule):
 
     def __init__(
         self,
-        threshold_degrees: float = 10.0,  # Dorsiflexion decrease threshold
+        threshold_degrees: float = 20.0,
     ):
         self.threshold_degrees = threshold_degrees
 
