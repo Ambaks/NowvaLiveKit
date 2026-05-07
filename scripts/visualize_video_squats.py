@@ -25,6 +25,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 import cv2
 import numpy as np
 
@@ -39,6 +42,7 @@ from biomechanics.utils.bone_constraints import BoneLengthConstraints
 from biomechanics.utils.position_filter import KeypointPositionSmoother
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
 from biomechanics.utils.standing_gate import StandingPoseGate
+from utils.memory_profiler import MemoryProfiler
 
 
 COCO_CONNECTIONS = [
@@ -308,7 +312,7 @@ def compute_athlete_params(frames_data, rep_boundaries, bone_constraints):
     }
 
 
-def run_capture(camera_id, video_output_path):
+def run_capture(camera_id, video_output_path, profiler=None):
     """Run the full capture session: calibrate → record → return data."""
     cap = cv2.VideoCapture(camera_id)
     if not cap.isOpened():
@@ -479,6 +483,8 @@ def run_capture(camera_id, video_output_path):
                 frames_data.append(None)
 
             rec_frame_idx += 1
+            if profiler:
+                profiler.snapshot(rec_frame_idx)
 
             # Check if we have enough reps
             if len(reps) >= TARGET_REPS:
@@ -1915,6 +1921,11 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     video_path = Path(args.output) if args.output else recordings_dir / f"squat_{timestamp}.mp4"
     html_path = video_path.with_suffix(".html")
+    memory_png_path = video_path.with_name(video_path.stem + "_memory_profile.png")
+
+    profiler = MemoryProfiler()
+    if profiler.enabled:
+        print(f"  Memory profiling enabled → {memory_png_path}")
 
     print("=" * 50)
     print("  SQUAT CAPTURE & 3D REPLAY")
@@ -1924,7 +1935,14 @@ def main():
     print(f"  Reps to capture: {TARGET_REPS}")
     print("=" * 50)
 
-    frames_data, reps, rep_boundaries, fps, bone_cstr = run_capture(args.camera, video_path)
+    profiler.start()
+    try:
+        frames_data, reps, rep_boundaries, fps, bone_cstr = run_capture(args.camera, video_path, profiler)
+    finally:
+        profiler.stop()
+        report_path = profiler.generate_report(memory_png_path, title_prefix="Squat Capture")
+        if report_path:
+            print(f"Memory profile saved: {report_path}")
 
     if len(reps) < 2:
         print(f"ERROR: Need at least 2 reps, got {len(reps)}.")
