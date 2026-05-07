@@ -113,6 +113,9 @@ class TeachingAgent(BaseNovaAgent):
             "This should flow as natural speech."
         )
         await self._say(instruction)
+
+        # After speech, agent should get stance width and foot angle. If acceptable, validate and tell user to squat. If not, say something like "Your feet are a bit too close together. Try widening them to about shoulder width and pointing your toes slightly out. Take a breath and try again when you're ready." Then re-open setup until stance is acceptable. Once stance is good, open descent with a simple "Great, now squat down when you're ready."
+        # Stance width and toe direction is coached realtime here. 
         self.phase = TeachingPhase.DESCENDING
         logger.info("[TEACHING] Setup complete — phase → DESCENDING")
 

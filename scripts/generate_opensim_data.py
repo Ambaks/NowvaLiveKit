@@ -47,7 +47,7 @@ FPS = 30
 WINDOW_SIZE = 30
 STRIDE = 5
 
-# COCO 17 keypoint indices
+# COCO 17 + foot_index keypoint indices
 NOSE, L_EYE, R_EYE, L_EAR, R_EAR = 0, 1, 2, 3, 4
 L_SHOULDER, R_SHOULDER = 5, 6
 L_ELBOW, R_ELBOW = 7, 8
@@ -55,6 +55,7 @@ L_WRIST, R_WRIST = 9, 10
 L_HIP, R_HIP = 11, 12
 L_KNEE, R_KNEE = 13, 14
 L_ANKLE, R_ANKLE = 15, 16
+L_FOOT_INDEX, R_FOOT_INDEX = 17, 18
 
 # 5-class labels are computed via depth_class_from_angle() from types.py
 
@@ -72,6 +73,7 @@ class OpenSimSquatModel:
         "femur_r", "femur_l",
         "tibia_r", "tibia_l",
         "talus_r", "talus_l",
+        "toes_r", "toes_l",
         "humerus_r", "humerus_l",
         "radius_r", "radius_l",
         "hand_r", "hand_l",
@@ -118,16 +120,16 @@ class OpenSimSquatModel:
 
     def extract_coco17(self, limb_scales: dict = None) -> np.ndarray:
         """
-        Map OpenSim body positions to COCO 17 keypoints.
+        Map OpenSim body positions to COCO 17 + foot_index keypoints.
 
         Args:
             limb_scales: Optional per-segment scaling to simulate different body
                 proportions. Keys: 'torso', 'thigh', 'shin', 'arm'.
                 Values are float multipliers (1.0 = default).
 
-        Returns (17, 3) array in meters, Y-up coordinate system.
+        Returns (19, 3) array in meters, Y-up coordinate system.
         """
-        kpts = np.zeros((17, 3))
+        kpts = np.zeros((19, 3))
 
         # Reference positions
         pelvis = self.get_body_pos("pelvis")
@@ -180,6 +182,10 @@ class OpenSimSquatModel:
         shin_scale = limb_scales.get("shin", 1.0) if limb_scales else 1.0
         kpts[L_ANKLE] = kpts[L_KNEE] + (tal_l - tib_l) * shin_scale
         kpts[R_ANKLE] = kpts[R_KNEE] + (tal_r - tib_r) * shin_scale
+
+        # Foot index: toes body position (distal foot segment)
+        kpts[L_FOOT_INDEX] = self.get_body_pos("toes_l")
+        kpts[R_FOOT_INDEX] = self.get_body_pos("toes_r")
 
         return kpts
 

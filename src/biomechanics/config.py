@@ -41,6 +41,14 @@ class PoseConfig(BaseModel):
 class TriangulationConfig(BaseModel):
     """Stereo triangulation configuration."""
     enabled: bool = False
+    device_ids: List[int] = [0, 1, 2]
+    primary_camera: int = 0
+    max_sync_delta_ms: float = 15.0
+    focal_length_factor: float = 0.8
+    min_views: int = 2
+    max_reprojection_error: float = 15.0
+    calibration_file: Optional[str] = None
+    tpose_capture_frames: int = 30
 
 
 class KinematicsConfig(BaseModel):

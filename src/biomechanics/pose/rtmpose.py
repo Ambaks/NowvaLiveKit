@@ -97,10 +97,12 @@ class RTMPoseEstimator(PoseEstimator):
                 f"Run: python scripts/download_models.py"
             )
 
-        # Select execution providers: prefer CoreML on Apple Silicon
+        # Select execution providers: prefer CUDA > CoreML > CPU
         providers = []
         available = ort.get_available_providers()
 
+        if "CUDAExecutionProvider" in available:
+            providers.append("CUDAExecutionProvider")
         if "CoreMLExecutionProvider" in available:
             providers.append("CoreMLExecutionProvider")
         providers.append("CPUExecutionProvider")

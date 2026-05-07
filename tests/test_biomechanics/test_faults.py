@@ -470,16 +470,16 @@ class TestHeelRiseRule:
         )
         heel_rise_rule.evaluate(angles1, history, in_rep=True)
 
-        # Significant decrease (heel rising)
+        # Significant decrease (heel rising) — must exceed 20° threshold
         angles2 = create_joint_angles(
             frame=31,  # Past cooldown
-            ankle_dorsiflexion_l=10.0,  # 15° decrease
-            ankle_dorsiflexion_r=12.0,  # 13° decrease
+            ankle_dorsiflexion_l=3.0,  # 22° decrease
+            ankle_dorsiflexion_r=4.0,  # 21° decrease
         )
         fault = heel_rise_rule.evaluate(angles2, history, in_rep=True)
         assert fault is not None
         assert "max_decrease" in fault.details
-        assert fault.details["max_decrease"] == 15.0
+        assert fault.details["max_decrease"] == 22.0
 
     def test_reset_on_new_rep(self, heel_rise_rule, history):
         """Baseline should reset when rep ends."""

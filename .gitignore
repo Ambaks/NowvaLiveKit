@@ -156,3 +156,9 @@ graphify-out/*
 
 # Claude
 claude.md
+
+# Deprecated files (if any)
+deprecated/*
+
+# PNG files (if any)
+*.png
