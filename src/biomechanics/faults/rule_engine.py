@@ -195,35 +195,43 @@ class RuleEngine:
         max_depth_angle: float,
         angles: JointAngles,
         rep_number: int,
+        rep_data=None,
     ) -> List[FaultEvent]:
         """
         Evaluate rules that fire at rep completion.
 
-        Currently only depth rule fires at rep end.
+        Depth rule uses ``evaluate_max_depth(...)``; tempo and any other
+        rep-level rules are invoked via ``evaluate_rep_complete(rep_data)``
+        when they implement it and rep_data is provided.
 
         Args:
             max_depth_angle: Maximum knee flexion achieved in rep
             angles: Current (end of rep) joint angles
             rep_number: Completed rep number
+            rep_data: Optional completed RepData for rep-level rules
 
         Returns:
             List of rep-completion faults
         """
         faults: List[FaultEvent] = []
 
-        # Find and evaluate depth rule (use fault_type check so any
-        # profile's depth rule works, not just the squat DepthRule class)
         for rule in self.rules:
-            if rule.fault_type == FaultType.DEPTH:
-                if hasattr(rule, "evaluate_max_depth"):
-                    fault = rule.evaluate_max_depth(
-                        max_knee_flexion=max_depth_angle,
-                        angles=angles,
-                        rep_number=rep_number,
-                    )
-                    if fault is not None:
-                        faults.append(fault)
-                break
+            # Depth rule: legacy max-depth interface
+            if rule.fault_type == FaultType.DEPTH and hasattr(rule, "evaluate_max_depth"):
+                fault = rule.evaluate_max_depth(
+                    max_knee_flexion=max_depth_angle,
+                    angles=angles,
+                    rep_number=rep_number,
+                )
+                if fault is not None:
+                    faults.append(fault)
+                continue
+
+            # Generic rep-level rules (e.g. TempoRule)
+            if rep_data is not None and hasattr(rule, "evaluate_rep_complete"):
+                rep_faults = rule.evaluate_rep_complete(rep_data)
+                if rep_faults:
+                    faults.extend(rep_faults)
 
         return faults
 

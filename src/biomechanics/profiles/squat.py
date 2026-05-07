@@ -17,6 +17,7 @@ from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.faults.rules.bar_tilt_asymmetry import BarTiltAsymmetryRule
+from biomechanics.faults.rules.tempo import TempoRule
 from biomechanics.profiles.base import ExerciseProfile
 from biomechanics.profiles.registry import register_profile
 from biomechanics.utils.types import CocoKeypoints, JointAngles, Skeleton3D
@@ -85,6 +86,9 @@ class SquatProfile(ExerciseProfile):
                 moderate_threshold=fc.knee_valgus.moderate,
                 severe_threshold=fc.knee_valgus.severe,
             ),
+            # Rep-level tempo rule: emits tempo_uncontrolled / tempo_stalled /
+            # tempo_grind based on hip-velocity peaks recorded in RepData.
+            TempoRule(),
         ]
 
     def get_rep_signal(

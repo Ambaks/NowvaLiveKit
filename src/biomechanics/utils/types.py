@@ -251,6 +251,11 @@ class JointAngles(BaseModel):
     foot_confidence_l: float = 0.0
     foot_confidence_r: float = 0.0
 
+    # Stance geometry (squat setup signals)
+    stance_width_ratio: float = 0.0   # ankle horiz dist / shoulder horiz dist
+    toe_out_angle_l: float = 0.0      # degrees, foot vector vs sagittal plane
+    toe_out_angle_r: float = 0.0
+
     # Shoulder angles (degrees)
     shoulder_flexion_l: float = 0.0   # arm forward/back relative to trunk
     shoulder_flexion_r: float = 0.0
@@ -297,6 +302,9 @@ class JointAngles(BaseModel):
             "knee_valgus_r": self.knee_valgus_r,
             "foot_confidence_l": self.foot_confidence_l,
             "foot_confidence_r": self.foot_confidence_r,
+            "stance_width_ratio": self.stance_width_ratio,
+            "toe_out_angle_l": self.toe_out_angle_l,
+            "toe_out_angle_r": self.toe_out_angle_r,
             "shoulder_flexion_l": self.shoulder_flexion_l,
             "shoulder_flexion_r": self.shoulder_flexion_r,
             "shoulder_abduction_l": self.shoulder_abduction_l,
@@ -470,6 +478,13 @@ class RepData(BaseModel):
     # Timing
     descent_time: float = 0.0  # Time in seconds for eccentric phase
     ascent_time: float = 0.0  # Time in seconds for concentric phase
+
+    # Hip-y velocity stats over the rep (cm/s; signs follow the rep signal:
+    # positive = descending in the squat profile's hip_y - ankle_y signal).
+    peak_descent_velocity_cm_s: float = 0.0
+    peak_ascent_velocity_cm_s: float = 0.0
+    avg_descent_velocity_cm_s: float = 0.0
+    avg_ascent_velocity_cm_s: float = 0.0
 
     # Quality
     faults: List[FaultEvent] = Field(default_factory=list)

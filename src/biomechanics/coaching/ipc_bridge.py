@@ -120,6 +120,12 @@ class IPCBridge:
             "depth_category": self._depth_category(rep.max_depth_angle),
             "faults_in_rep": [f.fault_type for f in rep.faults],
             "rep_duration_ms": round(rep.duration * 1000),
+            "descent_time_s": round(rep.descent_time, 3),
+            "ascent_time_s": round(rep.ascent_time, 3),
+            "peak_descent_velocity_cm_s": round(rep.peak_descent_velocity_cm_s, 1),
+            "peak_ascent_velocity_cm_s": round(rep.peak_ascent_velocity_cm_s, 1),
+            "avg_descent_velocity_cm_s": round(rep.avg_descent_velocity_cm_s, 1),
+            "avg_ascent_velocity_cm_s": round(rep.avg_ascent_velocity_cm_s, 1),
             "is_clean": rep.is_clean,
         })
 

@@ -37,12 +37,16 @@ class CoachingService:
         on_workout_complete: Optional[Callable] = None,
         on_calibration_complete: Optional[Callable] = None,
         audio_cue_service=None,  # Prewarmed AudioCueService (optional)
+        mode: str = "workout",   # "workout" or "teaching"
+        teaching_agent=None,     # forwarded biomechanics events when mode="teaching"
     ):
         self._session = session
         self._state = state
         self._room = room
         self._on_workout_complete_callback = on_workout_complete
         self._on_calibration_complete_callback = on_calibration_complete
+        self._mode = mode
+        self._teaching_agent = teaching_agent
 
         # Owned components
         self._coaching_ipc = None
@@ -67,11 +71,13 @@ class CoachingService:
             return
 
         self._event_loop = asyncio.get_event_loop()
-        self._init_orchestrator()
+        # Teaching mode bypasses orchestrator (no sets/rest/rep-count cues).
+        if self._mode != "teaching":
+            self._init_orchestrator()
         asyncio.create_task(self._start_ipc_listener())
 
         self._started = True
-        logger.info("[COACHING SERVICE] Started")
+        logger.info(f"[COACHING SERVICE] Started (mode={self._mode})")
 
     async def stop(self) -> None:
         """Stop all coaching subsystems and clean up."""
@@ -194,7 +200,18 @@ class CoachingService:
         try:
             if msg_type == "cache_cues":
                 await self._on_cache_cues(message)
-            elif msg_type == "fault":
+                return
+
+            # Teaching mode: forward biomechanics events directly to the
+            # TeachingAgent and skip workout-side orchestrator/calibration paths.
+            if self._mode == "teaching":
+                if self._teaching_agent is not None:
+                    await self._teaching_agent.on_biomechanics_event(message)
+                else:
+                    logger.warning("[COACHING SERVICE] teaching mode but no teaching_agent set")
+                return
+
+            if msg_type == "fault":
                 cue_key = message.get("cue")
                 fault_type = message.get("fault_type", "")
                 severity = message.get("severity", "")

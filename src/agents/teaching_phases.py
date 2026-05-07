@@ -9,9 +9,9 @@ from enum import Enum
 
 
 class TeachingPhase(Enum):
-    SETUP = "setup"
-    DESCENDING = "descending"
-    BOTTOM = "bottom"
-    ASCENDING = "ascending"
-    REP_COMPLETE = "rep_complete"
-    HANDOFF = "handoff"
+    INTRO = "intro"                       # initial; agent has spoken nothing yet
+    AWAITING_STANCE = "awaiting_stance"   # gave setup cues; watching stance ratio
+    DESCENDING = "descending"             # in a rep, eccentric phase
+    ASCENDING = "ascending"               # in a rep, concentric phase
+    REP_COMPLETE = "rep_complete"         # finished rep, evaluating
+    HANDOFF = "handoff"                   # about to swap to WorkoutAgent

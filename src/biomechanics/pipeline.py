@@ -423,9 +423,15 @@ class BiomechanicsPipeline:
         # If rep completed, check depth faults and advance calibration
         if rep_data is not None:
             depth_faults = self._rule_engine.evaluate_rep_complete(
-                rep_data.max_depth_angle, angles, rep_data.rep_number
+                rep_data.max_depth_angle,
+                angles,
+                rep_data.rep_number,
+                rep_data=rep_data,
             )
             faults.extend(depth_faults)
+            # Make rep-level faults (tempo, depth) visible on RepData itself so
+            # downstream consumers (IPC bridge) see the full fault set.
+            rep_data.faults.extend(depth_faults)
             self._rule_engine.on_rep_complete_calibration(is_clean=rep_data.is_clean)
 
             # When BiLSTM is active the hip counter's rep_data is suppressed

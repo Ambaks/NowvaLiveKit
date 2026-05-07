@@ -1,38 +1,46 @@
 """
-Tempo-Based Fault Detection Rules
+Tempo-Based Fault Detection Rule (rep-level).
 
-Detects tempo-related faults based on velocity analysis:
-- EccentricTempoRule: Detects uncontrolled descent (too fast)
-- StallingRule: Detects stalling/grinding during concentric phase
+Evaluates at rep close using the per-rep velocity stats populated on RepData
+by SignalRepCounter (peak/avg descent and ascent velocities, in cm/s of the
+exercise's rep signal).
+
+Emits one of three fault sub-types via the fault_type string on FaultEvent:
+  - "tempo_uncontrolled" — descent too fast (peak descent velocity above bound)
+  - "tempo_stalled"      — descent too slow (peak descent velocity below bound)
+  - "tempo_grind"        — ascent too slow (peak ascent velocity below bound)
+
+Per-frame evaluate() is a no-op — this rule only fires on rep complete.
 """
 
 from collections import deque
-from typing import Optional
+from typing import List, Optional
 
-from biomechanics.faults.fault_types import FaultRule, FaultType, DEFAULT_THRESHOLDS, FAULT_MESSAGES
-from biomechanics.utils.types import JointAngles, FaultEvent, FaultSeverity
+from biomechanics.faults.fault_types import FaultRule, FaultType
+from biomechanics.utils.types import (
+    FaultEvent,
+    FaultSeverity,
+    JointAngles,
+    RepData,
+)
 
 
-class EccentricTempoRule(FaultRule):
+class TempoRule(FaultRule):
+    """Rep-level tempo fault rule based on hip-velocity peaks.
+
+    Bounds default to a teaching-friendly window for unloaded squats.
+    They can be widened post-calibration via apply_baseline (squat profile).
     """
-    Detect uncontrolled descent (eccentric phase too fast).
 
-    Triggers when knee flexion velocity exceeds threshold during descent.
-    Based on research: optimal eccentric is 2-4 seconds, < 1 second is too fast.
-    For ~120° ROM, 100 deg/sec = ~1.2 seconds for full descent.
-    """
-
-    def __init__(self, max_velocity: float = 100.0):
-        """
-        Initialize eccentric tempo rule.
-
-        Args:
-            max_velocity: Maximum allowed velocity (deg/sec) during descent.
-                          Default 100 deg/sec based on research.
-        """
-        self.max_velocity = max_velocity
-        self._cooldown_frames = 0
-        self._cooldown_duration = 30  # Don't re-trigger for 1 second at 30fps
+    def __init__(
+        self,
+        descent_min_cm_s: float = 60.0,
+        descent_max_cm_s: float = 200.0,
+        ascent_min_cm_s: float = 50.0,
+    ):
+        self.descent_min_cm_s = descent_min_cm_s
+        self.descent_max_cm_s = descent_max_cm_s
+        self.ascent_min_cm_s = ascent_min_cm_s
 
     @property
     def fault_type(self) -> FaultType:
@@ -44,163 +52,78 @@ class EccentricTempoRule(FaultRule):
         history: deque,
         in_rep: bool = False,
         rep_number: int = 0,
-        derivatives=None,
-        phase: str = None,
     ) -> Optional[FaultEvent]:
-        """
-        Evaluate for too-fast eccentric movement.
-
-        Args:
-            angles: Current joint angles
-            history: History of angles
-            in_rep: Whether in rep
-            rep_number: Current rep number
-            derivatives: AngleDerivatives with velocity data
-            phase: Current rep phase (descending, bottom, ascending)
-
-        Returns:
-            FaultEvent if descent is too fast, None otherwise
-        """
-        # Cooldown check
-        if self._cooldown_frames > 0:
-            self._cooldown_frames -= 1
-            return None
-
-        # Only check during descending phase
-        if not in_rep or phase != "descending":
-            return None
-
-        # Need derivatives
-        if derivatives is None:
-            return None
-
-        velocity = derivatives.avg_knee_velocity
-
-        # During descent, velocity should be negative (angle increasing)
-        # We check if the magnitude is too high
-        if velocity < -self.max_velocity:
-            self._cooldown_frames = self._cooldown_duration
-
-            # Calculate severity based on how fast
-            excess = abs(velocity) - self.max_velocity
-            if excess > 50:  # Very fast
-                severity = FaultSeverity.SEVERE
-                score = 2.5 + min(0.5, excess / 100)
-            elif excess > 25:  # Moderately fast
-                severity = FaultSeverity.MODERATE
-                score = 1.5 + excess / 50
-            else:  # Slightly fast
-                severity = FaultSeverity.MILD
-                score = 0.5 + excess / 50
-
-            return self._create_fault_event(
-                severity=severity,
-                severity_score=score,
-                message=FAULT_MESSAGES[FaultType.TEMPO]["eccentric_fast"],
-                angles=angles,
-                rep_number=rep_number,
-                details={
-                    "velocity": abs(velocity),
-                    "threshold": self.max_velocity,
-                    "excess": excess,
-                },
-            )
-
+        # Per-frame evaluation intentionally a no-op; this rule fires only
+        # at rep close via evaluate_rep_complete(rep_data).
         return None
 
-    def reset(self):
-        """Reset cooldown."""
-        self._cooldown_frames = 0
+    def evaluate_rep_complete(self, rep_data: RepData) -> List[FaultEvent]:
+        """Evaluate tempo at rep close. Returns 0..N FaultEvents."""
+        out: List[FaultEvent] = []
 
+        peak_d = rep_data.peak_descent_velocity_cm_s
+        peak_a = rep_data.peak_ascent_velocity_cm_s
 
-class StallingRule(FaultRule):
-    """
-    Detect stalling/grinding during concentric phase.
+        if peak_d > self.descent_max_cm_s:
+            excess = peak_d - self.descent_max_cm_s
+            severity, score = self._severity_from_excess(excess, ref=self.descent_max_cm_s)
+            out.append(self._fault(
+                "tempo_uncontrolled",
+                severity, score,
+                f"Descent too fast ({peak_d:.0f} cm/s)",
+                rep_data,
+                {"peak_descent_velocity_cm_s": peak_d, "max_cm_s": self.descent_max_cm_s},
+            ))
+        elif peak_d < self.descent_min_cm_s and peak_d > 0:
+            deficit = self.descent_min_cm_s - peak_d
+            severity, score = self._severity_from_excess(deficit, ref=self.descent_min_cm_s)
+            out.append(self._fault(
+                "tempo_stalled",
+                severity, score,
+                f"Descent too slow ({peak_d:.0f} cm/s)",
+                rep_data,
+                {"peak_descent_velocity_cm_s": peak_d, "min_cm_s": self.descent_min_cm_s},
+            ))
 
-    Triggers when velocity stays below threshold for extended time
-    while in the ascending phase of a rep.
-    """
+        if peak_a < self.ascent_min_cm_s and peak_a > 0:
+            deficit = self.ascent_min_cm_s - peak_a
+            severity, score = self._severity_from_excess(deficit, ref=self.ascent_min_cm_s)
+            out.append(self._fault(
+                "tempo_grind",
+                severity, score,
+                f"Ascent too slow ({peak_a:.0f} cm/s)",
+                rep_data,
+                {"peak_ascent_velocity_cm_s": peak_a, "min_cm_s": self.ascent_min_cm_s},
+            ))
 
-    def __init__(self, min_velocity: float = 15.0, stall_frames: int = 10):
-        """
-        Initialize stalling rule.
+        return out
 
-        Args:
-            min_velocity: Minimum expected velocity (deg/sec) during ascent.
-            stall_frames: Number of consecutive slow frames before triggering.
-        """
-        self.min_velocity = min_velocity
-        self.stall_frames = stall_frames
-        self._slow_frame_count = 0
-        self._triggered = False  # Only trigger once per stall
+    @staticmethod
+    def _severity_from_excess(excess: float, ref: float) -> tuple:
+        """Map (excess / ref) ratio into MILD/MODERATE/SEVERE."""
+        ratio = excess / ref if ref > 0 else 0.0
+        if ratio >= 0.5:
+            return FaultSeverity.SEVERE, min(3.0, 2.5 + ratio)
+        if ratio >= 0.25:
+            return FaultSeverity.MODERATE, 1.5 + ratio
+        return FaultSeverity.MILD, 0.5 + ratio
 
-    @property
-    def fault_type(self) -> FaultType:
-        return FaultType.TEMPO
-
-    def evaluate(
-        self,
-        angles: JointAngles,
-        history: deque,
-        in_rep: bool = False,
-        rep_number: int = 0,
-        derivatives=None,
-        phase: str = None,
-    ) -> Optional[FaultEvent]:
-        """
-        Evaluate for stalling during ascent.
-
-        Args:
-            angles: Current joint angles
-            history: History of angles
-            in_rep: Whether in rep
-            rep_number: Current rep number
-            derivatives: AngleDerivatives with velocity data
-            phase: Current rep phase
-
-        Returns:
-            FaultEvent if stalling detected, None otherwise
-        """
-        # Only check during ascending phase
-        if not in_rep or phase != "ascending":
-            self._slow_frame_count = 0
-            self._triggered = False
-            return None
-
-        # Need derivatives
-        if derivatives is None:
-            return None
-
-        velocity = derivatives.avg_knee_velocity
-
-        # During ascent, velocity should be positive (angle decreasing = knee extending)
-        # We check if it's too slow
-        if velocity < self.min_velocity:
-            self._slow_frame_count += 1
-
-            if self._slow_frame_count >= self.stall_frames and not self._triggered:
-                self._triggered = True
-
-                # Mild severity for stalling
-                return self._create_fault_event(
-                    severity=FaultSeverity.MILD,
-                    severity_score=1.0,
-                    message=FAULT_MESSAGES[FaultType.TEMPO]["stalling"],
-                    angles=angles,
-                    rep_number=rep_number,
-                    details={
-                        "velocity": velocity,
-                        "threshold": self.min_velocity,
-                        "stall_duration_frames": self._slow_frame_count,
-                    },
-                )
-        else:
-            self._slow_frame_count = 0
-            self._triggered = False
-
-        return None
-
-    def reset(self):
-        """Reset stall tracking."""
-        self._slow_frame_count = 0
-        self._triggered = False
+    @staticmethod
+    def _fault(
+        fault_type: str,
+        severity: FaultSeverity,
+        score: float,
+        message: str,
+        rep_data: RepData,
+        details: dict,
+    ) -> FaultEvent:
+        return FaultEvent(
+            fault_type=fault_type,
+            severity=severity,
+            severity_score=score,
+            message=message,
+            timestamp=rep_data.end_time,
+            frame_index=rep_data.end_frame,
+            rep_number=rep_data.rep_number,
+            details=details,
+        )

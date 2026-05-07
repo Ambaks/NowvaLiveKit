@@ -128,6 +128,11 @@ class AnalyticalIKSolver(IKSolver):
         angles.wrist_x_l = wrist_pos["wrist_x_l"]
         angles.wrist_x_r = wrist_pos["wrist_x_r"]
 
+        # Stance geometry (squat setup)
+        angles.stance_width_ratio = self._compute_stance_width_ratio(kpts)
+        angles.toe_out_angle_l = self._compute_toe_out_angle(kpts, side="left")
+        angles.toe_out_angle_r = self._compute_toe_out_angle(kpts, side="right")
+
         return angles
 
     def _extract_keypoints(self, skeleton: Skeleton3D) -> dict:
@@ -641,6 +646,68 @@ class AnalyticalIKSolver(IKSolver):
         # When arm hangs down, arm_frontal is opposite to trunk_frontal → ~180°
         raw_angle = angle_between_vectors(trunk_frontal, arm_frontal)
         return 180.0 - raw_angle
+
+    # ------------------------------------------------------------------
+    # Stance geometry (squat setup)
+    # ------------------------------------------------------------------
+
+    def _compute_stance_width_ratio(self, kpts: dict) -> float:
+        """Floor-plane distance between ankles divided by floor-plane
+        distance between shoulders. 1.0 = feet directly under shoulders.
+
+        Uses X (lateral) and Z (depth) only — Y is vertical in MediaPipe.
+        Returns 0.0 if any keypoint is missing or shoulders are too close.
+        """
+        left_ankle = self._get_point(kpts, "left_ankle")
+        right_ankle = self._get_point(kpts, "right_ankle")
+        left_shoulder = self._get_point(kpts, "left_shoulder")
+        right_shoulder = self._get_point(kpts, "right_shoulder")
+
+        if any(p is None for p in (left_ankle, right_ankle, left_shoulder, right_shoulder)):
+            return 0.0
+
+        ankle_dist = float(np.linalg.norm(
+            np.array([left_ankle[0] - right_ankle[0], left_ankle[2] - right_ankle[2]])
+        ))
+        shoulder_dist = float(np.linalg.norm(
+            np.array([left_shoulder[0] - right_shoulder[0], left_shoulder[2] - right_shoulder[2]])
+        ))
+
+        if shoulder_dist < 1e-3:
+            return 0.0
+        return ankle_dist / shoulder_dist
+
+    def _compute_toe_out_angle(self, kpts: dict, side: str) -> float:
+        """Angle (degrees) between the foot vector (ankle → foot_index)
+        and the sagittal plane, projected to the floor (XZ).
+
+        Positive = toes pointed outward (lateral) for the given side.
+        Returns 0.0 if landmarks are missing.
+        """
+        ankle = self._get_point(kpts, f"{side}_ankle")
+        foot = self._get_point(kpts, f"{side}_foot_index")
+        if ankle is None or foot is None:
+            return 0.0
+
+        foot_vec = np.array([foot[0] - ankle[0], foot[2] - ankle[2]])
+        if np.linalg.norm(foot_vec) < 1e-6:
+            return 0.0
+
+        # Forward axis on the floor: +Z (toward camera in MediaPipe world).
+        forward = np.array([0.0, 1.0])
+        # 3D angle helper expects 3-vectors — pad with zero Y.
+        angle = angle_between_vectors(
+            np.array([foot_vec[0], 0.0, foot_vec[1]]),
+            np.array([forward[0], 0.0, forward[1]]),
+        )
+
+        # Sign convention: outward = positive on each side.
+        # Left foot pointed out = +X; right foot pointed out = -X.
+        if side == "left":
+            sign = 1.0 if foot_vec[0] >= 0 else -1.0
+        else:
+            sign = 1.0 if foot_vec[0] <= 0 else -1.0
+        return angle * sign
 
     def _compute_wrist_positions(self, kpts: dict) -> dict:
         """

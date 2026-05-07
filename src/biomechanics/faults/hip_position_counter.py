@@ -93,6 +93,16 @@ class SignalRepCounter:
         self._asymmetry_sums: Dict[str, float] = {}
         self._angle_samples: int = 0
 
+        # ---- per-rep velocity tracking (signal velocity in cm/s) ----
+        # Descent: state ∈ {DESCENDING, BOTTOM}, expected velocity ≥ 0.
+        # Ascent:  state == ASCENDING, expected velocity ≤ 0; we store magnitude.
+        self._descent_vel_peak: float = 0.0
+        self._descent_vel_sum: float = 0.0
+        self._descent_vel_n: int = 0
+        self._ascent_vel_peak: float = 0.0
+        self._ascent_vel_sum: float = 0.0
+        self._ascent_vel_n: int = 0
+
     # ------------------------------------------------------------------
     # Public properties (same interface as RepCounter)
     # ------------------------------------------------------------------
@@ -215,6 +225,7 @@ class SignalRepCounter:
             self._frames_in_rep += 1
             if angles is not None:
                 self._track_angles(angles)
+            self._track_velocity(velocity)
 
         # ---- state machine ----
         completed_rep: Optional[RepData] = None
@@ -296,6 +307,27 @@ class SignalRepCounter:
         if angles is not None:
             self._track_angles(angles)
 
+    def _track_velocity(self, velocity: float) -> None:
+        """Accumulate per-rep velocity stats split by phase.
+
+        Convention (matches the squat rep signal hip_y - ankle_y):
+          velocity > 0 = descending, velocity < 0 = ascending.
+        Ascent peak/sum stored as magnitudes for clean reporting.
+        """
+        if self.state in (SignalRepState.DESCENDING, SignalRepState.BOTTOM):
+            if velocity > self._descent_vel_peak:
+                self._descent_vel_peak = velocity
+            if velocity > 0:
+                self._descent_vel_sum += velocity
+                self._descent_vel_n += 1
+        elif self.state == SignalRepState.ASCENDING:
+            mag = -velocity if velocity < 0 else 0.0
+            if mag > self._ascent_vel_peak:
+                self._ascent_vel_peak = mag
+            if mag > 0:
+                self._ascent_vel_sum += mag
+                self._ascent_vel_n += 1
+
     def _track_angles(self, angles: JointAngles) -> None:
         depth = self._depth_metric_fn(angles)
 
@@ -321,6 +353,12 @@ class SignalRepCounter:
         self._current_faults = []
         self._asymmetry_sums = {}
         self._angle_samples = 0
+        self._descent_vel_peak = 0.0
+        self._descent_vel_sum = 0.0
+        self._descent_vel_n = 0
+        self._ascent_vel_peak = 0.0
+        self._ascent_vel_sum = 0.0
+        self._ascent_vel_n = 0
 
     def _create_rep_data(
         self, end_time: float, angles: Optional[JointAngles]
@@ -337,6 +375,15 @@ class SignalRepCounter:
         for key, total in self._asymmetry_sums.items():
             avg_asymmetry[key] = total / self._angle_samples if self._angle_samples > 0 else 0.0
 
+        avg_descent_vel = (
+            self._descent_vel_sum / self._descent_vel_n
+            if self._descent_vel_n > 0 else 0.0
+        )
+        avg_ascent_vel = (
+            self._ascent_vel_sum / self._ascent_vel_n
+            if self._ascent_vel_n > 0 else 0.0
+        )
+
         return RepData(
             rep_number=self.rep_count,
             start_time=self._rep_start_time,
@@ -347,6 +394,10 @@ class SignalRepCounter:
             min_depth_angle=self._min_depth_angle,
             descent_time=descent_time,
             ascent_time=ascent_time,
+            peak_descent_velocity_cm_s=self._descent_vel_peak,
+            peak_ascent_velocity_cm_s=self._ascent_vel_peak,
+            avg_descent_velocity_cm_s=avg_descent_vel,
+            avg_ascent_velocity_cm_s=avg_ascent_vel,
             faults=self._current_faults.copy(),
             asymmetry=avg_asymmetry,
             # Backward compat

@@ -9,7 +9,7 @@ from biomechanics.faults.rules.symmetry import SymmetryRule
 from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
-from biomechanics.faults.rules.tempo import EccentricTempoRule, StallingRule
+from biomechanics.faults.rules.tempo import TempoRule
 from biomechanics.faults.rules.range_of_motion import RangeOfMotionRule
 from biomechanics.faults.rules.back_rounding import BackRoundingRule
 from biomechanics.faults.rules.lockout import LockoutRule
@@ -25,8 +25,7 @@ __all__ = [
     "HeelRiseRule",
     "ForwardLeanRule",
     "KneeValgusRule",
-    "EccentricTempoRule",
-    "StallingRule",
+    "TempoRule",
     "RangeOfMotionRule",
     "BackRoundingRule",
     "LockoutRule",
