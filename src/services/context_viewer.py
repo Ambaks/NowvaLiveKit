@@ -139,8 +139,8 @@ class ContextViewer:
                 compaction["cold"] = self._compaction._cold or ""
                 compaction["summary"] = self._compaction.get_summary()
                 compaction["stats"] = self._compaction.get_stats()
-            except Exception as e:
-                compaction["error"] = str(e)
+            except Exception:
+                compaction["error"] = "Failed to retrieve compaction data"
 
         uptime = time.monotonic() - self._start_time
 

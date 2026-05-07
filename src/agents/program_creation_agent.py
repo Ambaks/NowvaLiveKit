@@ -450,7 +450,7 @@ class ProgramCreationAgent(BaseNovaAgent):
 
             if age is None and sex is None and db_user:
                 if db_user.age and db_user.sex:
-                    logger.info(f"[PROGRAM] Using existing DB values: age={db_user.age}, sex={db_user.sex}")
+                    logger.info("[PROGRAM] Using existing DB values for age and sex")
                     self.state.set("program_creation.age", int(db_user.age))
                     self.state.set("program_creation.sex", db_user.sex)
                     return None, "Age and sex loaded. Stats confirmation complete. Immediately ask about their fitness goal."
@@ -459,7 +459,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                     return None, "No age and sex on file. Ask: 'How old are you, and are you male or female?'"
 
             if age is not None:
-                logger.info(f"[PROGRAM] Capturing new age and sex: {age}, {sex}")
+                logger.info("[PROGRAM] Capturing new age and sex")
 
                 if age < 13 or age > 100:
                     return None, f"That age seems unusual. Say: 'Hmm, that age doesn't seem right. How old are you?' Keep it friendly."
@@ -476,12 +476,12 @@ class ProgramCreationAgent(BaseNovaAgent):
                     db_user.age = age
                     db_user.sex = sex_normalized
                     db.commit()
-                    logger.info(f"[PROGRAM] Saved to database: age={age}, sex={sex_normalized}")
+                    logger.info("[PROGRAM] Saved age and sex to database")
 
                 self.state.set("program_creation.age", age)
                 self.state.set("program_creation.sex", sex_normalized)
 
-                logger.info(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
+                logger.info("[PROGRAM] Age and sex captured")
 
                 await self.check_and_summarize_if_needed(context)
 
@@ -521,7 +521,7 @@ class ProgramCreationAgent(BaseNovaAgent):
         Args:
             sex: "male", "female", "M", "F", etc.
         """
-        logger.info(f"[PROGRAM] Capturing sex: {sex}")
+        logger.info("[PROGRAM] Capturing sex")
 
         sex_normalized = sex.lower().strip()
         if sex_normalized in ["m", "male", "man", "boy"]:
@@ -532,7 +532,7 @@ class ProgramCreationAgent(BaseNovaAgent):
             return None, f"I didn't catch that. Say: 'Sorry, are you male or female?' Keep it simple."
 
         self.state.set("program_creation.sex", sex_normalized)
-        logger.info(f"[PROGRAM] Sex set to: {sex_normalized}")
+        logger.info("[PROGRAM] Sex captured")
 
         return None, "Captured. Immediately ask the next question."
 

@@ -48,9 +48,12 @@ def _check_program_access(program: UserGeneratedProgram, current_user: User, *, 
 
 def _get_program_file_path(user_id: str, program_id: str, extension: str) -> Path:
     """Get the path to a program file (PDF or markdown)"""
-    programs_dir = Path("programs")
+    programs_dir = Path("programs").resolve()
     filename = f"program_{user_id}_{program_id}.{extension}"
-    return programs_dir / filename
+    file_path = (programs_dir / filename).resolve()
+    if not file_path.is_relative_to(programs_dir):
+        raise ValueError("Invalid file path")
+    return file_path
 
 
 def _get_program_file_urls(user_id: str, program_id: str) -> tuple[str | None, str | None]:

@@ -247,7 +247,7 @@ def print_summary(test_results):
     print("  7. User Preference (bonus: +20)")
     print("  8. Stretch Position (bonus: +8 for hypertrophy)")
     print("- Goal-dependent weighting: Hypertrophy emphasizes SFR and volume fill; Strength emphasizes compound consistency and fatigue management")
-    print(f"- Test score for barbell_curl (hypertrophy, full bicep volume remaining): {score:.2f}")
+    print(f"- Test score for barbell_curl (hypertrophy, full bicep volume remaining): {float(score):.2f}")
 
     print("\nPRESCRIPTION ENGINE:")
     print("- Rep ranges implemented (exercise_type × goal combinations): 15 combinations (5 types × 3 goals)")
@@ -282,7 +282,7 @@ def print_summary(test_results):
     print(f"- Total prompt template characters: {len(profile_prompt)} (profile extraction prompt only)")
 
     print("\nVALIDATION RESULTS:")
-    print("1. Scoring test: PASS — score={:.2f}".format(score))
+    print("1. Scoring test: PASS — score={:.2f}".format(float(score)))
     print("2. Prescription test (squat): PASS — reps={}, rest={}s, RPE={}".format(
         squat_sets[0].reps, squat_sets[0].rest_seconds, squat_sets[0].rpe
     ))

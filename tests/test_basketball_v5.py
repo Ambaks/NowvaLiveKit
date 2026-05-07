@@ -61,35 +61,37 @@ async def main():
     print("\n" + "=" * 60)
     print("PROGRAM SUMMARY")
     print("=" * 60)
-    print(f"Program Name: {result['overview']['name']}")
-    print(f"Duration: {result['overview']['duration_weeks']} weeks")
-    print(f"Split: {result['overview']['split_name']}")
-    print(f"Periodization: {result['overview']['periodization_model']}")
-    print(f"VBT Enabled: {result['overview'].get('vbt_enabled', False)}")
-    print(f"Total Workouts: {result['stats']['total_workouts']}")
-    print(f"Unique Exercises: {result['stats']['unique_exercises']}")
-    print(f"Total Sets: {result['stats']['total_sets']}")
-    print(f"Generation Time: {result['stats']['generation_time_seconds']:.2f}s")
-    print(f"Validation Pass Rate: {result['stats']['validation_pass_rate']}%")
+    overview = result['overview']
+    stats = result['stats']
+    print(f"Program Name: {str(overview['name'])}")
+    print(f"Duration: {int(overview['duration_weeks'])} weeks")
+    print(f"Split: {str(overview['split_name'])}")
+    print(f"Periodization: {str(overview['periodization_model'])}")
+    print(f"VBT Enabled: {bool(overview.get('vbt_enabled', False))}")
+    print(f"Total Workouts: {int(stats['total_workouts'])}")
+    print(f"Unique Exercises: {int(stats['unique_exercises'])}")
+    print(f"Total Sets: {int(stats['total_sets'])}")
+    print(f"Generation Time: {float(stats['generation_time_seconds']):.2f}s")
+    print(f"Validation Pass Rate: {float(stats['validation_pass_rate'])}%")
 
     # Week 1 preview
     print("\n" + "-" * 60)
     print("WEEK 1 PREVIEW")
     print("-" * 60)
     for workout in result["weeks"][0]["workouts"]:
-        print(f"\n{workout['day_label']} ({workout['estimated_duration_minutes']} min):")
+        print(f"\n{str(workout['day_label'])} ({int(workout['estimated_duration_minutes'])} min):")
         for ex in workout["exercises"]:
             vbt_tag = ""
             if ex.get("sets") and ex["sets"][0].get("velocity_target"):
-                vbt_tag = f" [VBT: {ex['sets'][0]['velocity_target']} m/s]"
-            print(f"  {ex['order']}. {ex['exercise_name']} — {ex['set_notation']}{vbt_tag}")
+                vbt_tag = f" [VBT: {float(ex['sets'][0]['velocity_target'])} m/s]"
+            print(f"  {int(ex['order'])}. {str(ex['exercise_name'])} — {str(ex['set_notation'])}{vbt_tag}")
 
     # Timing breakdown
     print("\n" + "=" * 60)
     print("TIMING BREAKDOWN")
     print("=" * 60)
     for layer, duration in result.get("timings", {}).items():
-        print(f"  {layer}: {duration:.3f}s")
+        print(f"  {str(layer)}: {float(duration):.3f}s")
 
     # ── 3. Generate PDF ─────────────────────────────────────────────────────
     print("\n" + "=" * 60)
