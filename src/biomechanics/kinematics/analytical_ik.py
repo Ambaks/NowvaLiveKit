@@ -335,13 +335,10 @@ class AnalyticalIKSolver(IKSolver):
 
     def _compute_ankle_dorsiflexion(self, kpts: dict, side: str) -> float:
         """
-        Compute ankle dorsiflexion angle.
+        Compute ankle dorsiflexion as shank tilt from vertical.
 
-        0 degrees = neutral (foot perpendicular to shank)
-        Positive = dorsiflexion (toes up)
-        Negative = plantarflexion (toes down)
-
-        Note: Without foot keypoints, we estimate this from shank angle.
+        0° = shank vertical (neutral), positive = shin tilted forward.
+        Does not use foot keypoints — feet are assumed parallel to ground.
         """
         knee = self._get_point(kpts, f"{side}_knee")
         ankle = self._get_point(kpts, f"{side}_ankle")
@@ -349,19 +346,13 @@ class AnalyticalIKSolver(IKSolver):
         if knee is None or ankle is None:
             return 0.0
 
-        # Shank vector (knee to ankle)
-        shank_vec = ankle - knee
+        shank = knee - ankle
+        if np.linalg.norm(shank) < 1e-6:
+            return 0.0
 
-        # Downward reference (Y-up coordinate system)
-        vertical = np.array([0, -1, 0])
-
-        # Angle of shank from vertical
-        shank_angle = angle_between_vectors(shank_vec, vertical)
-
-        if shank_vec[2] > 0:
-            return shank_angle
-        else:
-            return -shank_angle
+        # Upward direction (Y-down MediaPipe convention: -Y is up)
+        up = np.array([0.0, -1.0, 0.0])
+        return angle_between_vectors(shank, up)
 
     def _compute_trunk_flexion(self, kpts: dict) -> float:
         """

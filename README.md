@@ -6,22 +6,61 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi&logoColor=white)
 ![LiveKit](https://img.shields.io/badge/LiveKit-Agents_SDK-FF6B35)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white)
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.8+-5C3EE8?logo=opencv&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)
 
 ---
 
-## Overview
+## Table of Contents
 
-Nowva AI is a real-time fitness coaching platform that watches you exercise through a webcam, reconstructs your 3D skeleton, computes joint kinematics, detects form faults, and coaches you with voice — all in real time. The system combines a conversational voice agent (LiveKit Agents SDK + OpenAI Realtime API), a custom biomechanics pipeline processing 30 FPS video, and an agentic LLM pipeline for personalized workout programming.
-
-- **6-layer biomechanics pipeline** with a custom analytical IK solver computing 16 joint angles at ~1-2ms per frame
-- **Priority-based coaching orchestrator** delivering cached fault cues with audio ducking over LLM-generated speech
-- **Agentic program generation** reduced from 10 minutes to ~1 second using Cache Augmented Generation
+- [Overview](#overview)
+- [System Architecture](#system-architecture)
+- [Website & Frontend](#website--frontend)
+- [Website Voice Agent](#website-voice-agent)
+- [Console Voice Agent (main.py)](#console-voice-agent-mainpy)
+- [Biomechanics Pipeline](#biomechanics-pipeline)
+  - [Pose Estimation](#1-pose-estimation)
+  - [Multi-Camera Triangulation](#2-multi-camera-triangulation)
+  - [Pre-IK Skeleton Filtering](#3-pre-ik-skeleton-filtering)
+  - [Analytical Inverse Kinematics](#4-analytical-inverse-kinematics)
+  - [Temporal Smoothing](#5-temporal-smoothing)
+  - [Fault Detection](#6-fault-detection)
+  - [Rep Counting](#7-rep-counting-dual-system)
+  - [Barbell Tracking](#8-barbell-tracking)
+  - [Exercise Profiles](#9-exercise-profiles)
+- [Coaching System](#coaching-system)
+- [Program Generator V5](#program-generator-v5)
+- [Squat Visualizer (visualize_video_squats.py)](#squat-visualizer)
+- [Database Schema](#database-schema)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Testing](#testing)
 
 ---
 
-## Architecture
+## Overview
+
+Nowva AI is a real-time fitness coaching platform that watches you exercise through a webcam, reconstructs your 3D skeleton, computes joint kinematics, detects form faults, and coaches you with voice — all in real time. The system combines a conversational voice agent (LiveKit Agents SDK), a custom biomechanics pipeline processing 30 FPS video, and an agentic LLM pipeline for personalized workout programming.
+
+The platform operates across two surfaces:
+
+1. **Website** — A React/TypeScript landing page where visitors generate personalized workout programs via voice conversation or structured form. The website voice agent collects user data through a 5-step conversational flow and triggers async program generation.
+
+2. **Console application** — The full coaching system (`main.py`) that runs on a squat rack computer or laptop. Captures webcam video, runs real-time biomechanics analysis, delivers voice coaching with fault cues, manages workout sessions, and tracks long-term training progress.
+
+**Key numbers:**
+- Analytical IK solver: **~1-2ms per frame** on CPU (16 joint angles from 3D skeleton)
+- Program generation: **~1 second** via Cache Augmented Generation (down from 10 minutes)
+- Fault cue latency: **< 50ms** (pre-cached TTS)
+- Supported exercises: **12 exercise profiles** with independent fault rules
+- Pre-IK filtering: **4-stage pipeline** (confidence blend, velocity clamp, bone constraints, predictive state)
+
+---
+
+## System Architecture
 
 ```mermaid
 graph TB
@@ -34,8 +73,8 @@ graph TB
         PE[Pose Estimation<br/>MediaPipe / RTMPose]
         PRE[Pre-IK Filters<br/>Confidence Blend / Velocity Clamp<br/>Bone Constraints / Predictive State]
         IK[Analytical IK Solver<br/>16 Joint Angles ~1-2ms]
-        TS[Temporal Smoothing<br/>Phase-Aware EMA + Derivatives]
-        FD[Fault Detection<br/>5-Rule Engine + Adaptive Calibration]
+        TS[Temporal Smoothing<br/>Phase-Aware One Euro + Derivatives]
+        FD[Fault Detection<br/>Rule Engine + Adaptive Calibration]
         RC[Rep Counting<br/>4-State FSM + BiLSTM Classifier]
 
         PE --> PRE --> IK --> TS --> FD --> RC
@@ -60,7 +99,7 @@ graph TB
         API[REST API<br/>Programs / Workouts / LiveKit]
         PG[Program Generator V5<br/>Agentic LLM + CAG]
         DB[(PostgreSQL<br/>SQLAlchemy 2.0)]
-        TQ[Celery + Redis<br/>Async Job Queue]
+        TQ[Celery + Valkey<br/>Async Job Queue]
     end
 
     CAM --> PE
@@ -75,58 +114,771 @@ graph TB
     API --> TQ
 ```
 
-### Data Flow
+### Multi-Process Architecture
 
-1. **Camera** captures frames at 30 FPS
-2. **Pose estimation** extracts 17 COCO keypoints with 3D world coordinates
-3. **Pre-IK filters** enforce anatomical constraints (bone lengths, velocity limits)
-4. **Analytical IK** computes 16 joint angles from vector geometry
-5. **Temporal smoothing** applies phase-aware filtering (different cutoffs for descent vs. ascent)
-6. **Fault detection** evaluates 5 rules with body-proportion-scaled thresholds
-7. **Rep counting** runs dual FSM + BiLSTM systems in parallel
-8. Results flow over **UNIX domain sockets** (length-prefix framed JSON) to the coaching orchestrator
-9. **Priority queue** dispatches cached audio cues (deterministic) and LLM speech (adaptive) with ducking
-10. **Voice agent** delivers real-time coaching through LiveKit
+The console application (`main.py`) orchestrates multiple processes:
+
+```
+NowvaApp (main.py)
+├── FastAPI backend server        (subprocess, uvicorn, port 8000)
+├── Voice agent                   (subprocess, LiveKit Agents SDK)
+├── Pose estimation               (subprocess, reads from camera)
+├── Main IPC server               (/tmp/nowva_ipc.sock)
+└── Coaching IPC server           (/tmp/nowva_coaching.sock)
+```
+
+Each process communicates via **UNIX domain sockets** with 4-byte big-endian length-prefix framing and JSON payloads. Two IPC channels:
+- **Main IPC** — pose pipeline sends frame data (skeleton, angles, faults, rep events) to the main process
+- **Coaching IPC** — main process forwards events to the voice agent for real-time coaching delivery
 
 ---
 
-## Key Technical Highlights
+## Website & Frontend
 
-### Biomechanics Pipeline
+**Location:** `frontend_demo/`
 
-Six processing layers orchestrated by a single `process_frame()` call that returns a `PipelineFrame` containing the 2D/3D skeleton, joint angles, detected faults, rep data, BiLSTM predictions, and per-layer latency measurements. The pipeline manages a two-gate system: a **standing gate** (validates upright posture across 5 consecutive frames before calibration) and a **readiness gate** (requires 30 consecutive valid frames per set before rep counting begins).
+The website is a React 19 + TypeScript SPA built with Vite and styled with Tailwind CSS. It serves as the public-facing product where visitors can generate personalized workout programs.
 
-### Analytical Inverse Kinematics
+### Tech Stack
 
-Custom geometric solver that computes **16 joint angles** from 3D skeleton landmarks using vector dot products and plane projections — no dependency on OpenSim or external musculoskeletal models. Outputs hip flexion/adduction/rotation (per side), knee flexion, ankle dorsiflexion, trunk flexion/lateral flexion/rotation, and pelvis tilt/list/rotation. Pelvis tilt is estimated via a parameterized coupling factor (0.30-0.55) derived from the user's hip-to-torso ratio. Runs at **~1-2ms per frame on CPU**.
+| Technology | Version | Purpose |
+|-----------|---------|---------|
+| React | 19 | UI framework |
+| TypeScript | 5.6 | Type safety |
+| Vite | 7.2 | Build tool & dev server |
+| Tailwind CSS | 3.4 | Styling |
+| Framer Motion | 12.23 | Animations |
+| LiveKit Client | 2.17 | Voice agent WebRTC connection |
+| @livekit/components-react | 2.9 | LiveKit UI components |
+| Lucide React | — | Icon library |
 
-### Dual Rep Counting: FSM + BiLSTM
+### Page Sections
 
-Two parallel rep counting systems:
-- **Rule-based FSM** with 4 states (IDLE, DESCENDING, BOTTOM, ASCENDING) using knee flexion thresholds and velocity sign detection with minimum dwell times
-- **BiLSTM depth classifier** — 2-layer bidirectional LSTM (hidden=128) over a 14-dimensional feature vector (4 joint angles + 6 normalized bone lengths + 4 vertical displacements) on a 30-frame sliding window, outputting 5-class depth probabilities (standing / quarter / half / parallel / deep) with vector EMA smoothing (alpha=0.2)
+The landing page is composed of modular section components in `frontend_demo/src/components/sections/`:
 
-When BiLSTM is enabled, its rep events are enriched with rule-based metrics (angle data, timing, faults, bilateral asymmetry) for downstream coaching consumers.
+| Component | Purpose |
+|-----------|---------|
+| `Navbar.tsx` | Top navigation |
+| `Hero.tsx` | Landing hero with value proposition |
+| `ProductFeatures.tsx` | Feature highlights |
+| `ProductShowcase.tsx` | Visual demo of the system |
+| `SampleProgram.tsx` | Example workout program output |
+| `ProgramGenerator.tsx` | Main conversion funnel (see below) |
+| `PoseVisualization.tsx` | Real-time pose display demo |
+| `HowItWorks.tsx` | Educational content |
+| `ValueProposition.tsx` | Benefits messaging |
+| `Footer.tsx` | Navigation and links |
 
-### Adaptive Fault Detection
+### Program Generator Flow
 
-Five-rule engine with **two-phase calibration** that personalizes thresholds to each user:
+The core conversion funnel lives in `frontend_demo/src/components/sections/ProgramGenerator.tsx` and its child components in `frontend_demo/src/components/generator/`:
 
-1. **Body proportion scaling** — Bone constraints calibrate over the first 30 standing frames, deriving `BodyProportions` (hip width, femur length, tibia length, torso length). These scale fault thresholds: knee valgus by hip-to-femur ratio, heel rise by tibia length, forward lean by femur-to-torso ratio.
-2. **Baseline calibration** — After the first clean rep, peak trunk flexion, peak asymmetry, and peak dorsiflexion drop are recorded. Thresholds shift +10-20 degrees above observed peaks to prevent false positives on the user's natural movement pattern.
+```
+EmailGate (capture email address)
+  └── ModeSelector (choose voice or form)
+        ├── VoiceInterface (LiveKit agent connection)
+        │     └── Connects to website_voice_agent.py via WebRTC
+        └── FormInterface (structured multi-step form)
+              ├── PersonalInfoStep (name, age, sex, height, weight)
+              ├── GoalsStep (training goals, duration, frequency)
+              ├── ScheduleStep (available days, time preferences)
+              ├── ExperienceStep (fitness level, training history)
+              └── AdvancedStep (sport-specific, injuries)
+                    └── ProgramGenerationStatus (async job polling)
+```
 
-Fault rules: **depth classification** (quarter/half/parallel/below-parallel), **bilateral asymmetry** (L-R angle difference at 3 severity levels), **heel rise**, **forward lean**, and **knee valgus**. Same-fault deduplication enforces a 15-frame (0.5s) minimum gap.
+**API Integration** (defined in `frontend_demo/src/api/`):
+- `POST /api/programs/generate` — submit program generation request
+- `GET /api/programs/status/{jobId}` — poll async job status
+- `GET /api/programs/last-submission` — fetch previous form data for returning users (prefill)
+- `GET /api/programs/{programId}/download/pdf` — download generated program as PDF
 
-### Pre-IK Skeleton Filtering
+The frontend is built to `frontend_demo/dist/` and served by FastAPI at the `/assets` static mount. FastAPI handles SPA routing by serving `index.html` for all unmatched routes.
 
-Optional 4-stage filtering pipeline that cleans noisy pose estimates before inverse kinematics:
+### Frontend Environment
 
-| Stage | Method | Purpose |
-|-------|--------|---------|
-| Confidence Blending | Weighted interpolation (0.1-0.9 range) | Suppress low-confidence keypoints |
-| Velocity Clamping | 2.5 m/s physical limit | Prevent teleporting joints |
-| Bone Length Constraints | 12 pairs calibrated over 30 frames, +/-15% tolerance | Enforce anatomical consistency |
-| Predictive State | 0.2s lookahead extrapolation | Pre-cue faults before they fully manifest |
+```bash
+# frontend_demo/.env.example
+VITE_API_URL=http://localhost:8000
+VITE_LIVEKIT_URL=wss://nowva-k5kvmizx.livekit.cloud
+```
+
+---
+
+## Website Voice Agent
+
+**Location:** `src/agents/website_voice_agent.py`
+**Prompts:** `src/agents/prompts/website_step_prompts.py`, `src/agents/prompts/website_agent_prompt.py`
+
+A streamlined voice agent for **new website visitors** creating programs without authentication. The agent connects via LiveKit WebRTC from the browser's VoiceInterface component.
+
+### Voice Pipeline
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| STT | Deepgram Nova-3 | Speech-to-text |
+| LLM | OpenAI (gpt-5.2 / gpt-5.2-mini) | Conversation + data extraction |
+| TTS | ElevenLabs | Text-to-speech |
+| VAD | Silero | Voice activity detection |
+| Turn Detection | English Model (LiveKit) | End-of-utterance detection |
+
+### 5-Step Conversational Flow
+
+The agent uses a **step-scoped prompt system** — the system prompt changes at each step to guide the LLM toward specific information gathering:
+
+| Step | Prompt | Data Collected |
+|------|--------|---------------|
+| 1. `NAME_CAPTURE` | Extract first name | Name |
+| 2. `PROFILE_CAPTURE` | Multi-field profile | Age, sex, height, weight, fitness level |
+| 3. `GOALS_CAPTURE` | Training objectives | Goals, program duration, weekly frequency |
+| 4. `ADVANCED_CAPTURE` | Sport-specific details | Sport focus, injury history, equipment access |
+| 5. `FINALIZATION` | Confirm and generate | Trigger async program generation |
+
+### Function Tools (LLM-callable)
+
+| Tool | Purpose |
+|------|---------|
+| `capture_name()` | Extract and validate user's name |
+| `capture_profile_data()` | Multi-field profile collection (age, sex, height, weight, fitness level) |
+| `capture_advanced_details()` | Sport/injury-specific questions |
+| `correct_previous_answer()` | Allow user to change previously captured values at any step |
+| `confirm_program_generation()` | Trigger async program generation via API |
+
+The agent is **ephemeral** — no persistent state between sessions. Collected data is stored in runtime memory and room metadata, then sent to `/api/programs/generate` for async job processing. Returns a `job_id` for the frontend to poll.
+
+### Returning User Handling
+
+The agent checks for existing user data on connection. For returning visitors, it greets by name and offers to use their previous information or start fresh.
+
+---
+
+## Console Voice Agent (main.py)
+
+**Entry point:** `src/main.py` (NowvaApp orchestrator)
+**Agent code:** `src/agents/voice_agent.py` (mode router)
+**Individual agents:** `src/agents/onboarding_agent.py`, `src/agents/main_menu_agent.py`, `src/agents/workout_agent.py`, `src/agents/program_creation_agent.py`, `src/agents/schedule_agent.py`
+
+The full coaching application for authenticated users running on a squat rack computer or laptop.
+
+### Voice Pipeline
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| STT | Deepgram Nova-3 | Speech-to-text |
+| LLM | Google Gemini 3.1 Flash Lite | Fast, low-cost conversation |
+| TTS | Cartesia Sonic-3 | Text-to-speech |
+| VAD | Silero (prewarmed) | Voice activity detection |
+| Turn Detection | MultilingualModel | End-of-utterance detection |
+
+The voice pipeline is **prewarmed** — VAD and AudioCueService are loaded in parallel before room connection, reducing session startup latency from ~2s to <500ms.
+
+### Mode-Aware State Machine
+
+The agent operates as a persistent state machine with mode-specific system prompts and function tools:
+
+```
+OnboardingAgent ──→ MainMenuAgent ──→ WorkoutAgent
+                         │                  │
+                         ├──→ ProgramCreationAgent
+                         │
+                         └──→ ScheduleMaintenanceAgent
+```
+
+| Mode | Agent | Purpose | Key Function Tools |
+|------|-------|---------|--------------------|
+| Onboarding | `OnboardingAgent` | New user welcome, name/email collection | `complete_onboarding()` |
+| Main Menu | `MainMenuAgent` | Menu navigation, intent detection | `start_workout()`, `start_quick_exercise()`, `get_current_program()` |
+| Workout | `WorkoutAgent` | Live workout coaching with biomechanics | `log_workout_complete()`, `skip_exercise()`, `pause_workout()` |
+| Program Creation | `ProgramCreationAgent` | Conversational program generation | `generate_new_program()`, `capture_profile()` |
+| Schedule | `ScheduleMaintenanceAgent` | Workout scheduling, deload management | `view_schedule()`, `reschedule_workout()` |
+
+### Persistent State
+
+Session state is serialized to disk as `.agent_state_<user_id>.json` and survives app restarts. The `AgentState` class tracks:
+- Current mode
+- User profile data
+- Active workout session
+- Conversation context
+- Program references
+
+### Context Compaction
+
+The `CompactionService` (`src/services/compaction_service.py`) performs rolling conversation summarization every ~30 iterations using `gpt-4.1-mini`. This prevents token explosion in long workout sessions while preserving coaching context. A `ContextViewer` debug dashboard is available at `http://localhost:8899`.
+
+### Workout Mode Integration
+
+During workouts, the voice agent coordinates with the biomechanics pipeline through the coaching orchestrator:
+1. Biomechanics pipeline detects faults and rep events
+2. Events flow over IPC to the coaching orchestrator
+3. Orchestrator dispatches cached audio cues (priority 1-3) or LLM speech (priority 10-20)
+4. Audio ducking pauses LLM speech when cached cues play
+5. Context swapping isolates coaching LLM calls from the main conversation context
+
+---
+
+## Biomechanics Pipeline
+
+**Location:** `src/biomechanics/`
+**Orchestrator:** `src/biomechanics/pipeline.py`
+**Config:** `src/biomechanics/config.py` + `config/biomechanics.yaml`
+
+Six processing layers orchestrated by a single `process_frame()` call that returns a `PipelineFrame` containing the 2D/3D skeleton, joint angles, detected faults, rep data, BiLSTM predictions, and per-layer latency measurements.
+
+```
+Camera Frame (1280x720 BGR)
+  │
+  ▼
+┌──────────────────────────────────────┐
+│  1. Pose Estimation                  │  MediaPipe or RTMPose (ONNX)
+│     17 COCO keypoints + 3D coords   │  → Skeleton2D + Skeleton3D
+└──────────────┬───────────────────────┘
+               ▼
+┌──────────────────────────────────────┐
+│  2. Pre-IK Filtering (4 stages)     │  Confidence Blend → Velocity Clamp
+│     Clean noisy pose estimates       │  → Bone Constraints → Predictive State
+└──────────────┬───────────────────────┘
+               ▼
+┌──────────────────────────────────────┐
+│  3. Analytical IK Solver             │  Vector geometry → 16 joint angles
+│     ~1-2ms per frame on CPU          │  → JointAngles dataclass
+└──────────────┬───────────────────────┘
+               ▼
+┌──────────────────────────────────────┐
+│  4. Temporal Smoothing               │  Phase-aware One Euro filter
+│     + Derivative Tracking            │  Angular velocity & acceleration
+└──────────────┬───────────────────────┘
+               ▼
+┌──────────────────────────────────────┐
+│  5. Fault Detection                  │  5-rule engine with two-phase
+│     Body-proportion-scaled thresholds│  adaptive calibration
+└──────────────┬───────────────────────┘
+               ▼
+┌──────────────────────────────────────┐
+│  6. Rep Counting                     │  4-state FSM (rule-based)
+│     Dual system                      │  + BiLSTM depth classifier
+└──────────────────────────────────────┘
+```
+
+### Two-Gate System
+
+Before rep counting begins, the pipeline enforces two gates:
+1. **Standing Gate** — validates upright posture across 5 consecutive frames (min confidence 0.5, max knee flexion 20°, max trunk flexion 25°, torso length 0.25-0.80m)
+2. **Readiness Gate** — requires 30 consecutive valid frames per set before rep counting activates
+
+---
+
+### 1. Pose Estimation
+
+**Files:** `src/biomechanics/pose/mediapipe_fallback.py`, `src/biomechanics/pose/rtmpose.py`
+
+Two backends are supported, selectable via `config/biomechanics.yaml`:
+
+#### MediaPipe (default)
+- Model complexity: 1 (balanced speed/accuracy)
+- Outputs 33 landmarks with 3D world coordinates
+- Mapped to 17 COCO keypoints + 2 estimated foot_index points
+
+#### RTMPose (ONNX)
+- Model: RTMPose-m (256x192) via ONNX Runtime
+- **SimCC decoding**: model outputs two heatmaps (X and Y logits), argmax gives coordinate indices, converted to pixel space via scaling (split ratio 2.0)
+- Execution providers: CPU, CoreML (macOS), CUDA (Linux/Windows) with automatic fallback
+- Preprocessing: BGR→RGB, resize to 192x256, normalize with ImageNet stats (mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+- Confidence: sigmoid of max logit value per joint, threshold 0.3
+
+Both backends output `Skeleton2D` (pixel coordinates) and `Skeleton3D` (world coordinates in meters). Coordinate system: **Y-down** (gravity), **X-left** (subject's perspective), **Z-forward** (toward camera), origin at hip midpoint.
+
+---
+
+### 2. Multi-Camera Triangulation
+
+**Files:** `src/biomechanics/triangulation/calibration.py`, `src/biomechanics/triangulation/triangulator.py`, `src/biomechanics/triangulation/multi_capture.py`
+
+Optional stereo/multi-camera mode for true 3D reconstruction (disabled by default — single camera uses MediaPipe's built-in depth estimation).
+
+#### T-Pose Calibration
+
+Calibration uses a canonical T-pose model scaled to the user's height (188.5cm default) with anthropometric segment-to-height ratios:
+
+| Segment | Ratio |
+|---------|-------|
+| Head-to-shoulder | 13% |
+| Shoulder width (half) | 10.5% |
+| Torso | 29% |
+| Hip width (half) | 7.25% |
+| Femur | 24.5% |
+| Tibia | 23.5% |
+| Upper arm | 17.5% |
+| Forearm | 15% |
+
+**Flow:**
+1. Collect T-pose frames from N cameras
+2. Average 2D keypoints per camera (noise reduction)
+3. `cv2.solvePnP` → rotation/translation per camera (requires 6+ valid keypoints)
+4. Refine with Levenberg-Marquardt optimization
+5. Compute projection matrix `P = K @ [R|t]` per camera
+6. Validate with reprojection error (warns if >10px)
+
+Intrinsic matrix: `focal_length = 0.8 × resolution_width`, no lens distortion.
+
+#### DLT Triangulation
+
+**Direct Linear Transform** for 3D point reconstruction from multiple 2D observations:
+
+For **2 views**: standard `cv2.triangulatePoints`
+
+For **3+ views**: SVD-based DLT:
+1. Build `(2M × 4)` matrix `A` from M projection matrices, where each view contributes two equations:
+   ```
+   x × P[2] - P[0]
+   y × P[2] - P[1]
+   ```
+2. SVD decomposition of `A`
+3. Solution = right singular vector of smallest singular value
+4. Homogeneous divide: `X = (x, y, z) = X[:3] / X[3]`
+
+**Filtering:** min keypoint confidence 0.3, min 2 views required, reprojection error penalty applied to confidence.
+
+#### Synchronized Capture
+
+Each camera runs in a dedicated thread with a ring buffer. Primary camera (device 0) is the reference clock. Secondary cameras find the frame closest to reference within 15ms sync tolerance.
+
+---
+
+### 3. Pre-IK Skeleton Filtering
+
+**Files:** `src/biomechanics/utils/confidence_blend.py`, `src/biomechanics/utils/velocity_clamp.py`, `src/biomechanics/utils/bone_constraints.py`, `src/biomechanics/utils/predictive_state.py`
+
+Four sequential stages that clean noisy pose estimates before inverse kinematics:
+
+| Stage | Method | Parameters | Purpose |
+|-------|--------|------------|---------|
+| **Confidence Blend** | Weighted interpolation between current and previous keypoint positions | Range: 0.1-0.9 | Suppress low-confidence keypoints; lower confidence → heavier interpolation with previous frame |
+| **Velocity Clamp** | Physical velocity limit enforcement | Max: 2.5 m/s | Prevent teleporting joints; if displacement/dt exceeds limit, clamp to max velocity in that direction |
+| **Bone Constraints** | Calibrated bone length enforcement | 12 pairs, ±15% tolerance, 30-frame calibration | Enforce anatomical consistency; proximal→distal cascade correction |
+| **Predictive State** | Lookahead extrapolation from velocity | 0.2s horizon, max 15° extrapolation | Pre-cue faults before they fully manifest; enables faster coaching response |
+
+#### Bone Constraints: Deep Dive
+
+The bone constraint system has two phases:
+
+**Calibration (first 30 frames):**
+1. Measure distances for 14 COCO bone pairs (torso, limbs, feet)
+2. Only use frames where both keypoints have confidence ≥ 0.1
+3. Waits for StandingPoseGate to confirm upright pose
+4. Store median length for each pair
+
+**Enforcement (after calibration):**
+1. For each bone pair, compute: `deviation = |current_len - target_len| / target_len`
+2. If deviation > 15%: project the distal keypoint back along the bone direction to target length
+3. Corrections are applied **proximal → distal** so parent joint corrections don't get invalidated by child corrections
+
+**Body Proportions Derivation:**
+
+After calibration, `BodyProportions` are computed and used to scale fault thresholds:
+
+```python
+hip_width      = distance(L_hip, R_hip)
+femur_avg      = mean(L_femur, R_femur)
+tibia_avg      = mean(L_tibia, R_tibia)
+torso_avg      = mean(L_torso, R_torso)
+
+valgus_scale       = (hip_width / femur_avg) / REFERENCE_HIP_TO_FEMUR_RATIO
+heel_rise_scale    = tibia_avg / REFERENCE_TIBIA_LENGTH_M
+forward_lean_scale = femur_avg / torso_avg / REFERENCE_FEMUR_TO_TORSO
+pelvis_tilt_coupling = 0.35 + 0.15 × (hip_width / torso_avg / 0.50)  # clipped to 0.30-0.55
+```
+
+---
+
+### 4. Analytical Inverse Kinematics
+
+**File:** `src/biomechanics/kinematics/analytical_ik.py`
+**Geometry utilities:** `src/biomechanics/utils/geometry.py`
+
+Custom geometric solver that computes **16+ joint angles** from 3D skeleton landmarks using vector dot products and plane projections. No dependency on OpenSim or external musculoskeletal models. Runs at **~1-2ms per frame on CPU**.
+
+#### Core Math
+
+Three fundamental geometry operations:
+
+**1. `angle_between_vectors(v1, v2)`** — unsigned angle between two vectors:
+```
+θ = arccos( clip( dot(v̂₁, v̂₂), -1, 1 ) )
+```
+
+**2. `joint_angle_3_points(p1, p2, p3)`** — angle at the middle point:
+```
+v₁ = p1 - p2,  v₂ = p3 - p2
+θ = angle_between_vectors(v₁, v₂)
+```
+
+**3. `signed_angle_2d(v1, v2)`** — rotation direction via atan2 (used for transverse plane rotations)
+
+#### Lower Body Angles
+
+**Hip Flexion** (0° = standing, increases with squat depth):
+```
+v_trunk   = shoulder - hip      (trunk vector)
+v_thigh   = knee - hip          (thigh vector)
+v_vertical = [0, -1, 0]         (downward in Y-down coords)
+flexion   = angle(v_thigh, v_vertical)
+```
+
+**Hip Adduction** (medial = positive, lateral = negative):
+```
+Project thigh vector onto frontal plane (remove X component)
+angle = angle(thigh_vec, thigh_frontal)
+Sign: left→positive if X>0, right→positive if X<0
+```
+
+**Knee Valgus** (primary metric — toe-based, frontal plane projection):
+```
+Project to frontal plane (remove Z/depth):
+  ref_line  = hip → foot_index    (reference alignment line)
+  knee_line = hip → knee          (actual knee position)
+  angle     = signed angle via cross product
+  Positive  = valgus (knee medial to hip-foot line)
+```
+Requires foot_index confidence tracking. Falls back if foot confidence is too low.
+
+**Knee Flexion** (0° = straight, 90° = right angle, ~120-130° = deep squat):
+```
+θ_at_knee = joint_angle_3_points(hip, knee, ankle)
+flexion   = 180° - θ_at_knee
+```
+
+**Ankle Dorsiflexion** (estimated from shank tilt, no foot landmark needed):
+```
+shank = knee - ankle
+dorsiflexion = angle(shank, [0, -1, 0])
+```
+
+#### Trunk & Pelvis
+
+**Trunk Flexion** (180° = upright, decreases with forward lean):
+```
+trunk = shoulder_mid - hip_mid
+flexion = 180° - angle(trunk, [0, -1, 0])
+```
+
+**Trunk Lateral Flexion** (positive = left lean):
+```
+Project trunk to frontal plane (remove Z)
+angle = angle(trunk_frontal, [0, 1, 0])
+Sign based on X component
+```
+
+**Trunk Rotation** (transverse plane):
+```
+shoulder_line = left_shoulder - right_shoulder
+Project to XZ plane (remove Y)
+angle = angle(shoulder_xz, [1, 0, 0])
+```
+
+**Pelvis Tilt** (approximated — true measurement would require ASIS/PSIS markers):
+```
+pelvis_tilt = trunk_flexion_angle × coupling_factor
+coupling_factor ∈ [0.30, 0.55], derived from hip_width / torso_length ratio
+Default coupling ≈ 0.4
+```
+
+**Pelvis List** (hip hiking):
+```
+height_diff = left_hip.y - right_hip.y
+angle = atan2(height_diff, hip_width)
+```
+
+**Pelvis Rotation** — same as trunk rotation but using the hip line instead of shoulder line.
+
+#### Upper Body
+
+**Shoulder Flexion** (0° = hanging, 90° = horizontal, 180° = overhead):
+```
+trunk     = shoulder - hip
+upper_arm = elbow - shoulder
+flexion   = 180° - angle(trunk, upper_arm)
+```
+
+**Shoulder Abduction** (frontal plane, 0° = at side, 90° = horizontal out):
+```
+Project trunk and arm to frontal plane (remove Z)
+abduction = 180° - angle(trunk_frontal, arm_frontal)
+```
+
+**Elbow Flexion** (0° = extended, 180° = fully flexed):
+```
+flexion = 180° - joint_angle_3_points(shoulder, elbow, wrist)
+```
+
+**Wrist Position** (cm, relative to shoulder midpoint):
+```
+wrist_y = (shoulder_mid.y - wrist.y) × 100    (positive = above shoulders)
+wrist_x = (wrist.z - shoulder_mid.z) × 100    (positive = forward)
+```
+
+#### Output: `JointAngles` Dataclass
+
+```python
+@dataclass
+class JointAngles:
+    # Hip (per side)
+    hip_flexion_l, hip_flexion_r: float
+    hip_adduction_l, hip_adduction_r: float
+    hip_rotation_l, hip_rotation_r: float
+
+    # Knee (per side)
+    knee_flexion_l, knee_flexion_r: float
+    knee_valgus_l, knee_valgus_r: float
+    foot_confidence_l, foot_confidence_r: float
+
+    # Ankle
+    ankle_dorsiflexion_l, ankle_dorsiflexion_r: float
+
+    # Trunk
+    trunk_flexion: float                 # 180° = upright
+    trunk_lateral_flexion: float
+    trunk_rotation: float
+
+    # Pelvis
+    pelvis_tilt, pelvis_list, pelvis_rotation: float
+
+    # Upper body
+    shoulder_flexion_l, shoulder_flexion_r: float
+    shoulder_abduction_l, shoulder_abduction_r: float
+    elbow_flexion_l, elbow_flexion_r: float
+    wrist_y_l, wrist_y_r: float          # cm above/below shoulder
+    wrist_x_l, wrist_x_r: float          # cm forward/back of shoulder
+
+    # Metadata
+    timestamp: float
+    frame_index: int
+
+    # Derived
+    avg_knee_flexion: float              # mean of L/R
+```
+
+---
+
+### 5. Temporal Smoothing
+
+**Files:** `src/biomechanics/utils/filters.py`, `src/biomechanics/utils/derivatives.py`
+
+#### One Euro Filter (Phase-Aware)
+
+Adaptive low-pass filter whose cutoff frequency increases with signal speed:
+
+```
+cutoff_freq = min_cutoff + β × |dv/dt|
+α = 1 / (1 + τ/dt)    where τ = 1/(2π × cutoff_freq)
+output = α × input + (1-α) × previous_output
+```
+
+**Phase-aware tuning** — filter parameters change based on the rep counter's current phase:
+
+| Phase | min_cutoff | beta | Behavior |
+|-------|-----------|------|----------|
+| IDLE | 0.3 | 0.003 | Heavy smoothing — suppresses standing jitter |
+| DESCENDING | 1.0 | 0.007 | Responsive — tracks fast descent |
+| BOTTOM | 0.8 | 0.005 | Moderate — stable at depth |
+| ASCENDING | 1.0 | 0.007 | Responsive — tracks fast ascent |
+
+The key insight: by adding `β × |velocity|` to the cutoff, the filter stays tight on slow movements (standing) but opens up during fast movement (squat descent/ascent).
+
+#### Derivative Tracking
+
+Computes angular velocities and accelerations per joint:
+
+```
+velocity[t]     = (angle[t] - angle[t-1]) / dt
+acceleration[t] = (velocity[t] - velocity[t-1]) / dt
+```
+
+Optional smoothing with configurable alpha. Used by the rep counter (velocity sign detection) and predictive state estimator (lookahead extrapolation).
+
+---
+
+### 6. Fault Detection
+
+**Files:** `src/biomechanics/faults/rule_engine.py`, `src/biomechanics/faults/fault_types.py`, `src/biomechanics/faults/rules/`
+
+#### Rule Engine
+
+The rule engine maintains a rolling history of 90 frames (~3 seconds at 30fps) and runs all enabled rules (from the exercise profile) on each frame.
+
+**Deduplication:** same-fault events within 15 frames (0.5s) are suppressed.
+
+#### Two-Phase Adaptive Calibration
+
+1. **Body proportion scaling** (first 30 standing frames) — bone constraints calibrate and derive `BodyProportions`. Fault rule thresholds are scaled per the user's anatomy (see Pre-IK Filtering section above).
+
+2. **Baseline calibration** (after first clean rep) — peak trunk flexion, peak asymmetry, and peak dorsiflexion are recorded. Thresholds shift **+10-20°** above observed peaks to prevent false positives on the user's natural movement pattern.
+
+#### Fault Rules
+
+Each rule outputs a `FaultEvent` with: `fault_type`, `severity` (NONE/MILD/MODERATE/SEVERE), `severity_score` (0-3), `message`, `timestamp`, `frame_index`, `rep_number`, and `details` dict.
+
+**Depth** (`src/biomechanics/faults/rules/depth.py`):
+| Depth | Severity | Score |
+|-------|----------|-------|
+| < 60° (quarter squat) | MODERATE | 2.0 |
+| 60-90° (half squat) | MILD | 1.0 |
+| ≥ 90° (parallel or deeper) | None | 0 |
+
+**Knee Valgus** (`src/biomechanics/faults/rules/knee_valgus.py`):
+| Threshold | Severity | Note |
+|-----------|----------|------|
+| 8° + scale | MILD | Scaled by hip-to-femur ratio |
+| 13° + scale | MODERATE | |
+| 18° + scale | SEVERE | |
+
+Uses toe-based valgus from IK solver (knee deviation from hip-to-ankle line). Cross-product sign determines valgus vs. varus.
+
+**Forward Lean** (`src/biomechanics/faults/rules/forward_lean.py`):
+| Trunk Flexion | Severity | Note |
+|--------------|----------|------|
+| 135° (45° lean) | MILD | Scaled by femur/torso ratio |
+| 125° (55° lean) | MODERATE | Longer femurs = more lean acceptable |
+| 115° (65° lean) | SEVERE | |
+
+**Heel Rise** (`src/biomechanics/faults/rules/heel_rise.py`):
+- Threshold: 3.0cm (scaled by tibia length ratio)
+- Computed from ankle height change: `max_ankle_y - min_ankle_y`
+
+**Bilateral Asymmetry** (`src/biomechanics/faults/rules/symmetry.py`):
+- Tracks per-rep: `|knee_flexion_L - knee_flexion_R|` and `|hip_flexion_L - hip_flexion_R|`
+- Three severity levels based on average asymmetry
+
+**Additional rules** (for specific exercises):
+- **Back Rounding** (`back_rounding.py`) — heuristic from trunk angles during descent
+- **Elbow Flare** (`elbow_flare.py`) — elbow abduction vs. shoulder abduction ratio
+- **Bar Tilt/Asymmetry** (`bar_tilt_asymmetry.py`) — barbell endpoint height difference via YOLO detection (warn: 2°, error: 5°)
+- **Bar Path** (`bar_path.py`) — vertical path deviation from ideal
+
+---
+
+### 7. Rep Counting (Dual System)
+
+**File:** `src/biomechanics/faults/rep_counter.py`
+**BiLSTM model:** `src/biomechanics/ml/bilstm_model.py`
+**Feature extraction:** `src/biomechanics/ml/feature_extractor.py`
+
+Two parallel rep counting systems run simultaneously:
+
+#### Rule-Based FSM (4 states)
+
+```
+IDLE ──→ DESCENDING ──→ BOTTOM ──→ ASCENDING ──→ IDLE (rep complete)
+```
+
+| Transition | Condition |
+|-----------|-----------|
+| IDLE → DESCENDING | knee_angle ≥ 30° AND velocity > 10°/s, OR hip_angle ≥ 20° (fallback) |
+| DESCENDING → BOTTOM | velocity < 8°/s (stopped) AND angle within 5° of max depth |
+| BOTTOM → ASCENDING | velocity < -10°/s AND min 2 frames at bottom |
+| ASCENDING → IDLE | knee_angle < 25° AND min 3 ascending frames AND max_depth ≥ 95° AND rep ≥ 15 frames |
+
+**Output: `RepData`** — rep_number, start/end time & frame, max_depth_angle, descent_time, ascent_time, accumulated faults, avg_knee_asymmetry, avg_hip_asymmetry.
+
+#### BiLSTM Depth Classifier
+
+**Architecture:**
+```
+Input (batch, 30, 14)          # 30-frame window, 14 features per frame
+  ↓
+BiLSTM: 2 layers, hidden=128   # bidirectional → (batch, 30, 256)
+  ↓
+FC: 256 → 64 + ReLU + Dropout(0.2)
+  ↓
+Output FC: 64 → 5              # 5-class depth probabilities
+```
+
+**14-dimensional feature vector:**
+- 4 joint angles: knee flexion (avg), hip flexion (avg), trunk flexion, ankle dorsiflexion (avg)
+- 6 normalized bone lengths: torso L/R, femur L/R, tibia L/R
+- 4 vertical displacements: hip, knee, ankle, shoulder (relative to standing height)
+
+**5-class depth labels:**
+
+| Class | Label | Knee Flexion Range |
+|-------|-------|-------------------|
+| 0 | Standing | 0-40° |
+| 1 | Quarter | 40-60° |
+| 2 | Half | 60-80° |
+| 3 | Parallel | 80-100° |
+| 4 | Deep | 100-180° |
+
+Output probabilities are smoothed with vector EMA (α=0.2). When BiLSTM is enabled, its rep events are enriched with rule-based metrics (angle data, timing, faults, bilateral asymmetry).
+
+#### Synthetic Training Data
+
+Training data is generated via `scripts/generate_opensim_data.py` using the OpenSim Rajagopal 2015 musculoskeletal model:
+1. Generate 200-300 synthetic squat sessions with randomized parameters (max depth, speed, asymmetry)
+2. Forward kinematics → body positions → COCO-17 keypoint mapping
+3. Feature extraction (14 features per frame)
+4. 30-frame sliding windows, stride 5
+5. Per-frame depth class labels from knee flexion
+
+---
+
+### 8. Barbell Tracking
+
+**Files:** `src/biomechanics/barbell_tracking/detector.py`, `src/biomechanics/barbell_tracking/kalman.py`, `src/biomechanics/barbell_tracking/tracker.py`
+
+Optional barbell tracking for velocity-based training (VBT) and bar path analysis.
+
+#### Detection
+- YOLO11n-pose model (640×640 input)
+- Outputs 2 keypoints (left and right bar endpoints) + bounding box confidence
+
+#### Kalman Smoother (Constant-Velocity, 2D)
+
+**State vector:** `[x, y, vx, vy]` (position + velocity)
+
+```
+Predict:  x' = x + vx×dt,  y' = y + vy×dt  (constant velocity model)
+Correct:  innovation = [x_measured - x', y_measured - y']
+          state += K × innovation
+```
+
+- Process noise Q: 1e-2 (models acceleration uncertainty)
+- Measurement noise R: 1.0 (models detection noise)
+
+#### Velocity & Calibration
+
+- `px_per_meter` computed from detected bar length vs. known Olympic bar (2.2m)
+- Velocity: average of left/right endpoint velocities, converted from px/s to m/s
+- Acceleration: finite difference of velocity
+- Phase hint: `|vy| < 0.05` → standing, `vy > 0.05` → descending, `vy < -0.05` → ascending
+- Bar tilt: `atan2(right_y - left_y, right_x - left_x)` — triggers fault at 2° warn / 5° error
+
+---
+
+### 9. Exercise Profiles
+
+**Location:** `src/biomechanics/profiles/`
+
+Each exercise has an independent profile defining which fault rules are active, with exercise-specific thresholds and cue text. Profiles inherit from `base.py`.
+
+| Profile | File | Active Rules |
+|---------|------|-------------|
+| Squat | `squat.py` | Depth, knee valgus, forward lean, heel rise, bilateral asymmetry |
+| Deadlift | `deadlift.py` | Back rounding, forward lean, bilateral asymmetry |
+| Barbell Row | `barbell_row.py` | Forward lean, elbow flare, bilateral asymmetry |
+| Overhead Press | `overhead_press.py` | Elbow flare, forward lean, bilateral asymmetry |
+| Barbell Curl | `barbell_curl.py` | Elbow flare, bilateral asymmetry |
+| Romanian Deadlift | `romanian_deadlift.py` | Forward lean, back rounding, bilateral asymmetry |
+| Bulgarian Split Squat | `bulgarian_split_squat.py` | Depth, knee valgus, bilateral asymmetry |
+| Lunge | `lunge.py` | Depth, knee valgus, bilateral asymmetry |
+| Overhead Tricep Extension | `overhead_tricep_extension.py` | Elbow flare |
+| Skull Crusher | `skull_crusher.py` | Elbow flare |
+
+Profiles are registered via `registry.py` and selected at runtime based on the current exercise in the workout.
+
+---
+
+## Coaching System
+
+**Files:** `src/services/coaching_orchestrator.py`, `src/services/audio_cue_service.py`, `src/services/coaching_service.py`, `src/agents/teaching_agent.py`
 
 ### Coaching Orchestrator
 
@@ -134,21 +886,243 @@ Priority-based async dispatch system that mixes cached audio cues with LLM-gener
 
 | Priority | Type | Latency | Example |
 |----------|------|---------|---------|
-| 1 | Fault Cue (cached TTS) | < 50ms | "Knees out!", "Chest up!" |
-| 2 | Rep Count (cached TTS) | < 50ms | "One!", "Two!", "Three!" |
-| 3 | Positive Cue (cached TTS) | < 50ms | "Good rep!", "Strong!" |
-| 10 | LLM Motivation | ~500ms | Context-aware encouragement |
-| 20 | LLM Set Recap | ~1-2s | Fault analysis + coaching tips |
+| 1 | Fault cue (cached TTS) | < 50ms | "Knees out!", "Chest up!" |
+| 2 | Rep count (cached TTS) | < 50ms | "One!", "Two!", "Three!" |
+| 3 | Positive cue (cached TTS) | < 50ms | "Good rep!", "Strong!" |
+| 10 | LLM motivation | ~500ms | Context-aware encouragement |
+| 20 | LLM set recap | ~1-2s | Fault analysis + coaching tips |
 
-Cached cues are pre-generated via `gpt-4o-mini-tts` (24kHz PCM, 30-minute TTL) before each set. **Audio ducking** pauses LLM speech when cached cues play. Fault rate limiting enforces an 8-second minimum between same-type cues. Stale events are dropped (>500ms for cached, >1s for motivation).
+**Audio ducking** pauses LLM speech when cached cues play. Fault rate limiting enforces an 8-second minimum between same-type cues. Stale events are dropped (>500ms for cached, >1s for motivation).
 
-### IPC Architecture
+### Pre-Cached TTS
 
-Multi-process communication over **UNIX domain sockets** with 4-byte big-endian length-prefix framing and JSON payloads. Two channels: **main IPC** (`/tmp/nowva_ipc.sock`) carries pose pipeline data to the main process, **coaching IPC** (`/tmp/nowva_coaching.sock`) forwards events to the voice agent. Handles partial reads, connection retry with timeout, and a 1MB message safety limit.
+Cues are pre-generated via `gpt-4o-mini-tts` (24kHz PCM, 30-minute TTL) before each set:
+- **Setup cues:** "feet shoulder width", "toes out slightly", "keep eyes forward", "take a breath", "brace core"
+- **Movement cues:** "knees out", "chest up", "up" (concentric cue)
+- **Positive cues:** "nice", "good", "keep it up", "let's go"
 
-### Voice Agent
+### Teaching Agent
 
-Built on **LiveKit Agents SDK** with the **OpenAI Realtime API** for fully integrated STT + LLM + TTS bidirectional voice. The agent operates as a mode-aware state machine (onboarding, main menu, workout) with persistent state serialized to disk. During workouts, the agent coordinates with the coaching orchestrator via context swapping — isolating coaching LLM calls from the main conversation context to prevent prompt pollution, with a lock to avoid overlapping with wake-word responses.
+**File:** `src/agents/teaching_agent.py`
+
+Specialized agent for the first set of an exercise, operating as a phase state machine:
+
+```
+SETUP → DESCENDING ↔ ASCENDING → REP_COMPLETE → (loop or HANDOFF)
+```
+
+- **SETUP:** LLM generates intro, delivers foot position/bracing cues
+- **DESCENDING/ASCENDING:** Per-side fault tracking with cached audio cues
+- **REP_COMPLETE:**
+  - Clean rep → random positive cue, streak++
+  - Faulty rep → LLM feedback on form issues, streak reset
+  - After 4 consecutive clean reps → HANDOFF to WorkoutAgent
+
+Height-adaptive cues: for athletes ≥185cm, suggests wider stance option.
+
+---
+
+## Program Generator V5
+
+**Location:** `src/program_generator_v5/`
+
+6-layer agentic LLM pipeline for generating personalized workout programs. Reduced generation time from ~10 minutes to **~1 second** using Cache Augmented Generation (CAG).
+
+### Pipeline Architecture
+
+```
+User Input (profile, goals, constraints)
+  │
+  ▼
+┌───────────────────────────────────────┐
+│  Layer 1: Profile Builder             │  Structured or natural language input
+│  → AthleteProfile                     │  → standardized profile object
+└───────────────┬───────────────────────┘
+                ▼
+┌───────────────────────────────────────┐
+│  Layer 2: Strategy Engine             │  Split selection, periodization
+│  → ProgramStrategy                    │  strategy, weekly structure
+└───────────────┬───────────────────────┘
+                ▼
+┌───────────────────────────────────────┐
+│  Layer 3: Volume Engine               │  Deterministic volume allocation
+│  → Per-muscle-group volume targets    │  based on strategy + evidence tables
+└───────────────┬───────────────────────┘
+                ▼
+┌───────────────────────────────────────┐
+│  Layer 4: Program Builder             │  Exercise selection + optional
+│  → Complete program structure         │  LLM review for quality
+└───────────────┬───────────────────────┘
+                ▼
+┌───────────────────────────────────────┐
+│  Layer 5: Validator                   │  Validation + auto-fix + LLM
+│  → Validated, corrected program       │  full review pass
+└───────────────┬───────────────────────┘
+                ▼
+┌───────────────────────────────────────┐
+│  Layer 6: Serializer                  │  Output format (JSON, PDF)
+│  → Final deliverable                  │
+└───────────────────────────────────────┘
+```
+
+### Key Components
+
+| File | Purpose |
+|------|---------|
+| `main.py` | Async entry point, orchestrates all layers |
+| `layer1_profile_builder.py` | Parses user input into AthleteProfile |
+| `layer2_strategy_engine.py` | Selects training split, periodization model |
+| `layer3_volume_engine.py` | Deterministic volume allocation from evidence-based tables |
+| `layer4_program_builder.py` | Exercise selection + LLM-assisted program composition |
+| `layer5_validator.py` | Multi-pass validation with auto-correction |
+| `layer6_serializer.py` | Output serialization (JSON, PDF via WeasyPrint) |
+| `exercise_library.py` | 144+ exercises (barbell-focused) with metadata |
+| `split_templates.py` | Training split templates (PPL, Upper/Lower, Full Body, etc.) |
+| `vbt_profiles.py` | Velocity-Based Training velocity zones per exercise |
+| `volume_tables.py` | Evidence-based volume landmarks per muscle group |
+| `schemas.py` | Pydantic schemas for all data structures |
+| `scoring.py` | Program quality scoring |
+| `sport_mappings.py` | Sport-specific exercise prioritization |
+
+### LLM Models Used
+
+| Purpose | Model |
+|---------|-------|
+| Program generation (Layers 2, 4, 5) | gpt-5.2, gpt-5.2-mini |
+| Context compaction | gpt-4.1-mini |
+| Conversation (console) | Gemini 3.1 Flash Lite |
+| Conversation (website) | OpenAI (configurable) |
+
+### Async Execution
+
+Program generation runs as a Celery task with Valkey (Redis-compatible) as the broker. The frontend polls `/api/programs/status/{jobId}` for progress updates.
+
+---
+
+## Squat Visualizer
+
+**File:** `scripts/visualize_video_squats.py`
+
+A **live-capture squat analysis and 3D replay tool**. This is an in-development feature that captures squat reps from a webcam, runs the full biomechanics pipeline in real time, and generates an interactive 3D HTML replay with comprehensive analytics.
+
+### Flow
+
+```
+1. Open webcam with live skeleton preview
+2. Auto-calibrate: wait for stable keypoint detection (low jitter < 8px stddev)
+   - Standing gate validates upright posture
+   - Bone constraints calibrate over 30 frames
+3. Recording starts automatically after calibration
+4. Record until 5 reps are detected (rep counter runs live)
+5. Save video (.mp4) + generate 3D replay HTML + open in browser
+```
+
+### Usage
+
+```bash
+python scripts/visualize_video_squats.py
+python scripts/visualize_video_squats.py --output my_session.mp4 --camera 0
+```
+
+### Pipeline Integration
+
+The visualizer runs the **full production pipeline** in real time:
+- MediaPipe pose estimation → Skeleton2D + Skeleton3D
+- Standing gate → bone constraint calibration → body proportion derivation
+- Confidence blending → velocity clamping → bone length enforcement → position smoothing
+- Analytical IK → JointAngles
+- Phase-aware One Euro filtering
+- Derivative tracking → predictive state estimation
+- Rep counter (4-state FSM)
+
+### Output: Interactive 3D HTML Replay
+
+The generated HTML file (Three.js-based) provides:
+
+**Two modes:**
+1. **Replay Mode** — scrub through captured reps with full analytics
+2. **Sandbox Mode** — manipulate a synthetic skeleton to explore angles
+
+**Replay Mode features:**
+- 3D skeleton rendered with orbit controls (drag to rotate, scroll to zoom)
+- Per-rep navigation buttons
+- Play/pause with speed control (0.1x to 3.0x)
+- Frame scrubber for precise navigation
+- Real-time angle readouts: knee flexion L/R, trunk flexion, knee valgus L/R, dorsiflexion L/R, hip flexion L/R
+- Fault severity indicators with threshold visualization bars
+- Baseline metrics from Rep 1 (peak trunk offset, peak valgus, peak knee flex, peak dorsiflexion)
+- Threshold bands (OK / Mild / Moderate / Severe) calibrated to the athlete
+
+**Athlete Stats panel:**
+- Body scale, torso/thigh/shin/arm/shoulder/foot ratios (normalized to reference proportions)
+- Stance width (relative to hip width), toe-out angle
+- Peak movement metrics: max knee flex, forward lean, knee valgus
+- Raw segment lengths in meters (hip width, femur, tibia, torso, upper arm, forearm, shoulder width, foot)
+
+### Coordinate Transformation (IK → Visualization)
+
+```python
+# MediaPipe coords: Y-down, X-left, Z-forward
+# Visualization coords: Y-up, for Three.js rendering
+
+vis_x =  mp_z    # depth becomes X
+vis_y = -mp_y    # flip Y for upright display
+vis_z = -mp_x    # lateral becomes Z
+```
+
+Grounding: ankles shifted to Y=0. Centering: hip midpoint at origin.
+
+### Athlete Parameter Estimation
+
+The `compute_athlete_params()` function reverse-computes normalized body ratios from calibrated bone lengths:
+
+```python
+raw_torso = props.torso_length_avg / REF_TORSO    # REF = 0.50m
+raw_thigh = props.femur_length_avg / REF_THIGH    # REF = 0.42m
+raw_shin  = props.tibia_length_avg / REF_SHIN     # REF = 0.40m
+body_scale = mean(raw_torso, raw_thigh, raw_shin)
+
+torso_ratio = raw_torso / body_scale  # >1 = relatively long torso
+thigh_ratio = raw_thigh / body_scale  # >1 = relatively long femurs
+shin_ratio  = raw_shin  / body_scale  # >1 = relatively long tibias
+```
+
+Stance width and toe-out are computed from standing frames before the first rep. Dorsiflexion-to-knee-flexion ratio at peak depth captures ankle mobility.
+
+---
+
+## Database Schema
+
+PostgreSQL with SQLAlchemy 2.0 ORM. Migrations managed by Alembic (`src/db/migrations/`, 21 migration scripts).
+
+### Core Models (`src/db/models.py`)
+
+| Model | Purpose |
+|-------|---------|
+| `User` | User profiles with biometrics (height, weight, age, sex, fitness level) |
+| `UserGeneratedProgram` | AI-generated workout programs (linked to user + generation job) |
+| `PartnerProgram` | Pre-built program templates |
+| `Workout` | Individual workout days (week number, phase, day name) |
+| `WorkoutExercise` | Exercise selection within a workout (order, sets, reps) |
+| `Set` | Target reps/weight/RPE with VBT velocity thresholds |
+| `ProgressLog` | Per-set completion tracking (actual reps, weight, measured velocity, velocity loss) |
+| `Schedule` / `ScheduleChangeHistory` | Workout scheduling with skip/deload tracking and full undo history |
+| `TrainingLoadMetrics` / `DeloadHistory` | Weekly volume/intensity/velocity aggregates, deload recommendations |
+| `ProgramGenerationJob` | Celery async job tracking (status, progress, result) |
+| `Exercise` | Global exercise catalog |
+| `UserCalibration` | Biomechanics calibration data per user (body proportions, bone lengths) |
+| `ProgramTemplate` | Pre-built program templates |
+
+### Database Utilities
+
+| File | Purpose |
+|------|---------|
+| `src/db/program_utils.py` | Program CRUD, exercise lookup |
+| `src/db/progress_utils.py` | Progress tracking, set completion |
+| `src/db/schedule_utils.py` | Schedule management, deload logic |
+| `src/db/training_load.py` | Weekly load computation, fatigue tracking |
+| `src/db/recovery_analysis.py` | Recovery time estimation |
+| `src/db/calibration_utils.py` | User calibration data persistence |
 
 ---
 
@@ -157,46 +1131,198 @@ Built on **LiveKit Agents SDK** with the **OpenAI Realtime API** for fully integ
 | Domain | Technologies |
 |--------|-------------|
 | **Core** | Python 3.11+, FastAPI, Pydantic, YAML config |
-| **Voice** | LiveKit Agents SDK, OpenAI Realtime API (STT + LLM + TTS) |
-| **CV / ML** | PyTorch (BiLSTM), OpenCV, MediaPipe, ONNX Runtime (RTMPose) |
-| **Data** | PostgreSQL, SQLAlchemy 2.0, Redis, Celery |
+| **Voice (Console)** | LiveKit Agents SDK, Deepgram Nova-3 (STT), Gemini 3.1 Flash Lite (LLM), Cartesia Sonic-3 (TTS), Silero (VAD) |
+| **Voice (Website)** | LiveKit Agents SDK, Deepgram Nova-3 (STT), OpenAI gpt-5.2 (LLM), ElevenLabs (TTS), Silero (VAD) |
+| **CV / ML** | PyTorch (BiLSTM), OpenCV, MediaPipe, ONNX Runtime (RTMPose), Ultralytics YOLO (barbell) |
+| **Program Gen** | OpenAI gpt-5.2/gpt-5.2-mini, gpt-4.1-mini (compaction) |
+| **RAG** | ChromaDB, Voyage AI voyage-3 (embeddings), Cohere rerank-v3.5, Anthropic Claude (contextual enrichment) |
+| **Data** | PostgreSQL, SQLAlchemy 2.0, Alembic (migrations), Valkey/Redis, Celery |
+| **Frontend** | React 19, TypeScript 5.6, Vite 7.2, Tailwind CSS 3.4, Framer Motion, LiveKit Client |
 | **Numerical** | NumPy, SciPy, Pandas |
-| **Visualization** | Matplotlib, Seaborn, OpenCV overlays |
-| **Frontend** | React, TypeScript |
-| **Deployment** | Gunicorn, Uvicorn, Docker, GCP Cloud Run |
+| **Visualization** | Three.js (3D replay), Matplotlib, Seaborn, OpenCV overlays |
+| **Deployment** | Gunicorn, Uvicorn, Nginx, Cloudflare Tunnel |
+
+### LLM Models Summary
+
+| Component | Model | Purpose |
+|-----------|-------|---------|
+| Console conversation | Gemini 3.1 Flash Lite | Fast, low-cost conversational agent |
+| Website conversation | OpenAI (gpt-5.2) | Website visitor onboarding |
+| Program generation | gpt-5.2, gpt-5.2-mini | Multi-layer program synthesis |
+| Context compaction | gpt-4.1-mini | Rolling conversation summarization |
+| TTS cue pre-caching | gpt-4o-mini-tts | Cached coaching audio cues |
+| STT | Deepgram Nova-3 | Speech-to-text (both agents) |
+| TTS (console) | Cartesia Sonic-3 | Console voice output |
+| TTS (website) | ElevenLabs | Website voice output |
+| VAD | Silero | Voice activity detection (local model) |
+| Embeddings | Voyage AI voyage-3 | RAG vector embeddings |
+| Reranking | Cohere rerank-v3.5 | Context retrieval reranking |
 
 ---
 
 ## Project Structure
 
 ```
-src/
-├── main.py                    # Application orchestrator — subprocess lifecycle, IPC wiring, state monitoring
-├── agents/                    # Voice agent (LiveKit + OpenAI Realtime API)
-│   ├── voice_agent.py         # Mode-aware agent with function tools and context management
-│   ├── prompts/               # System prompts per mode (onboarding, menu, workout, program creation)
-│   ├── mixins/                # Modular agent behaviors
-│   └── shared/                # Shared utilities
-├── biomechanics/              # 6-layer real-time processing pipeline
-│   ├── pipeline.py            # Pipeline orchestrator — process_frame() with per-layer latency
-│   ├── config.py              # Pydantic config system (17 sub-configs loaded from YAML)
-│   ├── kinematics/            # Analytical IK solver — 16 joint angles from vector geometry
-│   ├── faults/                # Rule engine (5 rules), rep counter (FSM), fault types
-│   ├── ml/                    # BiLSTM model, inference pipeline, feature extractor, sequence buffer
-│   ├── pose/                  # MediaPipe + RTMPose backends
-│   ├── coaching/              # Session tracker, IPC bridge, cue cache
-│   ├── utils/                 # Filters, gates, geometry, types, derivatives
-│   └── viz/                   # 2D skeleton overlay, post-session plots
-├── services/                  # Coaching orchestrator, audio cue service, set reports
-├── core/                      # IPC communication, agent state, workout session, session management
-├── api/                       # FastAPI backend
-│   ├── routers/               # Endpoints: programs, workouts, livekit, health
-│   ├── services/              # Program saving, updating, job management
-│   └── models/                # Pydantic request/response schemas
-├── db/                        # SQLAlchemy 2.0 models, migrations, utilities
-├── program_generator_v5/      # 6-layer workout program generation with agentic LLM + CAG
-├── pose/                      # Pose estimation subprocess entry point
-└── auth/                      # User management
+NowvaLiveKit/
+├── src/
+│   ├── main.py                           # Application orchestrator — subprocess lifecycle, IPC, state
+│   ├── agents/                           # Voice agents
+│   │   ├── voice_agent.py                # Console agent — mode-aware routing, cascade pipeline
+│   │   ├── website_voice_agent.py        # Website agent — 5-step conversational flow
+│   │   ├── onboarding_agent.py           # New user welcome + data collection
+│   │   ├── main_menu_agent.py            # Menu navigation + intent detection
+│   │   ├── workout_agent.py              # Live workout coaching with biomechanics
+│   │   ├── program_creation_agent.py     # Conversational program generation
+│   │   ├── schedule_agent.py             # Schedule management + deload logic
+│   │   ├── teaching_agent.py             # First-set form teaching (phase machine)
+│   │   ├── console_launcher.py           # Voice agent subprocess launcher
+│   │   ├── prompts/                      # System prompts per mode
+│   │   │   ├── main_menu_prompt.py
+│   │   │   ├── workout_prompt.py
+│   │   │   ├── onboarding_prompt.py
+│   │   │   ├── program_creation_prompt.py
+│   │   │   ├── website_step_prompts.py   # 5-step website flow prompts
+│   │   │   └── website_agent_prompt.py
+│   │   ├── shared/                       # Base agent class, userdata, helpers
+│   │   └── mixins/                       # Modular agent behaviors
+│   ├── biomechanics/                     # 6-layer real-time processing pipeline
+│   │   ├── pipeline.py                   # Pipeline orchestrator — process_frame() entry point
+│   │   ├── config.py                     # 17 Pydantic sub-configs loaded from YAML
+│   │   ├── pose/                         # Pose estimation backends
+│   │   │   ├── mediapipe_fallback.py     # MediaPipe (33 landmarks → COCO-17)
+│   │   │   └── rtmpose.py               # RTMPose-m via ONNX Runtime (SimCC decoding)
+│   │   ├── kinematics/
+│   │   │   └── analytical_ik.py          # 16+ joint angles from vector geometry (~1-2ms)
+│   │   ├── faults/
+│   │   │   ├── rule_engine.py            # Rule orchestrator with adaptive calibration
+│   │   │   ├── rep_counter.py            # 4-state FSM rep counter
+│   │   │   ├── fault_types.py            # FaultRule base class, FaultEvent, severity levels
+│   │   │   └── rules/                    # Individual fault rules
+│   │   │       ├── depth.py              # Squat depth classification
+│   │   │       ├── knee_valgus.py        # Knee valgus via frontal plane projection
+│   │   │       ├── forward_lean.py       # Trunk flexion fault
+│   │   │       ├── heel_rise.py          # Ankle height deviation
+│   │   │       ├── symmetry.py           # Bilateral L/R asymmetry
+│   │   │       ├── back_rounding.py      # Spinal flexion heuristic
+│   │   │       ├── elbow_flare.py        # Elbow abduction fault
+│   │   │       ├── bar_tilt_asymmetry.py # Barbell tilt via YOLO
+│   │   │       └── bar_path.py           # Bar path deviation
+│   │   ├── ml/
+│   │   │   ├── bilstm_model.py           # 2-layer BiLSTM (hidden=128, 5-class depth)
+│   │   │   ├── inference.py              # Sliding window inference pipeline
+│   │   │   └── feature_extractor.py      # 14-dim feature extraction
+│   │   ├── barbell_tracking/
+│   │   │   ├── detector.py               # YOLO11n-pose barbell detection
+│   │   │   ├── kalman.py                 # Constant-velocity Kalman filter (2D)
+│   │   │   └── tracker.py               # Bar path tracking + VBT velocity
+│   │   ├── triangulation/
+│   │   │   ├── calibration.py            # T-pose camera calibration (solvePnP)
+│   │   │   ├── triangulator.py           # SVD-based DLT triangulation
+│   │   │   └── multi_capture.py          # Synchronized multi-camera capture
+│   │   ├── utils/
+│   │   │   ├── filters.py                # Phase-aware One Euro filter
+│   │   │   ├── derivatives.py            # Angular velocity + acceleration tracking
+│   │   │   ├── confidence_blend.py       # Low-confidence keypoint suppression
+│   │   │   ├── velocity_clamp.py         # Physical velocity limit (2.5 m/s)
+│   │   │   ├── bone_constraints.py       # Calibrated bone length enforcement
+│   │   │   ├── predictive_state.py       # 0.2s lookahead extrapolation
+│   │   │   ├── standing_gate.py          # Upright posture validation gate
+│   │   │   ├── position_filter.py        # Keypoint position smoothing
+│   │   │   ├── geometry.py               # Vector math (angle_between, signed_angle)
+│   │   │   └── types.py                  # Skeleton2D/3D, JointAngles, CocoKeypoints, BodyProportions
+│   │   ├── coaching/
+│   │   │   ├── session_tracker.py        # Per-session fault/rep aggregation
+│   │   │   └── ipc_bridge.py             # Pipeline → coaching IPC bridge
+│   │   ├── viz/
+│   │   │   ├── skeleton_overlay.py       # 2D skeleton rendering on video frames
+│   │   │   └── post_session_plots.py     # Matplotlib plots after workout
+│   │   ├── profiles/                     # Exercise-specific fault rule configs
+│   │   │   ├── base.py                   # Base exercise profile
+│   │   │   ├── registry.py               # Profile registry
+│   │   │   ├── squat.py                  # Squat profile (5 rules)
+│   │   │   ├── deadlift.py
+│   │   │   ├── barbell_row.py
+│   │   │   ├── overhead_press.py
+│   │   │   ├── barbell_curl.py
+│   │   │   ├── romanian_deadlift.py
+│   │   │   ├── bulgarian_split_squat.py
+│   │   │   ├── lunge.py
+│   │   │   ├── overhead_tricep_extension.py
+│   │   │   └── skull_crusher.py
+│   │   └── analysis/                     # Post-session analysis
+│   ├── services/
+│   │   ├── coaching_orchestrator.py      # Priority queue, audio ducking, dispatch
+│   │   ├── audio_cue_service.py          # TTS cue pre-generation + caching (30-min TTL)
+│   │   ├── coaching_service.py           # High-level coaching coordination
+│   │   ├── compaction_service.py         # Context summarization (gpt-4.1-mini)
+│   │   ├── context_viewer.py             # Debug dashboard (localhost:8899)
+│   │   ├── set_report.py                 # Post-set analysis and feedback
+│   │   ├── email_service.py              # Email delivery (Resend)
+│   │   └── teaching_cues.py              # Form feedback cue definitions
+│   ├── core/
+│   │   ├── ipc_communication.py          # UNIX socket IPC (4-byte length-prefix, JSON)
+│   │   ├── agent_state.py                # Persistent state serialization
+│   │   ├── session_manager.py            # User session lifecycle
+│   │   ├── session_logger.py             # Usage/pricing tracking
+│   │   ├── latency_tracker.py            # Performance monitoring
+│   │   └── token_estimator.py            # Token counting for cost tracking
+│   ├── api/
+│   │   ├── main.py                       # FastAPI app (CORS, static serving, routers)
+│   │   ├── routers/
+│   │   │   ├── programs.py               # Program generation + status endpoints
+│   │   │   ├── workouts.py               # Workout CRUD
+│   │   │   ├── auth.py                   # JWT authentication
+│   │   │   ├── livekit.py                # LiveKit token generation
+│   │   │   └── health.py                 # Health check
+│   │   ├── services/                     # Job management, program updates
+│   │   └── models/                       # Pydantic request/response schemas
+│   ├── db/
+│   │   ├── models.py                     # SQLAlchemy 2.0 ORM (15 models)
+│   │   ├── database.py                   # Connection setup (PostgreSQL)
+│   │   ├── migrations/                   # Alembic migrations (21 scripts)
+│   │   ├── program_utils.py
+│   │   ├── progress_utils.py
+│   │   ├── schedule_utils.py
+│   │   ├── training_load.py
+│   │   ├── recovery_analysis.py
+│   │   └── calibration_utils.py
+│   ├── program_generator_v5/             # 6-layer agentic LLM program generation
+│   ├── knowledge/                        # Training knowledge base (periodization, exercises)
+│   ├── auth/                             # User management + JWT security
+│   ├── pose/                             # Pose estimation subprocess entry point
+│   └── templates/                        # Jinja2 templates
+├── frontend_demo/                        # React 19 + TypeScript website
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── components/
+│   │   │   ├── sections/                 # Landing page sections
+│   │   │   ├── generator/                # Program generation UX
+│   │   │   │   ├── VoiceInterface.tsx    # LiveKit WebRTC voice agent
+│   │   │   │   ├── FormInterface.tsx     # Structured form alternative
+│   │   │   │   ├── ModeSelector.tsx
+│   │   │   │   ├── ProgramGenerationStatus.tsx
+│   │   │   │   └── onboarding/           # Multi-step form
+│   │   │   └── ui/                       # Reusable UI components
+│   │   ├── api/                          # API client (fetch wrapper + auth)
+│   │   ├── hooks/                        # Custom React hooks
+│   │   ├── types/                        # TypeScript type definitions
+│   │   └── utils/                        # Utility functions
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tailwind.config.js
+│   └── tsconfig.json
+├── config/
+│   └── biomechanics.yaml                 # Pipeline configuration (FPS, thresholds, BiLSTM)
+├── scripts/
+│   ├── visualize_video_squats.py         # Live-capture squat visualizer + 3D HTML replay
+│   └── generate_opensim_data.py          # Synthetic BiLSTM training data generation
+├── calibrated_test_visualizer/           # Multi-camera triangulation test harness
+├── tests/                                # Pytest test suite (18 test files)
+├── models/                               # Pre-trained ML models (BiLSTM, YOLO)
+├── docs/                                 # Technical documentation (20+ documents)
+├── shell/                                # Deployment scripts
+├── requirements.txt                      # Python dependencies (133 packages)
+└── .env                                  # Environment variables (not committed)
 ```
 
 ---
@@ -207,18 +1333,25 @@ src/
 
 - Python 3.11+
 - PostgreSQL 15+
-- Redis (for Celery task queue)
-- Webcam
+- Valkey or Redis (for Celery task queue)
+- Webcam (for biomechanics features)
+- Node.js 18+ (for frontend development)
 
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/NowvaLiveKit.git && cd NowvaLiveKit
+# Clone the repository
+git clone <repo-url> && cd NowvaLiveKit
+
+# Python environment
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+
+# Frontend (if developing the website)
+cd frontend_demo && npm install && cd ..
 ```
 
-### Configuration
+### Environment Configuration
 
 ```bash
 cp .env.example .env
@@ -228,11 +1361,30 @@ Required environment variables:
 
 | Variable | Purpose |
 |----------|---------|
-| `OPENAI_API_KEY` | OpenAI Realtime API + TTS cue generation |
+| `OPENAI_API_KEY` | OpenAI models (program gen, website agent, TTS cues) |
+| `GOOGLE_API_KEY` | Gemini 3.1 Flash Lite (console agent) |
+| `DEEPGRAM_API_KEY` | Deepgram Nova-3 (STT) |
+| `CARTESIA_API_KEY` | Cartesia Sonic-3 (TTS, console) |
+| `ELEVEN_API_KEY` | ElevenLabs (TTS, website) |
 | `LIVEKIT_URL` | LiveKit server URL |
 | `LIVEKIT_API_KEY` | LiveKit API key |
 | `LIVEKIT_API_SECRET` | LiveKit API secret |
 | `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` / `CELERY_BROKER_URL` | Valkey/Redis URL for Celery |
+| `ANTHROPIC_API_KEY` | Anthropic Claude (contextual RAG enrichment) |
+| `VOYAGE_API_KEY` | Voyage AI (RAG embeddings) |
+| `COHERE_API_KEY` | Cohere (reranking) |
+
+Optional:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LLM_MODEL` | `gemini-3.1-flash-lite` | Console agent LLM |
+| `PROGRAM_CREATION_MODEL` | `gpt-5.2` | Program generator LLM |
+| `COMPACTION_MODEL` | `gpt-4.1-mini` | Context compaction LLM |
+| `ENABLE_PREIK_FILTERS` | `true` | Enable pre-IK filtering pipeline |
+| `USE_RAG` | `true` | Enable RAG for coaching |
+| `ALLOWED_ORIGINS` | — | CORS origins (comma-separated) |
 
 ### Running
 
@@ -243,9 +1395,29 @@ python src/main.py
 # API backend only
 uvicorn src.api.main:app --port 8000
 
-# Biomechanics pipeline config
-# Edit config/biomechanics.yaml to adjust FPS, pose backend, fault thresholds, BiLSTM settings
+# Frontend dev server
+cd frontend_demo && npm run dev
+
+# Frontend production build
+cd frontend_demo && npm run build
+
+# Squat visualizer (standalone)
+python scripts/visualize_video_squats.py
+
+# Celery worker (for async program generation)
+celery -A src.api.services.celery_app worker --loglevel=info
 ```
+
+### Configuration
+
+Edit `config/biomechanics.yaml` to adjust:
+- Target FPS, log level
+- Pose estimation backend (mediapipe / rtmpose)
+- Fault detection thresholds (depth, valgus, lean, heel rise, asymmetry)
+- Rep detection parameters (entry angle, min duration)
+- BiLSTM settings (model path, device, class count)
+- Pre-IK filter parameters (velocity clamp, bone constraints, confidence blend)
+- Coaching parameters (cue gaps, timeouts)
 
 ---
 
@@ -257,32 +1429,60 @@ uvicorn src.api.main:app --port 8000
 pytest tests/
 ```
 
-| Area | Coverage |
-|------|----------|
-| **Pipeline** | End-to-end frame processing |
-| **Kinematics** | IK solver angle accuracy |
-| **Faults** | All 5 fault rules + deduplication |
-| **Rep Counting** | FSM state transitions + BiLSTM inference |
-| **Temporal Filtering** | Confidence blend, velocity clamp, bone constraints, predictive state, phase-aware smoothing |
-| **Gates** | Standing gate validation, readiness gate |
-| **Body Proportions** | Proportion derivation + threshold scaling |
-| **Coaching** | Orchestrator priority dispatch, audio cue service |
-| **Visualization** | Set plot generation |
+| Area | What's Tested |
+|------|--------------|
+| Pipeline | End-to-end `process_frame()` with synthetic input |
+| Kinematics | IK solver angle accuracy against known poses |
+| Faults | All fault rules + deduplication + severity thresholds |
+| Rep Counting | FSM state transitions + BiLSTM inference + edge cases |
+| Temporal Filtering | Confidence blend, velocity clamp, bone constraints, predictive state, phase-aware smoothing |
+| Gates | Standing gate validation, readiness gate transition |
+| Body Proportions | Proportion derivation + threshold scaling accuracy |
+| Coaching | Orchestrator priority dispatch, audio cue service, rate limiting |
+| Visualization | Post-session plot generation |
+
+### Integration Test Scripts
+
+```bash
+# Full program generation pipeline
+shell/test_program_generation.sh
+
+# API integration tests
+shell/test_api_integration.sh
+
+# VBT (velocity-based training) tests
+shell/test_vbt_*.sh
+```
 
 ---
 
-## Database Schema
+## Production Deployment
 
-PostgreSQL with SQLAlchemy 2.0 ORM. Core models:
+The application runs on a **Fedora 43 server** (`Host-002`) fronted by a **Cloudflare Tunnel**. Six systemd units:
 
-**User** / **UserGeneratedProgram** / **PartnerProgram** — user profiles and AI-generated or pre-built workout programs
+| Service | Purpose |
+|---------|---------|
+| `valkey.service` | Cache/queue broker (Redis wire-compatible) |
+| `nowva-api.service` | FastAPI backend (Gunicorn + Uvicorn workers) |
+| `nowva-celery.service` | Celery worker for async jobs |
+| `nowva-livekit-agent.service` | LiveKit voice agent |
+| `nginx.service` | Reverse proxy + static file serving |
+| `cloudflared.service` | Cloudflare Tunnel (public DNS) |
 
-**Workout** / **WorkoutExercise** / **Set** — hierarchical workout structure with exercise ordering, target reps/weight/RPE, and velocity-based training (VBT) thresholds
+Deployment scripts are in `shell/`. Note: GCP scripts in `shell/` are legacy and no longer used.
 
-**ProgressLog** — per-set completion tracking including measured velocity and velocity loss for VBT protocols
+---
 
-**Schedule** / **ScheduleChangeHistory** — workout scheduling with skip/deload tracking and full undo history
+## Documentation
 
-**TrainingLoadMetrics** / **DeloadHistory** — weekly volume/intensity/velocity aggregates and deload recommendation tracking
+Additional technical documentation is available in `docs/`:
 
-**ProgramGenerationJob** — Celery async job tracking for program generation requests
+| Document | Content |
+|----------|---------|
+| `HOW_TO_RUN.md` | Detailed setup and run instructions |
+| `DEPLOYMENT_OVERVIEW.md` | Server architecture overview |
+| `PRODUCTION_DEPLOYMENT.md` | Production deployment guide |
+| `biomechanics_rep_counting_architecture.md` | Rep counting system deep dive |
+| `WORKOUT_MODE_FLOW.md` | Workout mode state machine |
+| `squat_rack_implementation.md` | Squat rack deployment details |
+| `RealTime_System_IPC_Architecture.pdf` | IPC architecture diagrams |
