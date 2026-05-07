@@ -82,7 +82,7 @@ def create_job(
     db.refresh(job)
 
     print(f"[JOB MANAGER] Created job {job.id} for user {user_id}")
-    print(f"[JOB MANAGER] Parameters: {age}{sex}, {goal_category}, {duration_weeks}w, {days_per_week}d/w, {fitness_level}")
+    print(f"[JOB MANAGER] Parameters: goal={goal_category}, duration={duration_weeks}w, days={days_per_week}d/w, level={fitness_level}")
     if has_vbt_capability:
         print(f"[JOB MANAGER] VBT capability: ENABLED")
     return job

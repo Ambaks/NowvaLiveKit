@@ -114,7 +114,7 @@ class WebsiteVoiceAgent(Agent):
 
     def _log_function_call(self, function_name: str, parameters: dict, result: any):
         """Helper method to log function tool calls"""
-        logger.info(f"[TOOL] {function_name}({parameters}) -> {result}")
+        logger.info(f"[TOOL] {function_name}() completed")
 
     # =========================================================================
     # NEW TOOLS - Website-Specific
@@ -232,7 +232,7 @@ class WebsiteVoiceAgent(Agent):
                     result = None, "Could not determine sex. Ask the user: male or female?"
                     self._log_function_call(function_name, parameters, result)
                     return result
-                logger.info(f"[CORRECTION] Sex -> {pc['sex']}")
+                logger.info("[CORRECTION] Sex updated")
                 result = None, f"Updated sex to {pc['sex']}. Continue with your current step."
 
             elif field_lower == "height":
@@ -448,12 +448,9 @@ class WebsiteVoiceAgent(Agent):
             # Stash extra info for later DB persistence.
             if extra_info and extra_info.strip().lower() not in ("none", ""):
                 self.state["extra_info"] = extra_info.strip()
-                logger.info(f"[PROGRAM] Extra info: {extra_info.strip()[:100]}")
+                logger.info("[PROGRAM] Extra info captured")
 
-            logger.info(
-                f"[PROGRAM] Personal info captured: age={age}, sex={sex_normalized}, "
-                f"height={height_cm}cm, weight={weight_kg}kg"
-            )
+            logger.info("[PROGRAM] Personal info captured (age, sex, height, weight)")
 
             next_step = get_next_step(ConversationStep.PERSONAL_INFO, self.state)
             await self._advance_to(next_step)
@@ -563,7 +560,7 @@ class WebsiteVoiceAgent(Agent):
             self.state["program_creation"]["age"] = age
             self.state["program_creation"]["sex"] = sex_normalized
 
-            logger.info(f"[PROGRAM] Age: {age}, Sex: {sex_normalized}")
+            logger.info("[PROGRAM] Age and sex captured")
 
             next_step = get_next_step(ConversationStep.AGE_SEX, self.state)
             await self._advance_to(next_step)

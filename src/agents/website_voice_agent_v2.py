@@ -141,7 +141,7 @@ class WebsiteVoiceAgentV2(Agent):
             games_per_week=games_per_week,
         ).items() if v is not None}
 
-        logger.info(f"[V2 TOOL] capture_fields({params})")
+        logger.info(f"[V2 TOOL] capture_fields({list(params.keys())})")
 
         if "program_creation" not in self.state:
             self.state["program_creation"] = {}

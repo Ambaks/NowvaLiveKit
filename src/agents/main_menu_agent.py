@@ -372,7 +372,7 @@ class MainMenuAgent(BaseNovaAgent):
                 "age": int(db_user.age) if db_user.age else None,
                 "sex": db_user.sex
             }
-            logger.info(f"[PROGRAM] Cached existing user data: {existing_data}")
+            logger.info(f"[PROGRAM] Cached existing user data fields: {[k for k, v in existing_data.items() if v is not None]}")
 
         self.state.set("program_creation.existing_data", existing_data)
 

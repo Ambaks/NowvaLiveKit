@@ -138,8 +138,8 @@ async def serve_frontend(full_path: str):
         raise HTTPException(status_code=404, detail="Frontend not built")
 
     # Try to serve the exact file first (images, favicon, etc. from public/)
-    static_file = frontend_dist / full_path
-    if full_path and static_file.is_file():
+    static_file = (frontend_dist / full_path).resolve()
+    if full_path and static_file.is_relative_to(frontend_dist) and static_file.is_file():
         return FileResponse(str(static_file))
 
     # Fall back to index.html for SPA routing
