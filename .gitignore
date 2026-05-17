@@ -59,6 +59,7 @@ secrets/
 .env.production
 .env.development
 .env.test
+scripts/discord_setup/*
 
 # IDE
 .vscode/

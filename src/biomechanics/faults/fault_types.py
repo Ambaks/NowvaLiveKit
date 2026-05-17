@@ -28,6 +28,8 @@ class FaultType(str, Enum):
     SHOULDER_STABILITY = "shoulder_stability"
     TRUNK_STABILITY = "trunk_stability"
     TEMPO = "tempo"  # Tempo-related faults (too fast, stalling)
+    LIMITED_DORSIFLEXION = "limited_dorsiflexion"
+    BAR_DRIFT = "bar_drift"
 
 
 # Default thresholds from config (degrees unless specified)
@@ -65,6 +67,17 @@ DEFAULT_THRESHOLDS: Dict[FaultType, Dict[str, float]] = {
         "eccentric_too_fast": 100.0,  # deg/sec - uncontrolled descent
         "stalling_velocity": 15.0,    # deg/sec - considered stalling
         "stall_frames": 10,           # frames before triggering stall warning
+    },
+    FaultType.LIMITED_DORSIFLEXION: {
+        "threshold": 25.0,            # degrees — max dorsiflexion below this triggers fault
+        "mild": 20.0,                 # 20-15° max dorsiflexion
+        "moderate": 15.0,             # 15-10°
+        "severe": 10.0,               # < 10°
+    },
+    FaultType.BAR_DRIFT: {
+        "mild": 5.0,                  # 5-10 cm load-reference drift from midfoot
+        "moderate": 10.0,             # 10-15 cm
+        "severe": 15.0,               # > 15 cm
     },
 }
 
@@ -105,6 +118,16 @@ FAULT_MESSAGES: Dict[FaultType, Dict[str, str]] = {
         "stalling": "Grinding — push through!",
         "good": "Good tempo",
     },
+    FaultType.LIMITED_DORSIFLEXION: {
+        "mild": "Limited ankle mobility — consider heel wedges",
+        "moderate": "Restricted ankle range — heeled shoes or mobility work recommended",
+        "severe": "Very limited dorsiflexion — address ankle mobility",
+    },
+    FaultType.BAR_DRIFT: {
+        "mild": "Slight bar drift from midfoot",
+        "moderate": "Bar drifting off midfoot — stay balanced",
+        "severe": "Excessive bar drift — keep weight over midfoot",
+    },
 }
 
 
@@ -126,15 +149,21 @@ class FaultRule(ABC):
     # Per-frame context set by RuleEngine before each evaluate() call.
     # Rules that don't need it simply never read it.
     _bar_detection = None  # type: Optional["BarbellDetection"]
+    _skeleton_state = None  # type: Optional[Dict[str, Any]]
 
-    def set_frame_context(self, bar_detection=None) -> None:
+    def set_frame_context(self, bar_detection=None, skeleton_state=None) -> None:
         """Update per-frame auxiliary context for this rule.
 
         Called by the engine once per frame, before ``evaluate()``. Subclasses
         may override to react to context changes, but the default is just to
         stash references as attributes.
+
+        ``skeleton_state`` is an optional dict carrying FK-derived data
+        (e.g. ``load_reference_xz``, ``midfoot_xz``) for rules that need
+        spatial information beyond joint angles.
         """
         self._bar_detection = bar_detection
+        self._skeleton_state = skeleton_state
 
     @property
     @abstractmethod

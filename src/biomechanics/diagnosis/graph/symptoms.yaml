@@ -1,0 +1,72 @@
+# Symptom-cause knowledge graph for squat diagnosis.
+#
+# Prior rationale:
+#   Priors within each symptom's candidate_causes represent the relative
+#   likelihood that each cause explains the symptom IN ISOLATION, before
+#   evidence tests run. They sum to ~1.0 per symptom. Values are informed
+#   by coaching literature and biomechanical first principles:
+#   - Structural/mobility causes get higher priors (more common root cause)
+#   - Cue-level causes get lower priors (less likely to be THE root cause)
+#
+# Severity scoring:
+#   zscore     — severity = clamp((value - expected) / stdev_estimate, 0, 1)
+#   relative_excess — severity = clamp((value - expected - threshold) / scale, 0, 1)
+
+excessive_trunk_lean:
+  description: "Trunk pitches forward excessively at the bottom position"
+  detection:
+    feature: trunk_pitch_at_bottom
+    aggregation: mean
+  expected_value_fn: expected_trunk_lean_geometric
+  severity_scoring: relative_excess
+  threshold: 5.0
+  candidate_causes:
+    - { cause_id: anthropometric_femur_torso_ratio, prior: 0.25 }
+    - { cause_id: narrow_stance, prior: 0.20 }
+    - { cause_id: narrow_foot_angle, prior: 0.15 }
+    - { cause_id: limited_ankle_df, prior: 0.20 }
+    - { cause_id: limited_hip_flexion, prior: 0.10 }
+    - { cause_id: bracing_failure, prior: 0.10 }
+
+knee_not_tracking_toes:
+  description: "Knees drift medially instead of tracking over foot direction"
+  detection:
+    feature: knee_valgus_max
+    aggregation: max
+  expected_value_fn: expected_knee_valgus_baseline
+  severity_scoring: relative_excess
+  threshold: 6.0
+  candidate_causes:
+    - { cause_id: weak_hip_abductors, prior: 0.30 }
+    - { cause_id: foot_collapse_arch, prior: 0.20 }
+    - { cause_id: knee_track_cue, prior: 0.25 }
+    - { cause_id: narrow_stance, prior: 0.15 }
+    - { cause_id: weight_too_heavy, prior: 0.10 }
+
+asymmetric_depth:
+  description: "One hip drops noticeably lower than the other at bottom"
+  detection:
+    feature: hip_y_asymmetry
+    aggregation: mean
+  expected_value_fn: expected_hip_symmetry
+  severity_scoring: relative_excess
+  threshold: 2.0
+  candidate_causes:
+    - { cause_id: unilateral_hip_mobility_limit, prior: 0.50 }
+    - { cause_id: weight_shift_cue, prior: 0.35 }
+    - { cause_id: weight_too_heavy, prior: 0.15 }
+
+depth_limit:
+  description: "Unable to achieve hip-below-knee depth (parallel or deeper)"
+  detection:
+    feature: depth_deficit
+    aggregation: last
+  expected_value_fn: expected_depth_zero
+  severity_scoring: relative_excess
+  threshold: 0.5
+  candidate_causes:
+    - { cause_id: limited_ankle_df, prior: 0.25 }
+    - { cause_id: limited_hip_flexion, prior: 0.25 }
+    - { cause_id: narrow_stance, prior: 0.15 }
+    - { cause_id: narrow_foot_angle, prior: 0.15 }
+    - { cause_id: depth_cue_unfamiliar, prior: 0.20 }

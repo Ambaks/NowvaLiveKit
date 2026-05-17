@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 import time
 import webbrowser
@@ -368,6 +369,7 @@ def run_capture(camera_id, video_output_path, profiler=None):
 
     video_writer = None
     frames_data = []
+    skeletons_3d = []
     reps = []
     rep_boundaries = []
     current_rep_start = None
@@ -479,8 +481,10 @@ def run_capture(camera_id, video_output_path, profiler=None):
 
                 fd = extract_frame_data(skeleton_3d, angles, rec_frame_idx)
                 frames_data.append(fd)
+                skeletons_3d.append(skeleton_3d)
             else:
                 frames_data.append(None)
+                skeletons_3d.append(None)
 
             rec_frame_idx += 1
             if profiler:
@@ -535,16 +539,82 @@ def run_capture(camera_id, video_output_path, profiler=None):
     cv2.destroyAllWindows()
     pose.release()
 
-    return frames_data, reps, rep_boundaries, fps, bone_constraints
+    return frames_data, reps, rep_boundaries, fps, bone_constraints, skeletons_3d
 
 
-def build_html(baseline, replay_reps_data, fps, athlete_params=None):
+def serialize_kinodynamics_state(skeleton, q_trajectory_per_rep, foot_targets_per_rep=None,
+                                  faults_per_rep=None, rep_boundaries=None,
+                                  joint_angles_per_rep=None):
+    """Serialize pipeline state for the browser-side KinodynamicsSolver.
+
+    Parameters
+    ----------
+    skeleton : SkeletonModel (must have joint_masses set via scale_skeleton)
+    q_trajectory_per_rep : list of (T_i, n_dof) ndarrays, one per rep
+    foot_targets_per_rep : list of (T_i, 2, 3) ndarrays (L/R ankle world pos)
+    faults_per_rep : list of fault dicts per rep
+    rep_boundaries : list of [start_frame, end_frame, bottom_frame] per rep
+    joint_angles_per_rep : list of per-frame JointAngles dicts per rep
+    """
+    joints_ser = []
+    for jd in skeleton.joints:
+        joints_ser.append({
+            "name": jd.name,
+            "parent": jd.parent,
+            "offset": [float(x) for x in jd.offset],
+            "dof_axes": list(jd.dof_axes),
+            "limits": [[float(lo), float(hi)] for lo, hi in jd.limits],
+        })
+
+    dof_map = {}
+    for (joint, axis), idx in skeleton._dof_map.items():
+        dof_map[f"{joint}.{axis}"] = idx
+
+    bounds = skeleton.bounds()
+
+    skel_def = {
+        "joints": joints_ser,
+        "n_dof": skeleton.n_dof,
+        "n_joints": skeleton.n_joints,
+        "dof_map": dof_map,
+        "bounds": [[float(lo), float(hi)] for lo, hi in bounds],
+        "joint_masses": (
+            [float(x) for x in skeleton.joint_masses]
+            if skeleton.joint_masses is not None
+            else None
+        ),
+    }
+
+    reps_ser = []
+    for i, qt in enumerate(q_trajectory_per_rep):
+        rep = {"q_trajectory": qt.tolist()}
+        if foot_targets_per_rep and i < len(foot_targets_per_rep):
+            ft = foot_targets_per_rep[i]
+            rep["foot_targets"] = ft.tolist() if hasattr(ft, "tolist") else ft
+        if faults_per_rep and i < len(faults_per_rep):
+            rep["faults"] = faults_per_rep[i]
+        if joint_angles_per_rep and i < len(joint_angles_per_rep):
+            rep["joint_angles"] = joint_angles_per_rep[i]
+        reps_ser.append(rep)
+
+    result = {"skeleton_def": skel_def, "reps": reps_ser}
+    if rep_boundaries is not None:
+        result["rep_boundaries"] = (
+            rep_boundaries.tolist()
+            if hasattr(rep_boundaries, "tolist")
+            else rep_boundaries
+        )
+    return result
+
+
+def build_html(baseline, replay_reps_data, fps, athlete_params=None, kinodynamics_state=None):
     data_json = json.dumps({
         "baseline": baseline,
         "reps": replay_reps_data,
         "fps": fps,
         "athleteParams": athlete_params,
     })
+    kino_json = json.dumps(kinodynamics_state) if kinodynamics_state else "null"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -656,6 +726,12 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
 .legend-severe {{ background: #3a1a1a; color: #e74c3c; }}
 .balance-ok {{ color: #2ecc71; font-weight: 600; }}
 .balance-bad {{ color: #ff4444; font-weight: 600; }}
+#sb-kino-controls input[type="checkbox"] {{ accent-color: #4ecdc4; }}
+.kino-fault-item {{ padding: 2px 0; }}
+.kino-fault-item .sev {{ font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }}
+.kino-fault-item .sev-mild {{ background: #3a3a1a; color: #f1c40f; }}
+.kino-fault-item .sev-moderate {{ background: #3a2a1a; color: #e67e22; }}
+.kino-fault-item .sev-severe {{ background: #3a1a1a; color: #e74c3c; }}
 </style>
 </head>
 <body>
@@ -764,10 +840,36 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
                 <label style="display:flex; align-items:center; gap:4px; cursor:pointer">
                     <input type="radio" name="sb-solver-mode" value="compensated"> Compensated
                 </label>
+                <label id="sb-kino-radio-label" style="display:none; align-items:center; gap:4px; cursor:pointer">
+                    <input type="radio" name="sb-solver-mode" value="kinodynamics"> Kinodynamics
+                </label>
             </div>
             <div id="sb-compensated-controls" style="display:none">
                 <div class="slider-row"><label>Ankle dorsi override</label><input type="range" id="sb-ankle-override" min="0" max="45" value="15" step="0.5"><span class="value" id="sb-ankle-override-val">15°</span></div>
                 <div class="mono" id="sb-solved-angles" style="margin-top:6px; font-size:11px"></div>
+            </div>
+            <div id="sb-kino-controls" style="display:none">
+                <div class="mono" id="sb-kino-info" style="margin-top:6px; font-size:11px; color:#4ecdc4">
+                    20-DOF soft-cost optimizer &bull; 5 cost terms &bull; temporal taper
+                </div>
+                <div style="margin-top:10px">
+                    <div class="slider-row"><label>Dorsiflexion &Delta;</label><input type="range" id="kino-dorsi" min="-20" max="20" value="0" step="0.5"><span class="value" id="kino-dorsi-val">0°</span></div>
+                    <div class="slider-row"><label>Stance Width &Delta;</label><input type="range" id="kino-stance" min="-10" max="10" value="0" step="0.5"><span class="value" id="kino-stance-val">0 cm</span></div>
+                    <div class="slider-row"><label>Toe Angle &Delta;</label><input type="range" id="kino-toe" min="-15" max="15" value="0" step="0.5"><span class="value" id="kino-toe-val">0°</span></div>
+                    <div class="slider-row"><label>Knee Tracking</label><input type="range" id="kino-kneetrack" min="0" max="5" value="1" step="0.1"><span class="value" id="kino-kneetrack-val">1.0&times;</span></div>
+                </div>
+                <div style="margin-top:8px; display:flex; align-items:center; gap:10px">
+                    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:12px; color:#b0b0cc">
+                        <input type="checkbox" id="kino-show-original"> Show original
+                    </label>
+                    <span class="mono" id="kino-solve-time" style="font-size:11px; color:#666"></span>
+                </div>
+            </div>
+            <div id="sb-kino-faults" style="display:none; margin-top:10px">
+                <div class="section faults" style="margin:0; padding:10px">
+                    <div class="section-title"><span class="dot"></span> IK Faults</div>
+                    <div class="mono" id="kino-faults-info"></div>
+                </div>
             </div>
         </div>
         <div class="section baseline">
@@ -799,6 +901,7 @@ import * as THREE from 'three';
 import {{ OrbitControls }} from 'three/addons/controls/OrbitControls.js';
 
 const DATA = {data_json};
+const KINO_DATA = {kino_json};
 const BONE_CONNECTIONS = [
     [0,1],[0,2],[1,3],[2,4],
     [0,5],[0,6],
@@ -909,7 +1012,6 @@ const dl = new THREE.DirectionalLight(0xffffff, 0.8);
 dl.position.set(3, 5, 3);
 scene.add(dl);
 scene.add(new THREE.GridHelper(4, 20, 0x222244, 0x1a1a30));
-
 // Joint and bone materials
 const matN = new THREE.MeshPhongMaterial({{ color: 0x40e0a0, emissive: 0x103020 }});
 const matF = new THREE.MeshPhongMaterial({{ color: 0xff4444, emissive: 0x401010 }});
@@ -1046,7 +1148,46 @@ bindSliderDelta('sb-d-valgus-l', 'sb-d-valgus-l-val', '°', 1);
 bindSliderDelta('sb-d-valgus-r', 'sb-d-valgus-r-val', '°', 1);
 bindSlider('sb-barbell-weight', 'sb-barbell-weight-val', ' kg', 0);
 bindSlider('sb-body-mass', 'sb-body-mass-val', ' kg', 0);
-bindSlider('sb-speed-slider', 'sb-speed-val', 'x', 1);
+// Speed slider updates playback rate only, not pose — skip _slidersModified
+
+
+// ======== KINODYNAMICS SLIDER BINDINGS ========
+bindSliderDelta('kino-dorsi', 'kino-dorsi-val', '°', 1);
+bindSlider('kino-stance', 'kino-stance-val', ' cm', 1);
+bindSlider('kino-toe', 'kino-toe-val', '°', 1);
+bindSlider('kino-kneetrack', 'kino-kneetrack-val', '×', 1);
+let _kinoShowOriginal = false;
+const _kinoOrigCheckbox = document.getElementById('kino-show-original');
+if (_kinoOrigCheckbox) _kinoOrigCheckbox.addEventListener('change', () => {{
+    _kinoShowOriginal = _kinoOrigCheckbox.checked;
+}});
+
+// Ghost skeleton meshes for original pose overlay
+const matGhost = new THREE.MeshPhongMaterial({{ color: 0x4488aa, emissive: 0x102030, transparent: true, opacity: 0.35 }});
+const matBGhost = new THREE.MeshPhongMaterial({{ color: 0x336688, emissive: 0x081820, transparent: true, opacity: 0.25 }});
+const ghostJoints = [], ghostBones = [];
+for (let i = 0; i < 19; i++) {{ const m = new THREE.Mesh(sGeo, matGhost); m.visible = false; scene.add(m); ghostJoints.push(m); }}
+for (const [a, b] of BONE_CONNECTIONS) {{
+    const g = new THREE.CylinderGeometry(0.004, 0.004, 1, 4); g.translate(0, 0.5, 0);
+    const m = new THREE.Mesh(g, matBGhost); m.visible = false; scene.add(m); ghostBones.push({{ mesh: m, a, b }});
+}}
+function updateGhostSkeleton(kpts, visible) {{
+    for (let i = 0; i < 19; i++) {{
+        if (visible && kpts) {{
+            ghostJoints[i].position.set(kpts[i*3], kpts[i*3+1], kpts[i*3+2]);
+            ghostJoints[i].visible = true;
+        }} else {{ ghostJoints[i].visible = false; }}
+    }}
+    for (const bone of ghostBones) {{
+        if (visible && kpts) {{
+            const pa = ghostJoints[bone.a].position, pb = ghostJoints[bone.b].position;
+            const d = new THREE.Vector3().subVectors(pb, pa), l = d.length(); d.normalize();
+            bone.mesh.position.copy(pa); bone.mesh.scale.set(1, l, 1);
+            bone.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d);
+            bone.mesh.visible = true;
+        }} else {{ bone.mesh.visible = false; }}
+    }}
+}}
 
 // ======== MODE SWITCHING ========
 document.getElementById('tab-replay').addEventListener('click', () => {{
@@ -1064,11 +1205,25 @@ document.getElementById('tab-sandbox').addEventListener('click', () => {{
     document.getElementById('sandbox-panel').style.display = '';
     document.getElementById('replay-panel').style.display = 'none';
 }});
+{{
+    const sp = new URLSearchParams(location.search);
+    if (location.hash === '#sandbox' || sp.has('sandbox')) {{
+        document.getElementById('tab-sandbox').click();
+        for (const [k, v] of sp.entries()) {{
+            const el = document.getElementById(k);
+            if (el && el.type === 'range') {{
+                el.value = v;
+                el.dispatchEvent(new Event('input'));
+            }}
+        }}
+    }}
+}}
 
 function hideSandboxVisuals() {{
     ghostTorsoLine.visible = false;
     midfootLine.visible = false; midfootDisc.visible = false;
     barbellGroup.visible = false;
+    updateGhostSkeleton(null, false);
 }}
 
 // ======== FAULT CLASSIFICATION ========
@@ -1293,32 +1448,28 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder) {{
     // For each leg: derive the forward direction from the captured shin,
     // then rotate shin & thigh by the delta angles.
     function adjustLeg(ankle, capKnee, capHip, dDorsi, dKnee, dValgus, side) {{
-        // Captured shin and thigh vectors
         const shinVec = [capKnee[0]-ankle[0], capKnee[1]-ankle[1], capKnee[2]-ankle[2]];
         const thighVec = [capHip[0]-capKnee[0], capHip[1]-capKnee[1], capHip[2]-capKnee[2]];
+        const capShinLen = Math.sqrt(shinVec[0]*shinVec[0]+shinVec[1]*shinVec[1]+shinVec[2]*shinVec[2]) || shl;
+        const capThighLen = Math.sqrt(thighVec[0]*thighVec[0]+thighVec[1]*thighVec[1]+thighVec[2]*thighVec[2]) || thl;
 
-        // Forward direction: shin ground projection
         const gLen = Math.sqrt(shinVec[0]*shinVec[0] + shinVec[2]*shinVec[2]) || 1e-6;
         const fwd = [shinVec[0]/gLen, 0, shinVec[2]/gLen];
-
-        // Lateral axis: perpendicular to forward in ground plane
-        // Chosen so positive rotation = more forward tilt (dorsiflexion)
         const lat = [fwd[2], 0, -fwd[0]];
 
-        // Rotate shin by dorsi delta around lateral axis
         let newShinDir = _rotVec(_norm(shinVec), lat, dDorsi * deg2rad);
-        // Rotate shin by valgus delta around forward axis
-        // Positive valgus = medial collapse: for left leg rotate toward +Z, for right toward -Z
         if (Math.abs(dValgus) > 0.001) {{
             newShinDir = _rotVec(newShinDir, fwd, dValgus * deg2rad * side);
         }}
-        const newKnee = [ankle[0]+newShinDir[0]*shl, ankle[1]+newShinDir[1]*shl, ankle[2]+newShinDir[2]*shl];
+        const newKnee = [ankle[0]+newShinDir[0]*capShinLen, ankle[1]+newShinDir[1]*capShinLen, ankle[2]+newShinDir[2]*capShinLen];
 
-        // Thigh: rotate by (dDorsi - dKnee) around lateral axis
-        // dDorsi propagates the shin tilt change through the knee joint
-        // dKnee additionally opens/closes the knee angle
-        let newThighDir = _rotVec(_norm(thighVec), lat, (dDorsi - dKnee) * deg2rad);
-        const newHip = [newKnee[0]+newThighDir[0]*thl, newKnee[1]+newThighDir[1]*thl, newKnee[2]+newThighDir[2]*thl];
+        const capThighDir = _norm(thighVec);
+        const remainingY = capHip[1] - newKnee[1];
+        const capCosY = Math.max(-1, Math.min(1, capThighDir[1]));
+        const newCosY = Math.max(-1, Math.min(1, remainingY / capThighLen));
+        const thighRotDelta = Math.acos(capCosY) - Math.acos(newCosY);
+        let newThighDir = _rotVec(capThighDir, lat, thighRotDelta - dKnee * deg2rad);
+        const newHip = [newKnee[0]+newThighDir[0]*capThighLen, newKnee[1]+newThighDir[1]*capThighLen, newKnee[2]+newThighDir[2]*capThighLen];
 
         return {{ knee: newKnee, hip: newHip }};
     }}
@@ -1332,14 +1483,41 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder) {{
 
     const hipMidX = (L.hip[0]+R.hip[0])/2, hipMidY = (L.hip[1]+R.hip[1])/2;
 
-    // Trunk angle from locked shoulder
-    let totalTrunkLean;
-    if (lockedShoulder) {{
-        totalTrunkLean = Math.max(0, Math.atan2(lockedShoulder.x - hipMidX, lockedShoulder.y - hipMidY)
-            + (dLean * deg2rad));
-    }} else {{
-        totalTrunkLean = 0;
-    }}
+    // COM-balanced trunk angle: solve for trunk lean that places body COM over midfoot
+    const heelOff = 0.06;
+    const midfootFwd = (fl / 2 - heelOff) * Math.cos(toeOutRad);
+    const ankleMidX = (aL[0] + aR[0]) / 2;
+
+    const S = SEGMENT_MASS;
+    const mFoot = S.foot_l.frac + S.foot_r.frac;
+    const mShank = S.shank_l.frac + S.shank_r.frac;
+    const mThigh = S.thigh_l.frac + S.thigh_r.frac;
+    const mUpper = S.trunk.frac + S.head.frac + S.upper_arm_l.frac + S.upper_arm_r.frac + S.forearm_l.frac + S.forearm_r.frac;
+    const mTotal = mFoot + mShank + mThigh + mUpper;
+    const sinCoeff = (S.trunk.frac * 0.5 * tl + S.head.frac * (tl + headH * 0.5) + (S.upper_arm_l.frac + S.upper_arm_r.frac + S.forearm_l.frac + S.forearm_r.frac) * tl) / mTotal;
+
+    const targetX = ankleMidX + midfootFwd;
+    const kneeMidX = (L.knee[0] + R.knee[0]) / 2;
+
+    // Lower body COM x from FK positions
+    const newLowerCOMx = (mShank * (ankleMidX + kneeMidX) / 2 + mThigh * (kneeMidX + hipMidX) / 2 + mFoot * (ankleMidX + midfootFwd)) / mTotal;
+    const newB = (mUpper / mTotal) * hipMidX + newLowerCOMx;
+    const newSinTrunk = (targetX - newB) / sinCoeff;
+    const clampedSin = Math.max(-1, Math.min(1, newSinTrunk));
+    const comTrunkLean = Math.asin(clampedSin);
+
+    // Captured trunk lean from shoulder/hip positions
+    const capHipMidX = (cHL[0] + cHR[0]) / 2;
+    const capHipMidY = (cHL[1] + cHR[1]) / 2;
+    const capturedTrunkLean = lockedShoulder ? Math.atan2(lockedShoulder.x - capHipMidX, lockedShoulder.y - capHipMidY) : 0;
+
+    // Phase-weighted blend: at standing use captured trunk; at depth use COM-balanced trunk
+    const phase = fd.phase || 0;
+    const legDeltaMag = Math.sqrt(dDorsiL * dDorsiL + dDorsiR * dDorsiR + dKF * dKF);
+    const phaseBlend = Math.min(1, Math.max(0, (phase - 0.15) * 5));
+    const deltaBlend = Math.min(1, legDeltaMag / 15);
+    const comWeight = phaseBlend * deltaBlend;
+    let totalTrunkLean = capturedTrunkLean * (1 - comWeight) + comTrunkLean * comWeight + dLean * deg2rad;
 
     const sMidX = hipMidX + tl * Math.sin(totalTrunkLean);
     const sMidY = hipMidY + tl * Math.cos(totalTrunkLean);
@@ -1488,6 +1666,599 @@ class ConstrainedChainSolver {{
         }}
         return trunkRad;
     }}
+}}
+
+// ======== KINODYNAMICS SOLVER (20-DOF what-if optimizer) ========
+class KinodynamicsSolver {{
+    constructor(skelDef) {{
+        const nj = skelDef.n_joints, nd = skelDef.n_dof;
+        this.nj = nj; this.nd = nd;
+        this.joints = skelDef.joints;
+        this.dofMap = skelDef.dof_map;
+        this.jointMasses = new Float64Array(skelDef.joint_masses);
+        this.totalMass = 0;
+        for (let i = 0; i < nj; i++) this.totalMass += this.jointMasses[i];
+        this.parentIdx = new Int32Array(nj);
+        this.offsets = new Float64Array(nj * 3);
+        this.nameToIdx = {{}};
+        this.dofStart = new Int32Array(nj);
+        this.dofCount = new Int32Array(nj);
+        let cursor = 0;
+        for (let i = 0; i < nj; i++) {{
+            const jd = this.joints[i];
+            this.nameToIdx[jd.name] = i;
+            this.dofStart[i] = cursor;
+            this.dofCount[i] = jd.dof_axes.length;
+            cursor += jd.dof_axes.length;
+            this.offsets[i*3] = jd.offset[0];
+            this.offsets[i*3+1] = jd.offset[1];
+            this.offsets[i*3+2] = jd.offset[2];
+        }}
+        for (let i = 0; i < nj; i++) {{
+            this.parentIdx[i] = this.joints[i].parent !== null
+                ? this.nameToIdx[this.joints[i].parent] : -1;
+        }}
+        this.boundsLo = new Float64Array(nd);
+        this.boundsHi = new Float64Array(nd);
+        for (let i = 0; i < nd; i++) {{
+            this.boundsLo[i] = skelDef.bounds[i][0];
+            this.boundsHi[i] = skelDef.bounds[i][1];
+        }}
+        this.desc = this._buildDesc();
+        this._torqueJoints = ['L_ankle','R_ankle','L_knee','R_knee','L_hip','R_hip']
+            .map(n => this.nameToIdx[n]).filter(x => x !== undefined);
+        this._lAnkle = this.nameToIdx['L_ankle'];
+        this._rAnkle = this.nameToIdx['R_ankle'];
+        this._trunk  = this.nameToIdx['trunk'];
+        this._lKnee  = this.nameToIdx['L_knee'];
+        this._rKnee  = this.nameToIdx['R_knee'];
+        this._lHip   = this.nameToIdx['L_hip'];
+        this._rHip   = this.nameToIdx['R_hip'];
+        this._Rw = new Float64Array(nj * 9);
+    }}
+    _buildDesc() {{
+        const n = this.nj;
+        const ch = Array.from({{length: n}}, () => []);
+        for (let i = 0; i < n; i++) {{
+            if (this.parentIdx[i] >= 0) ch[this.parentIdx[i]].push(i);
+        }}
+        const d = Array.from({{length: n}}, () => new Set());
+        for (let i = n-1; i >= 0; i--) {{
+            for (const c of ch[i]) {{ d[i].add(c); for (const x of d[c]) d[i].add(x); }}
+        }}
+        return d.map(s => Int32Array.from([...s].sort((a,b) => a-b)));
+    }}
+    _axIdx(a) {{ return a === 'x' ? 0 : a === 'y' ? 1 : 2; }}
+    _rot3(out, off, axis, t) {{
+        const c = Math.cos(t), s = Math.sin(t);
+        out[off]=1;out[off+1]=0;out[off+2]=0;
+        out[off+3]=0;out[off+4]=1;out[off+5]=0;
+        out[off+6]=0;out[off+7]=0;out[off+8]=1;
+        if (axis===0) {{ out[off+4]=c;out[off+5]=-s;out[off+7]=s;out[off+8]=c; }}
+        else if (axis===1) {{ out[off]=c;out[off+2]=s;out[off+6]=-s;out[off+8]=c; }}
+        else {{ out[off]=c;out[off+1]=-s;out[off+3]=s;out[off+4]=c; }}
+    }}
+    _mul33(C, co, A, ao, B, bo) {{
+        for (let i=0;i<3;i++) for (let j=0;j<3;j++)
+            C[co+i*3+j] = A[ao+i*3]*B[bo+j] + A[ao+i*3+1]*B[bo+3+j] + A[ao+i*3+2]*B[bo+6+j];
+    }}
+    fk(q) {{
+        const {{nj, joints, _Rw: Rw}} = this;
+        const pos = new Float64Array(nj * 3);
+        const tA = new Float64Array(9), tB = new Float64Array(9), tC = new Float64Array(9);
+        for (let i = 0; i < nj; i++) {{
+            const jd = joints[i], s0 = this.dofStart[i], nc = this.dofCount[i];
+            if (this.parentIdx[i] < 0) {{
+                for (let k=0;k<nc;k++) {{ const ax=jd.dof_axes[k]; if(ax[0]==='t') pos[i*3+this._axIdx(ax[1])]=q[s0+k]; }}
+                let ro=i*9; Rw[ro]=1;Rw[ro+1]=0;Rw[ro+2]=0;Rw[ro+3]=0;Rw[ro+4]=1;Rw[ro+5]=0;Rw[ro+6]=0;Rw[ro+7]=0;Rw[ro+8]=1;
+                for (let k=0;k<nc;k++) {{ const ax=jd.dof_axes[k]; if(ax[0]==='r') {{
+                    this._rot3(tA,0,this._axIdx(ax[1]),q[s0+k]); this._mul33(tB,0,Rw,ro,tA,0);
+                    for(let m=0;m<9;m++) Rw[ro+m]=tB[m];
+                }} }}
+            }} else {{
+                const pi=this.parentIdx[i], pr=pi*9;
+                const ox=this.offsets[i*3], oy=this.offsets[i*3+1], oz=this.offsets[i*3+2];
+                pos[i*3]  =pos[pi*3]  +Rw[pr]*ox+Rw[pr+1]*oy+Rw[pr+2]*oz;
+                pos[i*3+1]=pos[pi*3+1]+Rw[pr+3]*ox+Rw[pr+4]*oy+Rw[pr+5]*oz;
+                pos[i*3+2]=pos[pi*3+2]+Rw[pr+6]*ox+Rw[pr+7]*oy+Rw[pr+8]*oz;
+                tA[0]=1;tA[1]=0;tA[2]=0;tA[3]=0;tA[4]=1;tA[5]=0;tA[6]=0;tA[7]=0;tA[8]=1;
+                for (let k=0;k<nc;k++) {{ const ax=jd.dof_axes[k]; if(ax[0]==='r') {{
+                    this._rot3(tB,0,this._axIdx(ax[1]),q[s0+k]); this._mul33(tC,0,tA,0,tB,0);
+                    for(let m=0;m<9;m++) tA[m]=tC[m];
+                }} }}
+                this._mul33(Rw,i*9,Rw,pr,tA,0);
+            }}
+        }}
+        return {{ pos, Rw: new Float64Array(Rw) }};
+    }}
+    fkJac(q) {{
+        const {{nj, nd, joints, _Rw: Rw}} = this;
+        const pos = new Float64Array(nj*3);
+        const J = new Float64Array(nj*3*nd);
+        const tA=new Float64Array(9), tB=new Float64Array(9), tC=new Float64Array(9);
+        // Forward pass
+        for (let i=0;i<nj;i++) {{
+            const jd=joints[i], s0=this.dofStart[i], nc=this.dofCount[i];
+            if (this.parentIdx[i]<0) {{
+                for(let k=0;k<nc;k++) {{ const ax=jd.dof_axes[k]; if(ax[0]==='t') pos[i*3+this._axIdx(ax[1])]=q[s0+k]; }}
+                let ro=i*9; Rw[ro]=1;Rw[ro+1]=0;Rw[ro+2]=0;Rw[ro+3]=0;Rw[ro+4]=1;Rw[ro+5]=0;Rw[ro+6]=0;Rw[ro+7]=0;Rw[ro+8]=1;
+                for(let k=0;k<nc;k++) {{ const ax=jd.dof_axes[k]; if(ax[0]==='r') {{
+                    this._rot3(tA,0,this._axIdx(ax[1]),q[s0+k]); this._mul33(tB,0,Rw,ro,tA,0);
+                    for(let m=0;m<9;m++) Rw[ro+m]=tB[m];
+                }} }}
+            }} else {{
+                const pi=this.parentIdx[i], pr=pi*9;
+                const ox=this.offsets[i*3],oy=this.offsets[i*3+1],oz=this.offsets[i*3+2];
+                pos[i*3]  =pos[pi*3]  +Rw[pr]*ox+Rw[pr+1]*oy+Rw[pr+2]*oz;
+                pos[i*3+1]=pos[pi*3+1]+Rw[pr+3]*ox+Rw[pr+4]*oy+Rw[pr+5]*oz;
+                pos[i*3+2]=pos[pi*3+2]+Rw[pr+6]*ox+Rw[pr+7]*oy+Rw[pr+8]*oz;
+                tA[0]=1;tA[1]=0;tA[2]=0;tA[3]=0;tA[4]=1;tA[5]=0;tA[6]=0;tA[7]=0;tA[8]=1;
+                for(let k=0;k<nc;k++) {{ const ax=jd.dof_axes[k]; if(ax[0]==='r') {{
+                    this._rot3(tB,0,this._axIdx(ax[1]),q[s0+k]); this._mul33(tC,0,tA,0,tB,0);
+                    for(let m=0;m<9;m++) tA[m]=tC[m];
+                }} }}
+                this._mul33(Rw,i*9,Rw,pr,tA,0);
+            }}
+        }}
+        // Jacobian pass
+        for (let i=0;i<nj;i++) {{
+            const jd=joints[i], s0=this.dofStart[i], nc=this.dofCount[i], di=this.desc[i];
+            if (this.parentIdx[i]<0) {{
+                tA[0]=1;tA[1]=0;tA[2]=0;tA[3]=0;tA[4]=1;tA[5]=0;tA[6]=0;tA[7]=0;tA[8]=1;
+                for (let k=0;k<nc;k++) {{
+                    const ax=jd.dof_axes[k], col=s0+k;
+                    if (ax[0]==='t') {{
+                        const dim=this._axIdx(ax[1]);
+                        for(let j=0;j<nj;j++) J[(j*3+dim)*nd+col]=1.0;
+                    }} else {{
+                        const aidx=this._axIdx(ax[1]);
+                        const ux=aidx===0?1:0, uy=aidx===1?1:0, uz=aidx===2?1:0;
+                        const wax=tA[0]*ux+tA[1]*uy+tA[2]*uz;
+                        const way=tA[3]*ux+tA[4]*uy+tA[5]*uz;
+                        const waz=tA[6]*ux+tA[7]*uy+tA[8]*uz;
+                        for (const j of di) {{
+                            const dx=pos[j*3]-pos[i*3], dy=pos[j*3+1]-pos[i*3+1], dz=pos[j*3+2]-pos[i*3+2];
+                            J[(j*3  )*nd+col]=way*dz-waz*dy;
+                            J[(j*3+1)*nd+col]=waz*dx-wax*dz;
+                            J[(j*3+2)*nd+col]=wax*dy-way*dx;
+                        }}
+                        this._rot3(tB,0,aidx,q[s0+k]); this._mul33(tC,0,tA,0,tB,0);
+                        for(let m=0;m<9;m++) tA[m]=tC[m];
+                    }}
+                }}
+            }} else {{
+                const pr=this.parentIdx[i]*9;
+                tA[0]=1;tA[1]=0;tA[2]=0;tA[3]=0;tA[4]=1;tA[5]=0;tA[6]=0;tA[7]=0;tA[8]=1;
+                for (let k=0;k<nc;k++) {{
+                    const ax=jd.dof_axes[k], col=s0+k;
+                    if (ax[0]==='r') {{
+                        const aidx=this._axIdx(ax[1]);
+                        const ux=aidx===0?1:0, uy=aidx===1?1:0, uz=aidx===2?1:0;
+                        const rpx=tA[0]*ux+tA[1]*uy+tA[2]*uz;
+                        const rpy=tA[3]*ux+tA[4]*uy+tA[5]*uz;
+                        const rpz=tA[6]*ux+tA[7]*uy+tA[8]*uz;
+                        const wax=Rw[pr]*rpx+Rw[pr+1]*rpy+Rw[pr+2]*rpz;
+                        const way=Rw[pr+3]*rpx+Rw[pr+4]*rpy+Rw[pr+5]*rpz;
+                        const waz=Rw[pr+6]*rpx+Rw[pr+7]*rpy+Rw[pr+8]*rpz;
+                        for (const j of di) {{
+                            const dx=pos[j*3]-pos[i*3], dy=pos[j*3+1]-pos[i*3+1], dz=pos[j*3+2]-pos[i*3+2];
+                            J[(j*3  )*nd+col]=way*dz-waz*dy;
+                            J[(j*3+1)*nd+col]=waz*dx-wax*dz;
+                            J[(j*3+2)*nd+col]=wax*dy-way*dx;
+                        }}
+                        this._rot3(tB,0,aidx,q[s0+k]); this._mul33(tC,0,tA,0,tB,0);
+                        for(let m=0;m<9;m++) tA[m]=tC[m];
+                    }}
+                }}
+            }}
+        }}
+        return {{ pos, J }};
+    }}
+    comFromPos(pos) {{
+        let cx=0, cy=0, cz=0;
+        for (let j=0;j<this.nj;j++) {{
+            const m=this.jointMasses[j];
+            cx+=m*pos[j*3]; cy+=m*pos[j*3+1]; cz+=m*pos[j*3+2];
+        }}
+        const t=this.totalMass;
+        return [cx/t, cy/t, cz/t];
+    }}
+    comJac(J) {{
+        const {{nd, nj, totalMass}}=this;
+        const cj=new Float64Array(3*nd);
+        for (let j=0;j<nj;j++) {{
+            const m=this.jointMasses[j]/totalMass;
+            for (let d=0;d<nd;d++) {{
+                cj[d]       +=m*J[(j*3  )*nd+d];
+                cj[nd+d]    +=m*J[(j*3+1)*nd+d];
+                cj[2*nd+d]  +=m*J[(j*3+2)*nd+d];
+            }}
+        }}
+        return cj;
+    }}
+    supportBounds(pos) {{
+        const la=this._lAnkle, ra=this._rAnkle;
+        return [
+            Math.min(pos[la*3],pos[ra*3])-0.05,
+            Math.max(pos[la*3],pos[ra*3])+0.05,
+            (pos[la*3+2]+pos[ra*3+2])*0.5-0.10,
+            (pos[la*3+2]+pos[ra*3+2])*0.5+0.15,
+        ];
+    }}
+    combinedCostAndGrad(q, qRef, weights, supBounds, dofWeights) {{
+        const nd=this.nd;
+        const {{pos, J}}=this.fkJac(q);
+        const com=this.comFromPos(pos);
+        const cj=this.comJac(J);
+        let tc=0;
+        const tg=new Float64Array(nd);
+        // 1. Pose deviation
+        const wPd=weights.pose_deviation!==undefined?weights.pose_deviation:1.0;
+        for (let i=0;i<nd;i++) {{
+            const diff=q[i]-qRef[i];
+            const w=dofWeights?wPd*dofWeights[i]:wPd;
+            tc+=0.5*w*diff*diff; tg[i]+=w*diff;
+        }}
+        // 2. Torque proxy
+        const wTp=weights.torque_proxy!==undefined?weights.torque_proxy:0.5;
+        if (wTp>0) for (const ji of this._torqueJoints) {{
+            const dx=com[0]-pos[ji*3], dz=com[2]-pos[ji*3+2];
+            tc+=0.5*wTp*(dx*dx+dz*dz);
+            for (let d=0;d<nd;d++) tg[d]+=wTp*(dx*(cj[d]-J[(ji*3)*nd+d])+dz*(cj[2*nd+d]-J[(ji*3+2)*nd+d]));
+        }}
+        // 3. Load over midfoot
+        const wLm=weights.load_over_midfoot!==undefined?weights.load_over_midfoot:2.0;
+        if (wLm>0) {{
+            const ti=this._trunk, la=this._lAnkle, ra=this._rAnkle;
+            const dx=pos[ti*3]-0.5*(pos[la*3]+pos[ra*3]);
+            const dz=pos[ti*3+2]-0.5*(pos[la*3+2]+pos[ra*3+2]);
+            tc+=0.5*wLm*(dx*dx+dz*dz);
+            for (let d=0;d<nd;d++) {{
+                const jx=J[(ti*3)*nd+d]-0.5*(J[(la*3)*nd+d]+J[(ra*3)*nd+d]);
+                const jz=J[(ti*3+2)*nd+d]-0.5*(J[(la*3+2)*nd+d]+J[(ra*3+2)*nd+d]);
+                tg[d]+=wLm*(dx*jx+dz*jz);
+            }}
+        }}
+        // 4. Knee tracking
+        const wKt=weights.knee_tracking!==undefined?weights.knee_tracking:1.0;
+        if (wKt>0) for (const [ki,ai] of [[this._lKnee,this._lAnkle],[this._rKnee,this._rAnkle]]) {{
+            const dx=pos[ki*3]-pos[ai*3];
+            tc+=0.5*wKt*dx*dx;
+            for (let d=0;d<nd;d++) tg[d]+=wKt*dx*(J[(ki*3)*nd+d]-J[(ai*3)*nd+d]);
+        }}
+        // 5. Balance margin
+        const wBm=weights.balance_margin!==undefined?weights.balance_margin:0.5;
+        const margin=0.05;
+        if (wBm>0) {{
+            const [xMin,xMax,zMin,zMax]=supBounds;
+            let dist;
+            dist=com[0]-xMin; if(dist<margin) {{ const v=margin-dist; tc+=0.5*wBm*v*v; for(let d=0;d<nd;d++) tg[d]-=wBm*v*cj[d]; }}
+            dist=xMax-com[0]; if(dist<margin) {{ const v=margin-dist; tc+=0.5*wBm*v*v; for(let d=0;d<nd;d++) tg[d]+=wBm*v*cj[d]; }}
+            dist=com[2]-zMin; if(dist<margin) {{ const v=margin-dist; tc+=0.5*wBm*v*v; for(let d=0;d<nd;d++) tg[d]-=wBm*v*cj[2*nd+d]; }}
+            dist=zMax-com[2]; if(dist<margin) {{ const v=margin-dist; tc+=0.5*wBm*v*v; for(let d=0;d<nd;d++) tg[d]+=wBm*v*cj[2*nd+d]; }}
+        }}
+        return {{ cost:tc, grad:tg, pos, J, com, cj }};
+    }}
+    _solve6(A,b) {{
+        const M=new Float64Array(36),x=new Float64Array(6);
+        for(let i=0;i<36;i++)M[i]=A[i]; for(let i=0;i<6;i++)x[i]=b[i];
+        for(let c=0;c<6;c++){{
+            let mv=Math.abs(M[c*6+c]),mr=c;
+            for(let r=c+1;r<6;r++){{const v=Math.abs(M[r*6+c]);if(v>mv){{mv=v;mr=r;}}}}
+            if(mv<1e-12)continue;
+            if(mr!==c){{for(let k=0;k<6;k++){{const t=M[c*6+k];M[c*6+k]=M[mr*6+k];M[mr*6+k]=t;}}const t=x[c];x[c]=x[mr];x[mr]=t;}}
+            const pv=M[c*6+c];
+            for(let r=c+1;r<6;r++){{const f=M[r*6+c]/pv;for(let k=c+1;k<6;k++)M[r*6+k]-=f*M[c*6+k];M[r*6+c]=0;x[r]-=f*x[c];}}
+        }}
+        for(let i=5;i>=0;i--){{for(let j=i+1;j<6;j++)x[i]-=M[i*6+j]*x[j];x[i]=Math.abs(M[i*6+i])>1e-12?x[i]/M[i*6+i]:0;}}
+        return x;
+    }}
+    whatifSolve(qFitted, perturbation, costWeights, maxIter, footTargetDelta) {{
+        maxIter=maxIter||100;
+        costWeights=costWeights||{{
+            pose_deviation:1.0, torque_proxy:0.5,
+            load_over_midfoot:2.0, knee_tracking:1.0, balance_margin:0.5
+        }};
+        const nd=this.nd, la=this._lAnkle, ra=this._rAnkle;
+        const LOCK_WEIGHT=50.0;
+        const r0=this.fkJac(qFitted);
+        const fTgt=new Float64Array(6);
+        for(let d=0;d<3;d++) {{ fTgt[d]=r0.pos[la*3+d]; fTgt[3+d]=r0.pos[ra*3+d]; }}
+        if (footTargetDelta) for(let d=0;d<6;d++) fTgt[d]+=footTargetDelta[d];
+        const sup=this.supportBounds(r0.pos);
+        const qRef=new Float64Array(qFitted);
+        const dofW=new Float64Array(nd).fill(1.0);
+        const pertIdx=new Set();
+        for (const key in perturbation) {{
+            const idx=this.dofMap[key];
+            if(idx!==undefined) {{ qRef[idx]+=perturbation[key]; dofW[idx]=LOCK_WEIGHT; pertIdx.add(idx); }}
+        }}
+        const MAX_WANDER=0.52;
+        const tLo=new Float64Array(nd), tHi=new Float64Array(nd);
+        for(let i=0;i<nd;i++) {{
+            if(pertIdx.has(i)) {{ tLo[i]=this.boundsLo[i]; tHi[i]=this.boundsHi[i]; }}
+            else {{ tLo[i]=Math.max(this.boundsLo[i],qFitted[i]-MAX_WANDER); tHi[i]=Math.min(this.boundsHi[i],qFitted[i]+MAX_WANDER); }}
+        }}
+        const lHipRx=this.dofMap['L_hip.rx'], rHipRx=this.dofMap['R_hip.rx'];
+        if(lHipRx!==undefined) tLo[lHipRx]=Math.max(tLo[lHipRx],0.0);
+        if(rHipRx!==undefined) tLo[rHipRx]=Math.max(tLo[rHipRx],0.0);
+        for(let i=0;i<nd;i++) qRef[i]=Math.max(tLo[i],Math.min(tHi[i],qRef[i]));
+        const fR=[la*3,la*3+1,la*3+2,ra*3,ra*3+1,ra*3+2];
+        const clp=(v,i)=>Math.max(tLo[i],Math.min(tHi[i],v));
+        const mkA=(J)=>{{
+            const A=new Float64Array(36);
+            for(let i=0;i<6;i++) for(let j=i;j<6;j++) {{
+                let s=0; for(let k=0;k<nd;k++) s+=J[fR[i]*nd+k]*J[fR[j]*nd+k];
+                A[i*6+j]=s; A[j*6+i]=s;
+            }}
+            for(let i=0;i<6;i++) A[i*6+i]+=1e-8;
+            return A;
+        }};
+        const fErr=(pos)=>{{
+            const e=new Float64Array(6);
+            for(let d=0;d<3;d++) {{ e[d]=pos[la*3+d]-fTgt[d]; e[3+d]=pos[ra*3+d]-fTgt[3+d]; }}
+            return e;
+        }};
+        const q=new Float64Array(qRef);
+        for(let ws=0;ws<20;ws++) {{
+            const {{pos,J}}=this.fkJac(q);
+            const e=fErr(pos);
+            let en=0; for(let i=0;i<6;i++) en+=e[i]*e[i];
+            if(en<1e-16) break;
+            const mu=this._solve6(mkA(J),e);
+            for(let k=0;k<nd;k++) {{ let c=0; for(let i=0;i<6;i++) c+=mu[i]*J[fR[i]*nd+k]; q[k]=clp(q[k]-c,k); }}
+        }}
+        for(let iter=0;iter<maxIter;iter++) {{
+            const r=this.combinedCostAndGrad(q,qRef,costWeights,sup,dofW);
+            const J=r.J, pos=r.pos, grad=r.grad;
+            const e=fErr(pos);
+            const A=mkA(J);
+            const v=new Float64Array(6);
+            for(let i=0;i<6;i++) {{ let s=0; for(let k=0;k<nd;k++) s+=J[fR[i]*nd+k]*grad[k]; v[i]=s; }}
+            const lam=this._solve6(A,v);
+            const gP=new Float64Array(nd);
+            for(let k=0;k<nd;k++) gP[k]=grad[k];
+            for(let i=0;i<6;i++) for(let k=0;k<nd;k++) gP[k]-=lam[i]*J[fR[i]*nd+k];
+            const mu=this._solve6(A,e);
+            const dc=new Float64Array(nd);
+            for(let i=0;i<6;i++) for(let k=0;k<nd;k++) dc[k]+=mu[i]*J[fR[i]*nd+k];
+            let gn=0; for(let i=0;i<nd;i++) gn+=gP[i]*gP[i];
+            let en=0; for(let i=0;i<6;i++) en+=e[i]*e[i];
+            if(gn<1e-12&&en<1e-10) break;
+            let alpha=0.1;
+            for(let ls=0;ls<12;ls++) {{
+                const qt=new Float64Array(nd);
+                for(let i=0;i<nd;i++) qt[i]=clp(q[i]-alpha*gP[i]-dc[i],i);
+                const rt=this.combinedCostAndGrad(qt,qRef,costWeights,sup,dofW);
+                if(rt.cost<=r.cost-1e-4*alpha*gn||ls===11) {{ for(let i=0;i<nd;i++) q[i]=qt[i]; break; }}
+                alpha*=0.5;
+            }}
+        }}
+        return q;
+    }}
+    static gaussianTaper(nFrames, bottomFrame, sigmaFrames) {{
+        if(!sigmaFrames) sigmaFrames=nFrames/6.0;
+        const taper=new Float64Array(nFrames);
+        for(let t=0;t<nFrames;t++) {{ const d=(t-bottomFrame)/sigmaFrames; taper[t]=Math.exp(-0.5*d*d); }}
+        return taper;
+    }}
+    warpRep(qTrajectory, bottomFrame, perturbation, costWeights, footTargetDelta) {{
+        const nFrames=qTrajectory.length, nd=this.nd;
+        const hasPert=Object.keys(perturbation).length>0;
+        const hasFtd=footTargetDelta&&(Math.abs(footTargetDelta[0])>1e-6||Math.abs(footTargetDelta[3])>1e-6);
+        if(!hasPert&&!hasFtd) return qTrajectory.map(q=>new Float64Array(q));
+        const taper=KinodynamicsSolver.gaussianTaper(nFrames,bottomFrame);
+        const qCorr=this.whatifSolve(qTrajectory[bottomFrame],perturbation,costWeights,100,footTargetDelta);
+        const delta=new Float64Array(nd);
+        for(let i=0;i<nd;i++) delta[i]=qCorr[i]-qTrajectory[bottomFrame][i];
+        const result=new Array(nFrames);
+        for(let t=0;t<nFrames;t++) {{
+            const qc=new Float64Array(nd);
+            for(let i=0;i<nd;i++) {{
+                qc[i]=qTrajectory[t][i]+taper[t]*delta[i];
+                qc[i]=Math.max(this.boundsLo[i],Math.min(this.boundsHi[i],qc[i]));
+            }}
+            result[t]=qc;
+        }}
+        return result;
+    }}
+}}
+
+// ======== KINODYNAMICS HELPERS ========
+let _kinoSolver = null, _kinoWarpedQ = null, _kinoWarpKey = '', _kinoSolveMs = 0;
+if (KINO_DATA && KINO_DATA.skeleton_def) {{
+    _kinoSolver = new KinodynamicsSolver(KINO_DATA.skeleton_def);
+    const kinoLabel = document.getElementById('sb-kino-radio-label');
+    if (kinoLabel) kinoLabel.style.display = 'flex';
+}}
+window.addEventListener('pywebviewready', function() {{
+    if (_kinoSolver && KINO_DATA) {{
+        const kr = document.querySelector('input[name="sb-solver-mode"][value="kinodynamics"]');
+        if (kr) {{ kr.checked = true; kr.dispatchEvent(new Event('change', {{bubbles:true}})); }}
+        document.getElementById('tab-sandbox').click();
+        const ki = document.getElementById('sb-kino-info');
+        if (ki) ki.innerHTML = '20-DOF SLSQP optimizer (Python) &bull; pywebview bridge';
+    }}
+}});
+
+function kinoQToKeypoints(solver, q, origFrame, bodyParams) {{
+    const {{pos, Rw}} = solver.fk(q);
+    const nj = solver.nj;
+    const kpts = new Float64Array(19 * 3);
+
+    // Transform ALL FK positions: landmark space → vis space
+    // vis_x = lm_z, vis_y = lm_y, vis_z = lm_x
+    const vp = new Float64Array(nj * 3);
+    for (let i = 0; i < nj; i++) {{
+        vp[i*3]   = pos[i*3+2];
+        vp[i*3+1] = pos[i*3+1];
+        vp[i*3+2] = pos[i*3];
+    }}
+    // Ground (ankle min Y → 0) and center (hip midpoint X/Z → 0)
+    const lai=solver._lAnkle, rai=solver._rAnkle, lhi=solver._lHip, rhi=solver._rHip;
+    const ankMinY = Math.min(vp[lai*3+1], vp[rai*3+1]);
+    const hipMX = (vp[lhi*3] + vp[rhi*3]) / 2;
+    const hipMZ = (vp[lhi*3+2] + vp[rhi*3+2]) / 2;
+    for (let i = 0; i < nj; i++) {{ vp[i*3] -= hipMX; vp[i*3+1] -= ankMinY; vp[i*3+2] -= hipMZ; }}
+
+    // Assign lower-body joints
+    for (const [si, ki] of [
+        [solver._lHip,11],[solver._rHip,12],[solver._lKnee,13],[solver._rKnee,14],
+        [solver._lAnkle,15],[solver._rAnkle,16]
+    ]) {{ kpts[ki*3]=vp[si*3]; kpts[ki*3+1]=vp[si*3+1]; kpts[ki*3+2]=vp[si*3+2]; }}
+
+    // Trunk local-Y in vis space (for shoulder/head placement)
+    const ti=solver._trunk, tro=ti*9;
+    const upVis = [Rw[tro+7], Rw[tro+4], Rw[tro+1]];
+    const remTorso=0.22*(bodyParams.bodyScale||1.0);
+    const smX=vp[ti*3]   + upVis[0]*remTorso;
+    const smY=vp[ti*3+1] + upVis[1]*remTorso;
+    const smZ=vp[ti*3+2] + upVis[2]*remTorso;
+    const sw=REF.shoulder_width*(bodyParams.bodyScale||1.0)*(bodyParams.shoulderWidthRatio||1.0);
+    kpts[5*3]=smX; kpts[5*3+1]=smY; kpts[5*3+2]=smZ-sw/2;
+    kpts[6*3]=smX; kpts[6*3+1]=smY; kpts[6*3+2]=smZ+sw/2;
+    const k=origFrame&&origFrame.kpts;
+    if (k&&k[5]&&k[6]) {{
+        const capSMid=[(k[5][0]+k[6][0])/2,(k[5][1]+k[6][1])/2,(k[5][2]+k[6][2])/2];
+        const fkSMid=[smX,smY,(kpts[5*3+2]+kpts[6*3+2])/2];
+        for(const hi of [0,1,2,3,4]) {{ if(k[hi]) {{
+            kpts[hi*3]=fkSMid[0]+(k[hi][0]-capSMid[0]);
+            kpts[hi*3+1]=fkSMid[1]+(k[hi][1]-capSMid[1]);
+            kpts[hi*3+2]=fkSMid[2]+(k[hi][2]-capSMid[2]);
+        }} }}
+        for(const [arms,sIdx] of [[[7,9],5],[[8,10],6]]) {{
+            const fkS=[kpts[sIdx*3],kpts[sIdx*3+1],kpts[sIdx*3+2]];
+            const capS=k[sIdx];
+            if(capS) for(const ai of arms) {{ if(k[ai]) {{
+                kpts[ai*3]=fkS[0]+(k[ai][0]-capS[0]);
+                kpts[ai*3+1]=fkS[1]+(k[ai][1]-capS[1]);
+                kpts[ai*3+2]=fkS[2]+(k[ai][2]-capS[2]);
+            }} }}
+        }}
+    }} else {{
+        const bs=bodyParams.bodyScale||1.0;
+        const headH=REF.head_offset*bs;
+        const headX=smX+headH*0.3*upVis[0]/Math.max(upVis[1],0.3);
+        const headY=smY+headH;
+        kpts[0*3]=headX;kpts[0*3+1]=headY;kpts[0*3+2]=0;
+        kpts[1*3]=headX;kpts[1*3+1]=headY+0.02;kpts[1*3+2]=-0.03*bs;
+        kpts[2*3]=headX;kpts[2*3+1]=headY+0.02;kpts[2*3+2]=0.03*bs;
+        kpts[3*3]=headX;kpts[3*3+1]=headY-0.01;kpts[3*3+2]=-0.06*bs;
+        kpts[4*3]=headX;kpts[4*3+1]=headY-0.01;kpts[4*3+2]=0.06*bs;
+        const ual=REF.upper_arm*bs, fal=REF.forearm*bs;
+        kpts[7*3]=smX;kpts[7*3+1]=smY-ual*0.7-0.15;kpts[7*3+2]=-sw/2;
+        kpts[8*3]=smX;kpts[8*3+1]=smY-ual*0.7-0.15;kpts[8*3+2]=sw/2;
+        kpts[9*3]=kpts[7*3]+0.02;kpts[9*3+1]=kpts[7*3+1]-fal*0.5;kpts[9*3+2]=kpts[7*3+2];
+        kpts[10*3]=kpts[8*3]+0.02;kpts[10*3+1]=kpts[8*3+1]-fal*0.5;kpts[10*3+2]=kpts[8*3+2];
+    }}
+    const fl=REF.foot_len*(bodyParams.bodyScale||1.0)*(bodyParams.footRatio||1.0);
+    const la_ro=solver._lAnkle*9, ra_ro=solver._rAnkle*9;
+    const lFwdX=Rw[la_ro+8], lFwdZ=Rw[la_ro+2];
+    const lFwdLen=Math.sqrt(lFwdX*lFwdX+lFwdZ*lFwdZ)||1;
+    kpts[17*3]=kpts[15*3]+(lFwdX/lFwdLen)*fl;
+    kpts[17*3+1]=0;
+    kpts[17*3+2]=kpts[15*3+2]+(lFwdZ/lFwdLen)*fl;
+    const rFwdX=Rw[ra_ro+8], rFwdZ=Rw[ra_ro+2];
+    const rFwdLen=Math.sqrt(rFwdX*rFwdX+rFwdZ*rFwdZ)||1;
+    kpts[18*3]=kpts[16*3]+(rFwdX/rFwdLen)*fl;
+    kpts[18*3+1]=0;
+    kpts[18*3+2]=kpts[16*3+2]+(rFwdZ/rFwdLen)*fl;
+    return kpts;
+}}
+
+function _getKinoSliders() {{
+    return {{
+        dorsi: parseFloat(document.getElementById('kino-dorsi')?.value||0),
+        stance: parseFloat(document.getElementById('kino-stance')?.value||0),
+        toe: parseFloat(document.getElementById('kino-toe')?.value||0),
+        kneetrack: parseFloat(document.getElementById('kino-kneetrack')?.value||1),
+    }};
+}}
+
+function computeKinodynamicsPose(fd, deltas, bodyParams, repIdx, frameIdx) {{
+    if (!_kinoSolver||!KINO_DATA) return null;
+    const kinoRep=KINO_DATA.reps[repIdx];
+    if (!kinoRep||!kinoRep.q_trajectory||frameIdx>=kinoRep.q_trajectory.length) return null;
+    const qFitted=new Float64Array(kinoRep.q_trajectory[frameIdx]);
+    let qUsed;
+    let origKpts=null;
+    {{
+        const d2r=Math.PI/180;
+        const pert={{}};
+        const ks=_getKinoSliders();
+        const dDL=((deltas.dorsi+deltas.dorsiL)+ks.dorsi)*d2r;
+        const dDR=((deltas.dorsi+deltas.dorsiR)+ks.dorsi)*d2r;
+        if(Math.abs(dDL)>1e-6) pert['L_ankle.rx']=dDL;
+        if(Math.abs(dDR)>1e-6) pert['R_ankle.rx']=dDR;
+        const dKF=deltas.kneeFlex*d2r;
+        if(Math.abs(dKF)>1e-6) {{ pert['L_knee.rx']=dKF; pert['R_knee.rx']=dKF; }}
+        const dLean=deltas.forwardLean*d2r;
+        if(Math.abs(dLean)>1e-6) pert['trunk.rx']=dLean;
+        const dVL=(deltas.valgus+deltas.valgusL)*d2r;
+        const dVR=(deltas.valgus+deltas.valgusR)*d2r;
+        if(Math.abs(dVL)>1e-6) pert['L_hip.rz']=dVL;
+        if(Math.abs(dVR)>1e-6) pert['R_hip.rz']=-dVR;
+        const dToeL=ks.toe*d2r, dToeR=ks.toe*d2r;
+        if(Math.abs(dToeL)>1e-6) pert['L_ankle.ry']=dToeL;
+        if(Math.abs(dToeR)>1e-6) pert['R_ankle.ry']=-dToeR;
+        const stanceDeltaM=ks.stance*0.01;
+        let footTargetDelta=null;
+        if(Math.abs(stanceDeltaM)>1e-6) footTargetDelta=new Float64Array([-stanceDeltaM/2,0,0, stanceDeltaM/2,0,0]);
+        const costW={{
+            pose_deviation:1.0, torque_proxy:0.5,
+            load_over_midfoot:2.0, knee_tracking:ks.kneetrack, balance_margin:0.5
+        }};
+        const repBounds=KINO_DATA.rep_boundaries;
+        const bottom=repBounds&&repBounds[repIdx]!==undefined
+            ? (Array.isArray(repBounds[repIdx]) ? repBounds[repIdx][2] : Math.floor(kinoRep.q_trajectory.length/2))
+            : Math.floor(kinoRep.q_trajectory.length/2);
+        const warpKey=JSON.stringify([repIdx,pert,stanceDeltaM,ks.kneetrack]);
+        if(warpKey!==_kinoWarpKey) {{
+            _kinoWarpKey=warpKey;
+            const t0=performance.now();
+            if (window.pywebview && window.pywebview.api) {{
+                const ftdJson=footTargetDelta ? JSON.stringify(Array.from(footTargetDelta)) : null;
+                const cwJson=JSON.stringify(costW);
+                window.pywebview.api.warp_rep(repIdx, JSON.stringify(pert), ftdJson, cwJson).then(function(res) {{
+                    if (res && res.warped_q) {{
+                        _kinoWarpedQ=res.warped_q.map(function(q) {{ return new Float64Array(q); }});
+                        _kinoSolveMs=res.solve_ms||0;
+                    }}
+                }});
+            }} else {{
+                const qTraj=kinoRep.q_trajectory.map(q=>new Float64Array(q));
+                _kinoWarpedQ=_kinoSolver.warpRep(qTraj,bottom,pert,costW,footTargetDelta);
+                _kinoSolveMs=performance.now()-t0;
+            }}
+        }}
+        qUsed=_kinoWarpedQ ? _kinoWarpedQ[frameIdx] : qFitted;
+        if (_kinoShowOriginal && fd && fd.kpts) {{
+            origKpts=new Float64Array(19*3);
+            const ok=fd.kpts;
+            for(let i=0;i<19;i++){{ if(ok[i]){{ origKpts[i*3]=ok[i][0];origKpts[i*3+1]=ok[i][1];origKpts[i*3+2]=ok[i][2]; }} }}
+        }}
+    }}
+    const kpts=kinoQToKeypoints(_kinoSolver,qUsed,fd,bodyParams);
+    const dm=_kinoSolver.dofMap, deg=180/Math.PI;
+    const kfLDeg=qUsed[dm['L_knee.rx']]*deg;
+    const kfRDeg=qUsed[dm['R_knee.rx']]*deg;
+    const dorsiLDeg=qUsed[dm['L_ankle.rx']]*deg;
+    const dorsiRDeg=qUsed[dm['R_ankle.rx']]*deg;
+    const valLDeg=fd.angles.knee_valgus_l+(deltas.valgus+deltas.valgusL);
+    const valRDeg=fd.angles.knee_valgus_r+(deltas.valgus+deltas.valgusR);
+    const {{pos:fkPos,Rw:fkRw}}=_kinoSolver.fk(qUsed);
+    const ti=_kinoSolver._trunk, tro=ti*9;
+    const localY=[fkRw[tro+1],fkRw[tro+4],fkRw[tro+7]];
+    const leanRad=Math.atan2(Math.sqrt(localY[0]*localY[0]+localY[2]*localY[2]),localY[1]);
+    const trunkAngleDeg=180-leanRad*deg;
+    return {{
+        kpts, trunkAngleDeg,
+        totalTrunkLeanDeg: leanRad*deg,
+        avgKneeDeg: (kfLDeg+kfRDeg)/2,
+        dorsiDeg: (dorsiLDeg+dorsiRDeg)/2,
+        dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg,
+        origKpts,
+    }};
 }}
 
 function computeConstrainedSquatPose(phase, params, solverMode, lockedShoulder) {{
@@ -1731,7 +2502,11 @@ function getSbSolverMode() {{
 }}
 document.querySelectorAll('input[name="sb-solver-mode"]').forEach(radio => {{
     radio.addEventListener('change', () => {{
-        document.getElementById('sb-compensated-controls').style.display = getSbSolverMode() === 'compensated' ? '' : 'none';
+        const mode = getSbSolverMode();
+        document.getElementById('sb-compensated-controls').style.display = mode === 'compensated' ? '' : 'none';
+        document.getElementById('sb-kino-controls').style.display = mode === 'kinodynamics' ? '' : 'none';
+        const kfEl = document.getElementById('sb-kino-faults');
+        if (kfEl) kfEl.style.display = mode === 'kinodynamics' ? '' : 'none';
     }});
 }});
 // Ankle override slider binding
@@ -1777,11 +2552,28 @@ function updateSandbox(fd) {{
     const a = fd.angles;
     const deltas = getSandboxDeltas();
     const bodyParams = getSandboxBodyParams();
+    const solverMode = getSbSolverMode();
 
     let kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg;
     let dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg;
 
-    if (!_slidersModified) {{
+    let _kinoOrigKpts = null;
+    if (solverMode === 'kinodynamics' && _kinoSolver && KINO_DATA && _slidersModified) {{
+        const kinoResult = computeKinodynamicsPose(fd, deltas, bodyParams, curRep, curFrame);
+        if (kinoResult) {{
+            ({{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg,
+                dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg }} = kinoResult);
+            _kinoOrigKpts = kinoResult.origKpts;
+        }} else {{
+            kpts = new Float64Array(19 * 3);
+            for (let i = 0; i < 19; i++) {{ if (!k[i]) continue; kpts[i*3]=k[i][0]; kpts[i*3+1]=k[i][1]; kpts[i*3+2]=k[i][2]; }}
+            trunkAngleDeg = a.trunk_flexion; avgKneeDeg = a.knee_flex;
+            dorsiDeg = (a.dorsi_l + a.dorsi_r) / 2; totalTrunkLeanDeg = 180 - a.trunk_flexion;
+            dorsiLDeg = a.dorsi_l; dorsiRDeg = a.dorsi_r;
+            kfLDeg = a.knee_flex_l || a.knee_flex; kfRDeg = a.knee_flex_r || a.knee_flex;
+            valLDeg = a.knee_valgus_l; valRDeg = a.knee_valgus_r;
+        }}
+    }} else if (!_slidersModified) {{
         // No sliders touched: use captured data directly (exact 1:1 match)
         kpts = new Float64Array(19 * 3);
         for (let i = 0; i < 19; i++) {{ if (!k[i]) continue; kpts[i*3]=k[i][0]; kpts[i*3+1]=k[i][1]; kpts[i*3+2]=k[i][2]; }}
@@ -1828,6 +2620,7 @@ function updateSandbox(fd) {{
     }}
 
     hideSandboxVisuals();
+    updateGhostSkeleton(_kinoOrigKpts, solverMode === 'kinodynamics' && _kinoShowOriginal && !!_kinoOrigKpts);
 
     // COM / BOS
     const sbFootLen = AP ? (AP.foot_avg_m || REF.foot_len) : REF.foot_len;
@@ -1848,10 +2641,38 @@ function updateSandbox(fd) {{
         ${{valgusSev !== 'none' ? sb(valgusSev) : ''}}<br>
         <span class="lbl">Hip Flex L/R:</span> <span class="val">${{a.hip_flex_l.toFixed(1)}}° / ${{a.hip_flex_r.toFixed(1)}}°</span><br>
         <span class="lbl">Phase:</span> <span class="val">${{(fd.phase || 0).toFixed(3)}}</span>
-        ${{_slidersModified ? '<span style="color:#4ecdc4; margin-left:8px">&Delta; active</span>' : ''}}`;
+        ${{_slidersModified ? '<span style="color:#4ecdc4; margin-left:8px">&Delta; active</span>' : ''}}
+        ${{solverMode==='kinodynamics' ? '<br><span class="lbl">Solver:</span> <span style="color:#4ecdc4">Kino</span> <span class="val">'+_kinoSolveMs.toFixed(1)+'ms</span>' : ''}}`;
+
+    const kinoInfoEl = document.getElementById('sb-kino-info');
+    if (kinoInfoEl && solverMode === 'kinodynamics') {{
+        kinoInfoEl.innerHTML = `20-DOF soft-cost optimizer &bull; ${{_kinoSolveMs.toFixed(1)}}ms warp`;
+    }}
+
+    const kinoFaultsEl = document.getElementById('sb-kino-faults');
+    const kinoFaultsInfo = document.getElementById('kino-faults-info');
+    const kinoSolveTimeEl = document.getElementById('kino-solve-time');
+    if (solverMode === 'kinodynamics' && KINO_DATA) {{
+        if (kinoFaultsEl) kinoFaultsEl.style.display = '';
+        if (kinoSolveTimeEl) kinoSolveTimeEl.textContent = _kinoSolveMs.toFixed(1) + 'ms';
+        const repFaults = KINO_DATA.reps[curRep] && KINO_DATA.reps[curRep].faults;
+        if (kinoFaultsInfo && repFaults && repFaults.length) {{
+            kinoFaultsInfo.innerHTML = repFaults.map(f =>
+                `<div class="fault-item" style="margin:4px 0; padding:4px 8px; border-left:3px solid ${{f.severity==='severe'?'#ff6b6b':f.severity==='moderate'?'#ffa726':'#ffee58'}}">` +
+                `<b>${{f.type}}</b> <span class="severity-indicator sev-${{f.severity}}">${{f.severity.toUpperCase()}}</span>` +
+                (f.message ? `<br><span style="font-size:11px; color:#999">${{f.message}}</span>` : '') +
+                `</div>`
+            ).join('');
+        }} else if (kinoFaultsInfo) {{
+            kinoFaultsInfo.innerHTML = '<span style="color:#4ecdc4">No faults detected</span>';
+        }}
+    }} else {{
+        if (kinoFaultsEl) kinoFaultsEl.style.display = 'none';
+        if (kinoSolveTimeEl) kinoSolveTimeEl.textContent = '';
+    }}
 
     document.getElementById('info-overlay').innerHTML = `
-        <span style="color:#4ecdc4">SANDBOX</span>
+        <span style="color:${{solverMode==='kinodynamics'?'#4ecdc4':'#4ecdc4'}}">SANDBOX${{solverMode==='kinodynamics'?' [KINO]':''}}</span>
         <span class="lbl" style="margin-left:8px">Rep:</span> <span class="val">${{curRep+2}}</span>
         <span class="lbl" style="margin-left:8px">Frame:</span> <span class="val">${{curFrame+1}}</span><br>
         <span class="lbl">Knee:</span> <span class="val">${{avgKneeDeg.toFixed(1)}}°</span>
@@ -1907,13 +2728,489 @@ requestAnimationFrame(animate);
 </html>"""
 
 
+def launch_viewer_from_html(
+    html,
+    skeleton,
+    q_trajectory_per_rep,
+    rep_boundaries=None,
+    **kwargs,
+):
+    """Open the visualizer in a native PyWebView window with Python solver.
+
+    Parameters
+    ----------
+    html : str — output of ``build_html()``
+    skeleton : SkeletonModel with joint_masses set
+    q_trajectory_per_rep : list of (T, n_dof) ndarrays
+    rep_boundaries : list of [start, end, bottom] per rep
+    **kwargs : forwarded to ``launch_viewer()``
+    """
+    from biomechanics.viewer import launch_viewer
+
+    launch_viewer(html, skeleton, q_trajectory_per_rep, rep_boundaries, **kwargs)
+
+
+def _extract_data_from_html(html_path):
+    """Extract the embedded DATA JSON from an existing HTML file."""
+    text = Path(html_path).read_text()
+    m = re.search(r'const DATA = ({.*?});\s*\n', text, re.DOTALL)
+    if not m:
+        print("ERROR: Could not find embedded DATA in HTML file.")
+        sys.exit(1)
+    return json.loads(m.group(1))
+
+
+def _vis_to_skeleton3d(kpts_vis):
+    """Invert the vis-space transform to reconstruct a Skeleton3D (19 COCO keypoints).
+
+    vis_x = mp_z, vis_y = -mp_y, vis_z = -mp_x  →  mp_x = -vis_z, mp_y = -vis_y, mp_z = vis_x
+    """
+    from biomechanics.utils.types import Point3D, Skeleton3D
+    points = []
+    for i in range(min(19, len(kpts_vis))):
+        vx, vy, vz = kpts_vis[i]
+        points.append(Point3D(x=-vz, y=-vy, z=vx, confidence=1.0))
+    return Skeleton3D(keypoints=points)
+
+
+def _find_latest_html(recordings_dir):
+    """Return the most recent .html file in recordings_dir, or None."""
+    htmls = sorted(recordings_dir.glob("squat_*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return htmls[0] if htmls else None
+
+
+def _run_refit(html_path, no_open=False, use_viewer=False, diagnose=False):
+    """Re-run the kinodynamics pipeline on an existing recording."""
+    from collections import deque as _deque
+    from biomechanics.skeleton.anthropometry import calibrate_skeleton
+    from biomechanics.optimizer.ik import fit_trajectory, _fk_jac, _build_descendants
+    from biomechanics.optimizer.landmark_adapter import skeleton3d_to_landmarks
+    from biomechanics.optimizer.angle_extract import q_to_joint_angles
+    from biomechanics.skeleton.forward_kin import load_reference_point, midfoot_xz
+    from biomechanics.faults.rules import (
+        ForwardLeanRule, KneeValgusRule, LimitedDorsiflexionRule, BarDriftRule,
+    )
+
+    print(f"Refitting kinodynamics from: {html_path}")
+    data = _extract_data_from_html(html_path)
+    replay_reps = data["reps"]
+    fps = data["fps"]
+    athlete_params = data.get("athleteParams")
+    baseline = data["baseline"]
+
+    weight_kg = (athlete_params or {}).get("weightKg", 75.0)
+
+    # Reconstruct Skeleton3D objects per rep
+    all_rep_skels = []
+    for rep_frames in replay_reps:
+        skels = []
+        for f in rep_frames:
+            if f is not None and f.get("kpts"):
+                skels.append(_vis_to_skeleton3d(f["kpts"]))
+            else:
+                skels.append(None)
+        all_rep_skels.append(skels)
+
+    # Gather all landmarks for per-segment skeleton calibration
+    all_calibration_landmarks = []
+    for rep_skels in all_rep_skels:
+        for s3d in rep_skels:
+            if s3d is not None:
+                all_calibration_landmarks.append(skeleton3d_to_landmarks(s3d))
+    calibration_landmarks = np.stack(all_calibration_landmarks)
+    skeleton_obj = calibrate_skeleton(calibration_landmarks, weight_kg)
+    print(f"  Calibrated skeleton: scale={skeleton_obj._scale_factor:.3f}")
+
+    q_traj_per_rep = []
+    kino_rep_bounds = []
+    faults_per_rep = []
+    joint_angles_per_rep = []
+    foot_targets_per_rep = []
+
+    desc = _build_descendants(skeleton_obj)
+    _lai = skeleton_obj.joint_index("L_ankle")
+    _rai = skeleton_obj.joint_index("R_ankle")
+
+    for ri, rep_skels in enumerate(all_rep_skels):
+        valid_skels = [s for s in rep_skels if s is not None]
+        if not valid_skels:
+            q_traj_per_rep.append(np.zeros((0, skeleton_obj.n_dof)))
+            kino_rep_bounds.append([0, 0, 0])
+            faults_per_rep.append([])
+            joint_angles_per_rep.append([])
+            foot_targets_per_rep.append(np.zeros((0, 2, 3)))
+            continue
+
+        n_frames = len(valid_skels)
+        n_joints = skeleton_obj.n_joints
+        landmarks = np.zeros((n_frames, n_joints, 4))
+        for fi, skel in enumerate(valid_skels):
+            landmarks[fi] = skeleton3d_to_landmarks(skel)
+
+        ik_weights = np.array([0.5, 0.3, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.3, 0.8, 0.8])
+        q_init = skeleton_obj.neutral_q()
+        q_init[0] = float(np.median(landmarks[:, 0, 0]))
+        q_init[1] = float(np.median(landmarks[:, 0, 1]))
+        q_init[2] = float(np.median(landmarks[:, 0, 2]))
+        avg_hip_y = float(np.median(landmarks[:, 2, 1] + landmarks[:, 3, 1]) / 2)
+        avg_ank_y = float(np.median(landmarks[:, 6, 1] + landmarks[:, 7, 1]) / 2)
+        leg_len = 0.45 * skeleton_obj._scale_factor + 0.43 * skeleton_obj._scale_factor
+        vert_ratio = max(0.0, min(1.0, (avg_hip_y - avg_ank_y) / leg_len))
+        init_knee_rad = np.arccos(np.clip(vert_ratio, -1, 1))
+        for dname in ("L_knee", "R_knee"):
+            q_init[skeleton_obj.dof_index(dname, "rx")] = init_knee_rad
+        for dname in ("L_hip", "R_hip"):
+            q_init[skeleton_obj.dof_index(dname, "rx")] = init_knee_rad * 0.7
+
+        reg_weights = np.zeros(skeleton_obj.n_dof)
+        reg_weights[skeleton_obj.dof_index("pelvis", "ry")] = 5.0
+        reg_weights[skeleton_obj.dof_index("pelvis", "rz")] = 3.0
+        reg_weights[skeleton_obj.dof_index("pelvis", "rx")] = 0.5
+        print(f"  Rep {ri + 2}: fitting IK trajectory ({n_frames} frames, "
+              f"init knee={np.degrees(init_knee_rad):.0f}°)...")
+        q_traj = fit_trajectory(skeleton_obj, landmarks, q_init=q_init,
+                                weights=ik_weights, reg_weights=reg_weights,
+                                q_ref=q_init.copy())
+        q_traj_per_rep.append(q_traj)
+
+        af = JointAngleFilter(min_cutoff=1.0, beta=0.007)
+        _dt = DerivativeTracker(smoothing_alpha=0.3)
+        rep_angles = []
+        for fi in range(n_frames):
+            raw = q_to_joint_angles(skeleton_obj, q_traj[fi], frame_index=fi)
+            filtered = af.filter_angles(raw)
+            filtered.timestamp = fi / max(fps, 1.0)
+            _dt.update(filtered)
+            rep_angles.append(filtered)
+
+        ja_ser = []
+        for a in rep_angles:
+            ja_ser.append({
+                "knee_flex": a.avg_knee_flexion,
+                "knee_flex_l": a.knee_flexion_l,
+                "knee_flex_r": a.knee_flexion_r,
+                "trunk_flexion": a.trunk_flexion,
+                "knee_valgus_l": a.knee_valgus_l,
+                "knee_valgus_r": a.knee_valgus_r,
+                "dorsi_l": a.ankle_dorsiflexion_l,
+                "dorsi_r": a.ankle_dorsiflexion_r,
+                "hip_flex_l": a.hip_flexion_l,
+                "hip_flex_r": a.hip_flexion_r,
+            })
+        joint_angles_per_rep.append(ja_ser)
+
+        rules = [ForwardLeanRule(), KneeValgusRule(),
+                 LimitedDorsiflexionRule(), BarDriftRule()]
+        history = _deque(maxlen=90)
+        rep_faults = []
+
+        for fi, angles in enumerate(rep_angles):
+            history.append(angles)
+            skel_state = None
+            try:
+                lr = load_reference_point(skeleton_obj, q_traj[fi])
+                mf = midfoot_xz(skeleton_obj, q_traj[fi])
+                skel_state = {
+                    "load_reference_xz": [float(lr[0]), float(lr[2])],
+                    "midfoot_xz": [float(mf[0]), float(mf[1])],
+                }
+            except Exception:
+                pass
+            for rule in rules:
+                rule.set_frame_context(skeleton_state=skel_state)
+                fault = rule.evaluate(angles, history,
+                                      in_rep=True, rep_number=ri + 2)
+                if fault:
+                    rep_faults.append({
+                        "type": fault.fault_type,
+                        "severity": fault.severity.value,
+                        "message": fault.message,
+                        "frame": fi,
+                        "details": fault.details,
+                    })
+
+        if rep_angles:
+            for rule in rules:
+                rule.set_frame_context()
+                fault = rule.evaluate(rep_angles[-1], history,
+                                      in_rep=False, rep_number=ri + 2)
+                if fault:
+                    rep_faults.append({
+                        "type": fault.fault_type,
+                        "severity": fault.severity.value,
+                        "message": fault.message,
+                        "frame": n_frames - 1,
+                        "details": fault.details,
+                    })
+        faults_per_rep.append(rep_faults)
+
+        bottom = 0
+        max_kf = 0.0
+        for fi, a in enumerate(rep_angles):
+            if a.avg_knee_flexion > max_kf:
+                max_kf = a.avg_knee_flexion
+                bottom = fi
+        kino_rep_bounds.append([0, n_frames - 1, bottom])
+
+        ft = np.zeros((n_frames, 2, 3))
+        for fi in range(n_frames):
+            pos, _ = _fk_jac(skeleton_obj, q_traj[fi], desc)
+            ft[fi, 0] = pos[_lai]
+            ft[fi, 1] = pos[_rai]
+        foot_targets_per_rep.append(ft)
+
+        print(f"    bottom={bottom} max_knee={max_kf:.1f}° faults={len(rep_faults)}")
+
+    kino_state = serialize_kinodynamics_state(
+        skeleton_obj, q_traj_per_rep,
+        foot_targets_per_rep=foot_targets_per_rep,
+        faults_per_rep=faults_per_rep,
+        rep_boundaries=kino_rep_bounds,
+        joint_angles_per_rep=joint_angles_per_rep,
+    )
+    print(f"  Kinodynamics: {len(q_traj_per_rep)} reps serialized")
+
+    # ── Diagnosis pipeline (--diagnose inside refit) ─────────────────────
+    diagnosis_artifact_path = None
+    if diagnose and q_traj_per_rep:
+        try:
+            from biomechanics.diagnosis import HypothesisEngine, SetFeatures, RepKinematicSummary
+            from biomechanics.diagnosis.solver_driver import FormSolverDriver
+            from biomechanics.diagnosis.rep_bottom_extractor import extract_bottom_q
+            import json as _json
+            from datetime import datetime as _dt
+
+            print("\n  Running diagnosis pipeline (refit)...")
+            refit_timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            ap = athlete_params or {}
+
+            per_rep_summaries = []
+            for ri, ja_list in enumerate(joint_angles_per_rep):
+                if not ja_list:
+                    continue
+                rep_number = ri + 2
+
+                bottom_idx = kino_rep_bounds[ri][2] if ri < len(kino_rep_bounds) else 0
+                bottom_angles = ja_list[min(bottom_idx, len(ja_list) - 1)]
+
+                trunk_pitch = 180.0 - bottom_angles.get("trunk_flexion", 180.0)
+                max_valgus_l = max((abs(a.get("knee_valgus_l", 0.0)) for a in ja_list), default=0.0)
+                max_valgus_r = max((abs(a.get("knee_valgus_r", 0.0)) for a in ja_list), default=0.0)
+                max_dorsi_l = max((a.get("dorsi_l", 0.0) for a in ja_list), default=0.0)
+                max_dorsi_r = max((a.get("dorsi_r", 0.0) for a in ja_list), default=0.0)
+
+                rep_frames = replay_reps[ri] if ri < len(replay_reps) else []
+                hip_y_l = hip_y_r = knee_y_l = knee_y_r = 0.0
+                if rep_frames and bottom_idx < len(rep_frames):
+                    bf = rep_frames[bottom_idx]
+                    if bf and bf.get("kpts"):
+                        kpts = bf["kpts"]
+                        if isinstance(kpts, dict):
+                            hip_y_l = float(kpts.get(11, kpts.get("11", [0, 0, 0]))[1]) * 100
+                            hip_y_r = float(kpts.get(12, kpts.get("12", [0, 0, 0]))[1]) * 100
+                            knee_y_l = float(kpts.get(13, kpts.get("13", [0, 0, 0]))[1]) * 100
+                            knee_y_r = float(kpts.get(14, kpts.get("14", [0, 0, 0]))[1]) * 100
+                        elif isinstance(kpts, (list, np.ndarray)):
+                            kpts_arr = np.array(kpts)
+                            if kpts_arr.shape[0] > 14:
+                                hip_y_l = float(kpts_arr[11, 1]) * 100
+                                hip_y_r = float(kpts_arr[12, 1]) * 100
+                                knee_y_l = float(kpts_arr[13, 1]) * 100
+                                knee_y_r = float(kpts_arr[14, 1]) * 100
+
+                max_knee_flex = max((a.get("knee_flex", 0.0) for a in ja_list), default=0.0)
+                if max_knee_flex < 60:
+                    depth_class_int = 0
+                elif max_knee_flex < 90:
+                    depth_class_int = 1
+                elif max_knee_flex < 100:
+                    depth_class_int = 2
+                else:
+                    depth_class_int = 3
+
+                per_rep_summaries.append(RepKinematicSummary(
+                    rep_number=rep_number,
+                    trunk_pitch_at_bottom=round(trunk_pitch, 2),
+                    knee_valgus_l=round(max_valgus_l, 2),
+                    knee_valgus_r=round(max_valgus_r, 2),
+                    ankle_df_l_max=round(max_dorsi_l, 2),
+                    ankle_df_r_max=round(max_dorsi_r, 2),
+                    hip_y_l_at_bottom=round(hip_y_l, 2),
+                    hip_y_r_at_bottom=round(hip_y_r, 2),
+                    knee_y_l_at_bottom=round(knee_y_l, 2),
+                    knee_y_r_at_bottom=round(knee_y_r, 2),
+                    stance_width_ratio=ap.get("stanceWidth", 1.2),
+                    foot_direction_angle_l=ap.get("toeOut", 15.0),
+                    foot_direction_angle_r=ap.get("toeOut", 15.0),
+                    depth_class_int=depth_class_int,
+                ))
+
+            femur_m = ap.get("femur_avg_m", 0.42)
+            torso_m = ap.get("torso_avg_m", 0.50)
+            anthro_dict = {
+                "femur_torso_ratio": femur_m / torso_m if torso_m > 0 else 1.0,
+                "shoulder_width": ap.get("shoulder_width_m", 0.36),
+                "hip_width": ap.get("hip_width_m", 0.28),
+            }
+
+            avg_dorsi = np.mean([
+                (s.ankle_df_l_max + s.ankle_df_r_max) / 2.0
+                for s in per_rep_summaries
+            ]) if per_rep_summaries else 0.0
+            rom_dict = {
+                "dorsiflexion_drop": 0.0,
+                "avg_depth": float(avg_dorsi),
+            }
+
+            set_features = SetFeatures(
+                user_id=0,
+                set_id=refit_timestamp,
+                rep_count=len(per_rep_summaries),
+                per_rep_kinematics=per_rep_summaries,
+                anthropometry=anthro_dict,
+                rom=rom_dict,
+            )
+
+            engine = HypothesisEngine()
+            diagnosis_result = engine.diagnose(set_features)
+            print(f"    Symptoms: {len(diagnosis_result.detected_symptoms)}, "
+                  f"Immediate causes: {len(diagnosis_result.immediate_causes)}, "
+                  f"Confidence: {diagnosis_result.confidence:.2f}")
+
+            rep_severity_scores = {}
+            for symptom in diagnosis_result.detected_symptoms:
+                for rep_num in symptom.contributing_reps:
+                    rep_severity_scores[rep_num] = rep_severity_scores.get(rep_num, 0.0) + symptom.severity
+
+            eligible_reps = {k: v for k, v in rep_severity_scores.items() if k >= 2}
+            if not eligible_reps and q_traj_per_rep:
+                eligible_reps = {2: 0.0}
+
+            solver_results = []
+            if eligible_reps:
+                worst_rep_num = max(eligible_reps, key=eligible_reps.get)
+                worst_traj_idx = worst_rep_num - 2
+
+                if 0 <= worst_traj_idx < len(q_traj_per_rep) and q_traj_per_rep[worst_traj_idx].shape[0] > 0:
+                    bottom_frame_idx, q_at_bottom = extract_bottom_q(
+                        q_traj_per_rep[worst_traj_idx], skeleton_obj
+                    )
+
+                    if diagnosis_result.combined_perturbation:
+                        driver = FormSolverDriver(skeleton_obj)
+                        form_result = driver.solve(q_at_bottom, diagnosis_result, anthro_dict)
+                        solver_results.append({
+                            "rep_number": worst_rep_num,
+                            "bottom_frame_index": bottom_frame_idx,
+                            "q_observed_at_bottom": q_at_bottom.tolist(),
+                            **form_result.model_dump(),
+                        })
+                        print(f"    Solver: rep {worst_rep_num}, converged={form_result.converged}, "
+                              f"relaxations={form_result.relaxations}")
+                    else:
+                        solver_results.append({
+                            "rep_number": worst_rep_num,
+                            "bottom_frame_index": bottom_frame_idx,
+                            "q_observed_at_bottom": q_at_bottom.tolist(),
+                            "q_corrected": None,
+                            "converged": False,
+                            "applied_perturbation": {},
+                            "relaxations": [],
+                            "cost_terms_used": [],
+                        })
+                        print(f"    No immediate causes — stored observed pose for rep {worst_rep_num}")
+
+            diagnosis_artifact_path = html_path.with_name(f"diagnosis_output_{refit_timestamp}.json")
+            diagnosis_artifact = {
+                "diagnosis": diagnosis_result.model_dump(),
+                "solver_results": solver_results,
+                "metadata": {
+                    "timestamp": refit_timestamp,
+                    "anthropometry": anthro_dict,
+                    "rep_count": len(per_rep_summaries),
+                    "height_m": float(skeleton_obj._height_m),
+                    "weight_kg": float(skeleton_obj._total_weight_kg),
+                },
+            }
+            diagnosis_artifact_path.write_text(_json.dumps(diagnosis_artifact, indent=2, default=str))
+            print(f"    Diagnosis artifact: {diagnosis_artifact_path}")
+
+        except ImportError as e:
+            print(f"  Diagnosis not available: {e}")
+        except Exception as e:
+            print(f"  Diagnosis pipeline error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    html = build_html(baseline, replay_reps, fps, athlete_params, kino_state)
+    html_path.write_text(html)
+    print(f"Wrote: {html_path}")
+    if not no_open:
+        if use_viewer and diagnosis_artifact_path and diagnosis_artifact_path.exists():
+            try:
+                from biomechanics.viewer.app import launch_diagnosis_viewer
+                print("Launching diagnosis viewer...")
+                launch_diagnosis_viewer(str(diagnosis_artifact_path), skeleton=skeleton_obj)
+            except ImportError as e:
+                print(f"  Diagnosis viewer not available: {e}")
+                import webbrowser
+                webbrowser.open(f"file://{html_path.resolve()}")
+        elif use_viewer:
+            try:
+                from biomechanics.viewer.app import launch_viewer
+                launch_viewer(html, skeleton_obj, q_traj_per_rep,
+                              rep_boundaries=kino_rep_bounds)
+            except ImportError:
+                import webbrowser
+                webbrowser.open(f"file://{html_path.resolve()}")
+        else:
+            import webbrowser
+            webbrowser.open(f"file://{html_path.resolve()}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Capture squats and visualize in 3D")
     parser.add_argument("--output", "-o", default=None,
                         help="Output video path (default: recordings/squat_YYYYMMDD_HHMMSS.mp4)")
     parser.add_argument("--camera", "-c", type=int, default=0, help="Camera device ID")
     parser.add_argument("--no-open", action="store_true", help="Don't auto-open HTML in browser")
+    parser.add_argument("--replay", "-r", default=None, metavar="HTML",
+                        help="Regenerate HTML from an existing recording (path to .html file)")
+    parser.add_argument("--refit", default=None, nargs="?", const="latest", metavar="HTML",
+                        help="Re-run kinodynamics IK on existing recording (default: latest)")
+    parser.add_argument("--viewer", action="store_true",
+                        help="Open in PyWebView window with Python-backed kinodynamics solver")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Run hypothesis engine diagnosis + form solver after capture")
     args = parser.parse_args()
+
+    if args.refit is not None:
+        recordings_dir = Path(__file__).parent.parent / "recordings"
+        if args.refit == "latest":
+            html_path = _find_latest_html(recordings_dir)
+            if html_path is None:
+                print("ERROR: No recordings found in recordings/")
+                sys.exit(1)
+        else:
+            html_path = Path(args.refit)
+        if not html_path.exists():
+            print(f"ERROR: File not found: {html_path}")
+            sys.exit(1)
+        _run_refit(html_path, no_open=args.no_open, use_viewer=args.viewer, diagnose=args.diagnose)
+        return
+
+    if args.replay:
+        replay_path = Path(args.replay)
+        if not replay_path.exists():
+            print(f"ERROR: File not found: {replay_path}")
+            sys.exit(1)
+        data = _extract_data_from_html(replay_path)
+        html = build_html(data["baseline"], data["reps"], data["fps"], data.get("athleteParams"))
+        replay_path.write_text(html)
+        print(f"Regenerated: {replay_path}")
+        if not args.no_open:
+            webbrowser.open(f"file://{replay_path.resolve()}")
+        return
 
     recordings_dir = Path(__file__).parent.parent / "recordings"
     recordings_dir.mkdir(exist_ok=True)
@@ -1937,7 +3234,7 @@ def main():
 
     profiler.start()
     try:
-        frames_data, reps, rep_boundaries, fps, bone_cstr = run_capture(args.camera, video_path, profiler)
+        frames_data, reps, rep_boundaries, fps, bone_cstr, skeletons_3d = run_capture(args.camera, video_path, profiler)
     finally:
         profiler.stop()
         report_path = profiler.generate_report(memory_png_path, title_prefix="Squat Capture")
@@ -1972,14 +3269,379 @@ def main():
         print(f"    Dorsi ratio: {athlete_params['dorsiRatio']}  Body scale: {athlete_params['bodyScale']}")
         print(f"    Proportions: torso={athlete_params['torsoRatio']} thigh={athlete_params['thighRatio']} shin={athlete_params['shinRatio']}")
 
+    from db.anthropometry_utils import save_anthropometry_to_file
+    save_anthropometry_to_file(bone_cstr)
+
     replay_reps = rep_frame_slices[1:]
 
-    html = build_html(baseline, replay_reps, fps, athlete_params)
+    kino_state = None
+    skeleton_obj = None
+    q_traj_per_rep = None
+    kino_rep_bounds = None
+
+    try:
+        from collections import deque as _deque
+        from biomechanics.skeleton.anthropometry import scale_skeleton
+        from biomechanics.optimizer.ik import fit_trajectory, _fk_jac, _build_descendants
+        from biomechanics.optimizer.landmark_adapter import skeleton3d_to_landmarks
+        from biomechanics.optimizer.angle_extract import q_to_joint_angles
+        from biomechanics.skeleton.forward_kin import load_reference_point, midfoot_xz
+        from biomechanics.faults.rules import (
+            ForwardLeanRule, KneeValgusRule, LimitedDorsiflexionRule, BarDriftRule,
+        )
+
+        weight_kg = (athlete_params or {}).get("weightKg", 75.0)
+
+        # Estimate effective scale from observed landmark segment lengths
+        # (MediaPipe world landmarks may not match stated height)
+        _REF_THIGH = 0.45
+        _REF_SHANK = 0.43
+        _REF_LEG = _REF_THIGH + _REF_SHANK
+        seg_lens = []
+        for s3d in skeletons_3d:
+            if s3d is None:
+                continue
+            lm = skeleton3d_to_landmarks(s3d)
+            if lm[4, 3] > 0.5 and lm[2, 3] > 0.5:
+                seg_lens.append(np.linalg.norm(lm[4, :3] - lm[2, :3]))
+            if lm[5, 3] > 0.5 and lm[3, 3] > 0.5:
+                seg_lens.append(np.linalg.norm(lm[5, :3] - lm[3, :3]))
+            if lm[6, 3] > 0.5 and lm[4, 3] > 0.5:
+                seg_lens.append(np.linalg.norm(lm[6, :3] - lm[4, :3]))
+            if lm[7, 3] > 0.5 and lm[5, 3] > 0.5:
+                seg_lens.append(np.linalg.norm(lm[7, :3] - lm[5, :3]))
+            if len(seg_lens) > 200:
+                break
+        if seg_lens:
+            median_seg = float(np.median(seg_lens))
+            avg_ref_seg = (_REF_THIGH + _REF_SHANK) / 2
+            effective_height = 1.75 * (median_seg / avg_ref_seg)
+            print(f"  Landmark scale: median segment={median_seg:.3f}m → "
+                  f"effective height={effective_height:.2f}m")
+        else:
+            effective_height = (athlete_params or {}).get("heightM", 1.78)
+
+        skeleton_obj = scale_skeleton(effective_height, weight_kg)
+
+        q_traj_per_rep = []
+        kino_rep_bounds = []
+        faults_per_rep = []
+        joint_angles_per_rep = []
+        foot_targets_per_rep = []
+
+        desc = _build_descendants(skeleton_obj)
+        _lai = skeleton_obj.joint_index("L_ankle")
+        _rai = skeleton_obj.joint_index("R_ankle")
+
+        for ri, (start, end) in enumerate(rep_boundaries[1:]):
+            rep_skels = [s for s in skeletons_3d[start:end + 1] if s is not None]
+            if not rep_skels:
+                q_traj_per_rep.append(np.zeros((0, skeleton_obj.n_dof)))
+                kino_rep_bounds.append([0, 0, 0])
+                faults_per_rep.append([])
+                joint_angles_per_rep.append([])
+                foot_targets_per_rep.append(np.zeros((0, 2, 3)))
+                continue
+
+            n_frames = len(rep_skels)
+            n_joints = skeleton_obj.n_joints
+            landmarks = np.zeros((n_frames, n_joints, 4))
+            for fi, skel in enumerate(rep_skels):
+                landmarks[fi] = skeleton3d_to_landmarks(skel)
+
+            # Per-joint weights: pelvis/trunk lower (approximate), limbs higher
+            ik_weights = np.array([0.5, 0.3, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.3, 0.8, 0.8])
+            # Squat-appropriate initial guess (neutral_q has straight legs → local min)
+            q_init = skeleton_obj.neutral_q()
+            # Set initial pelvis position from observed pelvis landmarks
+            q_init[0] = float(np.median(landmarks[:, 0, 0]))
+            q_init[1] = float(np.median(landmarks[:, 0, 1]))
+            q_init[2] = float(np.median(landmarks[:, 0, 2]))
+            # Estimate knee/hip flexion from hip-ankle vertical ratio
+            avg_hip_y = float(np.median(landmarks[:, 2, 1] + landmarks[:, 3, 1]) / 2)
+            avg_ank_y = float(np.median(landmarks[:, 6, 1] + landmarks[:, 7, 1]) / 2)
+            leg_len = 0.45 * skeleton_obj._scale_factor + 0.43 * skeleton_obj._scale_factor
+            vert_ratio = max(0.0, min(1.0, (avg_hip_y - avg_ank_y) / leg_len))
+            init_knee_rad = np.arccos(np.clip(vert_ratio, -1, 1))
+            for dname in ("L_knee", "R_knee"):
+                q_init[skeleton_obj.dof_index(dname, "rx")] = init_knee_rad
+            for dname in ("L_hip", "R_hip"):
+                q_init[skeleton_obj.dof_index(dname, "rx")] = init_knee_rad * 0.7
+            reg_weights = np.zeros(skeleton_obj.n_dof)
+            reg_weights[skeleton_obj.dof_index("pelvis", "ry")] = 5.0
+            reg_weights[skeleton_obj.dof_index("pelvis", "rz")] = 3.0
+            reg_weights[skeleton_obj.dof_index("pelvis", "rx")] = 0.5
+            print(f"  Rep {ri + 2}: fitting IK trajectory ({n_frames} frames, "
+                  f"init knee={np.degrees(init_knee_rad):.0f}°)...")
+            q_traj = fit_trajectory(skeleton_obj, landmarks, q_init=q_init,
+                                    weights=ik_weights, reg_weights=reg_weights,
+                                    q_ref=q_init.copy())
+            q_traj_per_rep.append(q_traj)
+
+            af = JointAngleFilter(min_cutoff=1.0, beta=0.007)
+            _dt = DerivativeTracker(smoothing_alpha=0.3)
+            rep_angles = []
+            for fi in range(n_frames):
+                raw = q_to_joint_angles(skeleton_obj, q_traj[fi],
+                                        frame_index=fi)
+                filtered = af.filter_angles(raw)
+                filtered.timestamp = fi / max(fps, 1.0)
+                _dt.update(filtered)
+                rep_angles.append(filtered)
+
+            ja_ser = []
+            for a in rep_angles:
+                ja_ser.append({
+                    "knee_flex": a.avg_knee_flexion,
+                    "knee_flex_l": a.knee_flexion_l,
+                    "knee_flex_r": a.knee_flexion_r,
+                    "trunk_flexion": a.trunk_flexion,
+                    "knee_valgus_l": a.knee_valgus_l,
+                    "knee_valgus_r": a.knee_valgus_r,
+                    "dorsi_l": a.ankle_dorsiflexion_l,
+                    "dorsi_r": a.ankle_dorsiflexion_r,
+                    "hip_flex_l": a.hip_flexion_l,
+                    "hip_flex_r": a.hip_flexion_r,
+                })
+            joint_angles_per_rep.append(ja_ser)
+
+            rules = [ForwardLeanRule(), KneeValgusRule(),
+                     LimitedDorsiflexionRule(), BarDriftRule()]
+            history = _deque(maxlen=90)
+            rep_faults = []
+
+            for fi, angles in enumerate(rep_angles):
+                history.append(angles)
+                skel_state = None
+                try:
+                    lr = load_reference_point(skeleton_obj, q_traj[fi])
+                    mf = midfoot_xz(skeleton_obj, q_traj[fi])
+                    skel_state = {
+                        "load_reference_xz": [float(lr[0]), float(lr[2])],
+                        "midfoot_xz": [float(mf[0]), float(mf[1])],
+                    }
+                except Exception:
+                    pass
+                for rule in rules:
+                    rule.set_frame_context(skeleton_state=skel_state)
+                    fault = rule.evaluate(angles, history,
+                                          in_rep=True, rep_number=ri + 2)
+                    if fault:
+                        rep_faults.append({
+                            "type": fault.fault_type,
+                            "severity": fault.severity.value,
+                            "message": fault.message,
+                            "frame": fi,
+                            "details": fault.details,
+                        })
+
+            if rep_angles:
+                for rule in rules:
+                    rule.set_frame_context()
+                    fault = rule.evaluate(rep_angles[-1], history,
+                                          in_rep=False, rep_number=ri + 2)
+                    if fault:
+                        rep_faults.append({
+                            "type": fault.fault_type,
+                            "severity": fault.severity.value,
+                            "message": fault.message,
+                            "frame": n_frames - 1,
+                            "details": fault.details,
+                        })
+            faults_per_rep.append(rep_faults)
+
+            bottom = 0
+            max_kf = 0.0
+            for fi, a in enumerate(rep_angles):
+                if a.avg_knee_flexion > max_kf:
+                    max_kf = a.avg_knee_flexion
+                    bottom = fi
+            kino_rep_bounds.append([0, n_frames - 1, bottom])
+
+            ft = np.zeros((n_frames, 2, 3))
+            for fi in range(n_frames):
+                pos, _ = _fk_jac(skeleton_obj, q_traj[fi], desc)
+                ft[fi, 0] = pos[_lai]
+                ft[fi, 1] = pos[_rai]
+            foot_targets_per_rep.append(ft)
+
+            print(f"    bottom={bottom} max_knee={max_kf:.1f}° faults={len(rep_faults)}")
+
+        kino_state = serialize_kinodynamics_state(
+            skeleton_obj, q_traj_per_rep,
+            foot_targets_per_rep=foot_targets_per_rep,
+            faults_per_rep=faults_per_rep,
+            rep_boundaries=kino_rep_bounds,
+            joint_angles_per_rep=joint_angles_per_rep,
+        )
+        print(f"  Kinodynamics: {len(q_traj_per_rep)} reps serialized")
+    except ImportError as e:
+        print(f"  Kinodynamics not available: {e}")
+    except Exception as e:
+        print(f"  Kinodynamics pipeline error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # ── Diagnosis pipeline (--diagnose) ──────────────────────────────────
+    if args.diagnose and skeleton_obj is not None and q_traj_per_rep:
+        try:
+            from biomechanics.diagnosis import HypothesisEngine, SetFeatures, RepKinematicSummary
+            from biomechanics.diagnosis.solver_driver import FormSolverDriver
+            from biomechanics.diagnosis.rep_bottom_extractor import extract_bottom_q
+            import json as _json
+
+            print("\n  Running diagnosis pipeline...")
+
+            # Build RepKinematicSummary for ALL reps from raw frame data
+            per_rep_summaries = []
+            for rep_idx, (start, end) in enumerate(rep_boundaries):
+                rep_frames = [f for f in frames_data[start:end + 1] if f is not None]
+                if not rep_frames:
+                    continue
+
+                # Find bottom frame (max knee flexion) within this rep's raw frames
+                max_kf_frame_idx = 0
+                max_kf_val = 0.0
+                max_valgus_l = 0.0
+                max_valgus_r = 0.0
+                max_dorsi_l = 0.0
+                max_dorsi_r = 0.0
+                for fi, frame in enumerate(rep_frames):
+                    angles = frame["angles"]
+                    if angles["knee_flex"] > max_kf_val:
+                        max_kf_val = angles["knee_flex"]
+                        max_kf_frame_idx = fi
+                    max_valgus_l = max(max_valgus_l, abs(angles["knee_valgus_l"]))
+                    max_valgus_r = max(max_valgus_r, abs(angles["knee_valgus_r"]))
+                    max_dorsi_l = max(max_dorsi_l, angles["dorsi_l"])
+                    max_dorsi_r = max(max_dorsi_r, angles["dorsi_r"])
+
+                bottom_frame = rep_frames[max_kf_frame_idx]
+                bottom_angles = bottom_frame["angles"]
+                bottom_kpts = np.array(bottom_frame["kpts"])
+
+                trunk_pitch = 180.0 - bottom_angles["trunk_flexion"]
+                hip_y_l = float(bottom_kpts[11, 1]) if len(bottom_kpts) > 12 else 0.0
+                hip_y_r = float(bottom_kpts[12, 1]) if len(bottom_kpts) > 12 else 0.0
+                knee_y_l = float(bottom_kpts[13, 1]) if len(bottom_kpts) > 14 else 0.0
+                knee_y_r = float(bottom_kpts[14, 1]) if len(bottom_kpts) > 14 else 0.0
+
+                depth_class = reps[rep_idx].depth_class if reps[rep_idx].depth_class is not None else 0
+
+                per_rep_summaries.append(RepKinematicSummary(
+                    rep_number=rep_idx + 1,
+                    trunk_pitch_at_bottom=round(trunk_pitch, 2),
+                    knee_valgus_l=round(max_valgus_l, 2),
+                    knee_valgus_r=round(max_valgus_r, 2),
+                    ankle_df_l_max=round(max_dorsi_l, 2),
+                    ankle_df_r_max=round(max_dorsi_r, 2),
+                    hip_y_l_at_bottom=round(hip_y_l * 100, 2),
+                    hip_y_r_at_bottom=round(hip_y_r * 100, 2),
+                    knee_y_l_at_bottom=round(knee_y_l * 100, 2),
+                    knee_y_r_at_bottom=round(knee_y_r * 100, 2),
+                    stance_width_ratio=(athlete_params or {}).get("stanceWidth", 1.2),
+                    foot_direction_angle_l=(athlete_params or {}).get("toeOut", 15.0),
+                    foot_direction_angle_r=(athlete_params or {}).get("toeOut", 15.0),
+                    depth_class_int=depth_class,
+                ))
+
+            # Build anthropometry and ROM dicts from athlete_params
+            ap = athlete_params or {}
+            femur_m = ap.get("femur_avg_m", 0.42)
+            torso_m = ap.get("torso_avg_m", 0.50)
+            anthro_dict = {
+                "femur_torso_ratio": femur_m / torso_m if torso_m > 0 else 1.0,
+                "shoulder_width": ap.get("shoulder_width_m", 0.36),
+                "hip_width": ap.get("hip_width_m", 0.28),
+            }
+
+            avg_depth_degrees = np.mean([s.ankle_df_l_max + s.ankle_df_r_max
+                                         for s in per_rep_summaries]) / 2.0 if per_rep_summaries else 0.0
+            rom_dict = {
+                "dorsiflexion_drop": max_dorsi_l - per_rep_summaries[-1].ankle_df_l_max if per_rep_summaries else 0.0,
+                "avg_depth": float(avg_depth_degrees),
+            }
+
+            set_features = SetFeatures(
+                user_id=0,
+                set_id=timestamp,
+                rep_count=len(per_rep_summaries),
+                per_rep_kinematics=per_rep_summaries,
+                anthropometry=anthro_dict,
+                rom=rom_dict,
+            )
+
+            engine = HypothesisEngine()
+            diagnosis_result = engine.diagnose(set_features)
+            print(f"    Symptoms: {len(diagnosis_result.detected_symptoms)}, "
+                  f"Immediate causes: {len(diagnosis_result.immediate_causes)}, "
+                  f"Confidence: {diagnosis_result.confidence:.2f}")
+
+            # Find worst rep (highest severity contribution among reps with q_trajectory)
+            rep_severity_scores: dict[int, float] = {}
+            for symptom in diagnosis_result.detected_symptoms:
+                for rep_num in symptom.contributing_reps:
+                    rep_severity_scores[rep_num] = rep_severity_scores.get(rep_num, 0.0) + symptom.severity
+
+            # Only consider reps 2+ (which have q_trajectories)
+            eligible_reps = {k: v for k, v in rep_severity_scores.items() if k >= 2}
+            if not eligible_reps and q_traj_per_rep:
+                eligible_reps = {2: 0.0}
+
+            solver_results = []
+            if eligible_reps and diagnosis_result.combined_perturbation:
+                worst_rep_num = max(eligible_reps, key=eligible_reps.get)
+                worst_traj_idx = worst_rep_num - 2  # q_traj_per_rep is 0-indexed for reps 2+
+
+                if 0 <= worst_traj_idx < len(q_traj_per_rep) and q_traj_per_rep[worst_traj_idx].shape[0] > 0:
+                    bottom_frame_idx, q_at_bottom = extract_bottom_q(
+                        q_traj_per_rep[worst_traj_idx], skeleton_obj
+                    )
+
+                    driver = FormSolverDriver(skeleton_obj)
+                    form_result = driver.solve(q_at_bottom, diagnosis_result, anthro_dict)
+
+                    solver_results.append({
+                        "rep_number": worst_rep_num,
+                        "bottom_frame_index": bottom_frame_idx,
+                        "q_observed_at_bottom": q_at_bottom.tolist(),
+                        **form_result.model_dump(),
+                    })
+                    print(f"    Solver: rep {worst_rep_num}, converged={form_result.converged}, "
+                          f"relaxations={form_result.relaxations}")
+
+            # Write diagnosis artifact
+            diagnosis_output_path = video_path.with_name(f"diagnosis_output_{timestamp}.json")
+            diagnosis_artifact = {
+                "diagnosis": diagnosis_result.model_dump(),
+                "solver_results": solver_results,
+                "metadata": {
+                    "timestamp": timestamp,
+                    "anthropometry": anthro_dict,
+                    "rep_count": len(per_rep_summaries),
+                    "height_m": float(skeleton_obj._height_m),
+                    "weight_kg": float(skeleton_obj._total_weight_kg),
+                },
+            }
+            diagnosis_output_path.write_text(_json.dumps(diagnosis_artifact, indent=2, default=str))
+            print(f"    Diagnosis artifact: {diagnosis_output_path}")
+
+        except ImportError as e:
+            print(f"  Diagnosis not available: {e}")
+        except Exception as e:
+            print(f"  Diagnosis pipeline error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    html = build_html(baseline, replay_reps, fps, athlete_params, kino_state)
     html_path.write_text(html)
     print(f"\nVideo saved: {video_path}")
     print(f"HTML saved:  {html_path}")
 
-    if not args.no_open:
+    if args.viewer and skeleton_obj and q_traj_per_rep:
+        print("Launching PyWebView kinodynamics viewer...")
+        launch_viewer_from_html(html, skeleton_obj, q_traj_per_rep, kino_rep_bounds)
+    elif not args.no_open:
         webbrowser.open(f"file://{html_path.resolve()}")
 
 

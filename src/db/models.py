@@ -356,6 +356,21 @@ class UserCalibration(Base):
     user = relationship("User", back_populates="calibrations")
 
 
+class UserAnthropometry(Base):
+    __tablename__ = "user_anthropometry"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    femur_length_avg = Column(DECIMAL(5, 2), nullable=False)
+    tibia_length_avg = Column(DECIMAL(5, 2), nullable=False)
+    torso_length = Column(DECIMAL(5, 2), nullable=False)
+    hip_width = Column(DECIMAL(5, 2), nullable=False)
+    shoulder_width = Column(DECIMAL(5, 2), nullable=False)
+    femur_tibia_ratio = Column(DECIMAL(5, 3), nullable=False)
+    femur_torso_ratio = Column(DECIMAL(5, 3), nullable=False)
+    calibration_quality_score = Column(DECIMAL(5, 3), nullable=False)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class DeloadHistory(Base):
     __tablename__ = "deload_history"
 
