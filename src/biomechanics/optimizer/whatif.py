@@ -25,6 +25,7 @@ DEFAULT_COST_WEIGHTS: dict[str, float] = {
     "load_over_midfoot": 2.0,
     "knee_tracking": 1.0,
     "balance_margin": 0.5,
+    "symmetry": 0.5,
 }
 
 _PERTURBATION_LOCK_WEIGHT = 50.0

@@ -65,18 +65,23 @@ def _eval_torque_proxy(skeleton, pos, J, com, cj, weight):
     return 0.5 * weight * cost, 0.5 * weight * grad
 
 
-def _eval_load_over_midfoot(skeleton, pos, J, weight):
-    ti = skeleton.joint_index("trunk")
+def _eval_load_over_midfoot(skeleton, pos, J, com, cj, weight):
     lai = skeleton.joint_index("L_ankle")
     rai = skeleton.joint_index("R_ankle")
+    lti = skeleton.joint_index("L_toe")
+    rti = skeleton.joint_index("R_toe")
 
-    dx = pos[ti, 0] - 0.5 * (pos[lai, 0] + pos[rai, 0])
-    dz = pos[ti, 2] - 0.5 * (pos[lai, 2] + pos[rai, 2])
+    left_midfoot = 0.5 * (pos[lai] + pos[lti])
+    right_midfoot = 0.5 * (pos[rai] + pos[rti])
+    midfoot_center = 0.5 * (left_midfoot + right_midfoot)
+
+    dx = com[0] - midfoot_center[0]
+    dz = com[2] - midfoot_center[2]
     cost = dx ** 2 + dz ** 2
 
-    jx = J[ti * 3, :] - 0.5 * (J[lai * 3, :] + J[rai * 3, :])
-    jz = J[ti * 3 + 2, :] - 0.5 * (J[lai * 3 + 2, :] + J[rai * 3 + 2, :])
-    grad = 2 * dx * jx + 2 * dz * jz
+    midfoot_jac_x = 0.25 * (J[lai * 3, :] + J[lti * 3, :] + J[rai * 3, :] + J[rti * 3, :])
+    midfoot_jac_z = 0.25 * (J[lai * 3 + 2, :] + J[lti * 3 + 2, :] + J[rai * 3 + 2, :] + J[rti * 3 + 2, :])
+    grad = 2 * dx * (cj[0, :] - midfoot_jac_x) + 2 * dz * (cj[2, :] - midfoot_jac_z)
 
     return 0.5 * weight * cost, 0.5 * weight * grad
 
@@ -87,9 +92,54 @@ def _eval_knee_tracking(skeleton, pos, J, weight):
     for side in ("L", "R"):
         ki = skeleton.joint_index(f"{side}_knee")
         ai = skeleton.joint_index(f"{side}_ankle")
-        dx = pos[ki, 0] - pos[ai, 0]
-        cost += dx ** 2
-        grad += 2 * dx * (J[ki * 3, :] - J[ai * 3, :])
+        ti = skeleton.joint_index(f"{side}_toe")
+
+        toe_dir = pos[ti] - pos[ai]
+        toe_dir[1] = 0.0
+        toe_len = np.linalg.norm(toe_dir)
+        if toe_len < 1e-6:
+            toe_dir = np.array([0.0, 0.0, 1.0])
+            toe_len = 1.0
+        toe_hat = toe_dir / toe_len
+
+        perp = np.array([-toe_hat[2], 0.0, toe_hat[0]])
+
+        knee_rel = pos[ki] - pos[ai]
+        lateral_error = np.dot(knee_rel, perp)
+
+        cost += lateral_error ** 2
+        d_knee_rel_dq = J[ki * 3 : ki * 3 + 3, :] - J[ai * 3 : ai * 3 + 3, :]
+        grad += 2 * lateral_error * (perp @ d_knee_rel_dq)
+
+    return 0.5 * weight * cost, 0.5 * weight * grad
+
+
+_SYMMETRY_PAIRS = [
+    ("L_hip", "R_hip", "rx"),
+    ("L_hip", "R_hip", "ry"),
+    ("L_knee", "R_knee", "rx"),
+    ("L_ankle", "R_ankle", "rx"),
+    ("L_ankle", "R_ankle", "ry"),
+]
+
+
+def _eval_symmetry(skeleton, q, weight):
+    cost = 0.0
+    grad = np.zeros(len(q))
+    for left_joint, right_joint, axis in _SYMMETRY_PAIRS:
+        li = skeleton.dof_index(left_joint, axis)
+        ri = skeleton.dof_index(right_joint, axis)
+        if axis == "ry":
+            diff = q[li] + q[ri]
+        else:
+            diff = q[li] - q[ri]
+        cost += diff ** 2
+        if axis == "ry":
+            grad[li] += 2 * diff
+            grad[ri] += 2 * diff
+        else:
+            grad[li] += 2 * diff
+            grad[ri] -= 2 * diff
     return 0.5 * weight * cost, 0.5 * weight * grad
 
 
@@ -142,10 +192,12 @@ def cost_load_over_midfoot(
     q: np.ndarray,
     weight: float = 1.0,
 ) -> tuple[float, np.ndarray]:
-    """Penalise trunk (load proxy) drifting from midfoot in the xz plane."""
+    """Penalise COM drifting from midfoot center in the xz plane."""
     desc = _build_descendants(skeleton)
     pos, J = _fk_jac(skeleton, q, desc)
-    return _eval_load_over_midfoot(skeleton, pos, J, weight)
+    com = _com_from_pos(skeleton, pos)
+    cj = _com_jac(skeleton, J)
+    return _eval_load_over_midfoot(skeleton, pos, J, com, cj, weight)
 
 
 def cost_knee_tracking(
@@ -209,7 +261,7 @@ def combined_cost_and_grad(
     tc += c; tg += g
 
     c, g = _eval_load_over_midfoot(
-        skeleton, pos, J, cost_weights.get("load_over_midfoot", 2.0),
+        skeleton, pos, J, com, cj, cost_weights.get("load_over_midfoot", 2.0),
     )
     tc += c; tg += g
 
@@ -223,5 +275,10 @@ def combined_cost_and_grad(
         cost_weights.get("balance_margin", 0.5), margin,
     )
     tc += c; tg += g
+
+    symmetry_weight = cost_weights.get("symmetry", 0.0)
+    if symmetry_weight > 0:
+        c, g = _eval_symmetry(skeleton, q, symmetry_weight)
+        tc += c; tg += g
 
     return tc, tg

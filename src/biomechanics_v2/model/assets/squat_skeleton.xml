@@ -1,0 +1,168 @@
+<mujoco model="squat_skeleton">
+  <compiler angle="radian" coordinate="local" />
+  <option gravity="0 -9.81 0" timestep="0.002" />
+  <default>
+    <joint damping="2.0" armature="0.01" />
+    <geom type="capsule" contype="1" conaffinity="1" rgba="0.4 0.6 0.8 1" />
+  </default>
+  <asset>
+    <texture name="floor_tex" type="2d" builtin="checker" width="512" height="512" rgb1="0.9 0.9 0.9" rgb2="0.7 0.7 0.7" />
+    <material name="floor_mat" texture="floor_tex" texrepeat="5 5" />
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="5 5 0.1" pos="0 0 0" material="floor_mat" contype="1" conaffinity="1" />
+    <light diffuse="0.8 0.8 0.8" pos="0 4 2" dir="0 -1 0" />
+    <body name="pelvis" pos="0 0 0">
+      <joint name="pelvis_tx" type="slide" axis="1 0 0" limited="false" />
+      <joint name="pelvis_ty" type="slide" axis="0 1 0" limited="false" />
+      <joint name="pelvis_tz" type="slide" axis="0 0 1" limited="false" />
+      <joint name="pelvis_rx" type="hinge" axis="1 0 0" range="-0.7853981633974483 0.7853981633974483" limited="true" />
+      <joint name="pelvis_ry" type="hinge" axis="0 1 0" range="-0.4363323129985824 0.4363323129985824" limited="true" />
+      <joint name="pelvis_rz" type="hinge" axis="0 0 1" range="-0.2617993877991494 0.2617993877991494" limited="true" />
+      <inertial mass="7.9875" pos="0 0 0" diaginertia="0.020448 0.020448 0.020448" />
+      <geom name="pelvis_geom" type="sphere" size="0.08" rgba="0.8 0.4 0.4 0.7" mass="0" />
+      <site name="site_pelvis" size="0.02" />
+      <body name="trunk" pos="0.0 0.28 0.0">
+        <joint name="trunk_rx" type="hinge" axis="1 0 0" range="-0.5235987755982988 1.0471975511965976" limited="true" />
+        <joint name="trunk_rz" type="hinge" axis="0 0 1" range="-0.4363323129985824 0.4363323129985824" limited="true" />
+        <inertial mass="16.5975" pos="0 0 0" diaginertia="0.005975 0.005975 0.005975" />
+        <geom name="trunk_geom" mass="0" type="capsule" fromto="0 0 0 0 0.28 0" size="0.037500000000000006" rgba="0.4 0.6 0.8 0.7" />
+        <site name="site_trunk" size="0.02" />
+        <body name="head" pos="0.0 0.4 0.0">
+          <inertial mass="3.75" pos="0 0 0" diaginertia="0.001350 0.001350 0.001350" />
+          <geom name="head_geom" mass="0" type="sphere" size="0.09" rgba="0.9 0.8 0.7 0.7" />
+          <site name="site_head" size="0.02" />
+        </body>
+      </body>
+      <body name="L_hip" pos="-0.1 0.0 0.0">
+        <joint name="L_hip_rx" type="hinge" axis="1 0 0" range="-0.2617993877991494 2.2689280275926285" limited="true" />
+        <joint name="L_hip_ry" type="hinge" axis="0 1 0" range="-0.5235987755982988 0.7853981633974483" limited="true" />
+        <joint name="L_hip_rz" type="hinge" axis="0 0 1" range="-0.5235987755982988 0.6981317007977318" limited="true" />
+        <inertial mass="6.9225" pos="0 0 0" diaginertia="0.002492 0.002492 0.002492" />
+        <geom name="L_hip_geom" mass="0" type="capsule" fromto="0 0 0 0 0 -0.45" size="0.03" rgba="0.4 0.6 0.8 0.7" />
+        <site name="site_L_hip" size="0.02" />
+        <body name="L_knee" pos="0.0 0.0 -0.45">
+          <joint name="L_knee_rx" type="hinge" axis="1 0 0" range="0.0 2.6179938779914944" limited="true" />
+          <inertial mass="2.7" pos="0 0 0" diaginertia="0.000972 0.000972 0.000972" />
+          <geom name="L_knee_geom" mass="0" type="capsule" fromto="0 0 0 0 0 0.43" size="0.025" rgba="0.4 0.6 0.8 0.7" />
+          <site name="site_L_knee" size="0.02" />
+          <body name="L_ankle" pos="0.0 0.0 0.43">
+            <joint name="L_ankle_rx" type="hinge" axis="1 0 0" range="-0.5235987755982988 0.6981317007977318" limited="true" />
+            <joint name="L_ankle_ry" type="hinge" axis="0 1 0" range="-0.3490658503988659 0.3490658503988659" limited="true" />
+            <inertial mass="0.675" pos="0 0 0" diaginertia="0.000243 0.000243 0.000243" />
+            <geom name="L_ankle_geom" mass="0" type="box" size="0.04 0.02 0.1" pos="0 -0.02 0.05" rgba="0.6 0.6 0.4 0.7" />
+            <site name="site_L_ankle" size="0.02" />
+            <body name="L_toe" pos="0.0 -0.2 0.0">
+              <inertial mass="0.5" pos="0 0 0" diaginertia="0.000180 0.000180 0.000180" />
+              <site name="site_L_toe" size="0.02" />
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="R_hip" pos="0.1 0.0 0.0">
+        <joint name="R_hip_rx" type="hinge" axis="1 0 0" range="-0.2617993877991494 2.2689280275926285" limited="true" />
+        <joint name="R_hip_ry" type="hinge" axis="0 1 0" range="-0.7853981633974483 0.5235987755982988" limited="true" />
+        <joint name="R_hip_rz" type="hinge" axis="0 0 1" range="-0.6981317007977318 0.5235987755982988" limited="true" />
+        <inertial mass="6.9225" pos="0 0 0" diaginertia="0.002492 0.002492 0.002492" />
+        <geom name="R_hip_geom" mass="0" type="capsule" fromto="0 0 0 0 0 -0.45" size="0.03" rgba="0.4 0.6 0.8 0.7" />
+        <site name="site_R_hip" size="0.02" />
+        <body name="R_knee" pos="0.0 0.0 -0.45">
+          <joint name="R_knee_rx" type="hinge" axis="1 0 0" range="0.0 2.6179938779914944" limited="true" />
+          <inertial mass="2.7" pos="0 0 0" diaginertia="0.000972 0.000972 0.000972" />
+          <geom name="R_knee_geom" mass="0" type="capsule" fromto="0 0 0 0 0 0.43" size="0.025" rgba="0.4 0.6 0.8 0.7" />
+          <site name="site_R_knee" size="0.02" />
+          <body name="R_ankle" pos="0.0 0.0 0.43">
+            <joint name="R_ankle_rx" type="hinge" axis="1 0 0" range="-0.5235987755982988 0.6981317007977318" limited="true" />
+            <joint name="R_ankle_ry" type="hinge" axis="0 1 0" range="-0.3490658503988659 0.3490658503988659" limited="true" />
+            <inertial mass="0.675" pos="0 0 0" diaginertia="0.000243 0.000243 0.000243" />
+            <geom name="R_ankle_geom" mass="0" type="box" size="0.04 0.02 0.1" pos="0 -0.02 0.05" rgba="0.6 0.6 0.4 0.7" />
+            <site name="site_R_ankle" size="0.02" />
+            <body name="R_toe" pos="0.0 -0.2 0.0">
+              <inertial mass="0.5" pos="0 0 0" diaginertia="0.000180 0.000180 0.000180" />
+              <site name="site_R_toe" size="0.02" />
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="mocap_pelvis" mocap="true" pos="0.0 0.95 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_pelvis" size="0.015" />
+    </body>
+    <body name="mocap_trunk" mocap="true" pos="0.0 0.28 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_trunk" size="0.015" />
+    </body>
+    <body name="mocap_head" mocap="true" pos="0.0 0.4 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_head" size="0.015" />
+    </body>
+    <body name="mocap_L_hip" mocap="true" pos="-0.1 0.0 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_L_hip" size="0.015" />
+    </body>
+    <body name="mocap_R_hip" mocap="true" pos="0.1 0.0 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_R_hip" size="0.015" />
+    </body>
+    <body name="mocap_L_knee" mocap="true" pos="0.0 0.0 -0.45">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_L_knee" size="0.015" />
+    </body>
+    <body name="mocap_R_knee" mocap="true" pos="0.0 0.0 -0.45">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_R_knee" size="0.015" />
+    </body>
+    <body name="mocap_L_ankle" mocap="true" pos="0.0 0.0 0.43">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_L_ankle" size="0.015" />
+    </body>
+    <body name="mocap_R_ankle" mocap="true" pos="0.0 0.0 0.43">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_R_ankle" size="0.015" />
+    </body>
+    <body name="mocap_L_toe" mocap="true" pos="0.0 -0.2 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_L_toe" size="0.015" />
+    </body>
+    <body name="mocap_R_toe" mocap="true" pos="0.0 -0.2 0.0">
+      <geom type="sphere" size="0.015" rgba="1 0 0 0.3" contype="0" conaffinity="0" />
+      <site name="target_R_toe" size="0.015" />
+    </body>
+  </worldbody>
+  <equality>
+    <weld body1="pelvis" body2="mocap_pelvis" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="trunk" body2="mocap_trunk" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="head" body2="mocap_head" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="L_hip" body2="mocap_L_hip" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="R_hip" body2="mocap_R_hip" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="L_knee" body2="mocap_L_knee" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="R_knee" body2="mocap_R_knee" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="L_ankle" body2="mocap_L_ankle" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="R_ankle" body2="mocap_R_ankle" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="L_toe" body2="mocap_L_toe" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+    <weld body1="R_toe" body2="mocap_R_toe" solref="0.02 1" solimp="0.9 0.95 0.001" active="true" />
+  </equality>
+  <actuator>
+    <position name="act_pelvis_tx" joint="pelvis_tx" kp="100" />
+    <position name="act_pelvis_ty" joint="pelvis_ty" kp="100" />
+    <position name="act_pelvis_tz" joint="pelvis_tz" kp="100" />
+    <position name="act_pelvis_rx" joint="pelvis_rx" kp="100" />
+    <position name="act_pelvis_ry" joint="pelvis_ry" kp="100" />
+    <position name="act_pelvis_rz" joint="pelvis_rz" kp="100" />
+    <position name="act_trunk_rx" joint="trunk_rx" kp="100" />
+    <position name="act_trunk_rz" joint="trunk_rz" kp="100" />
+    <position name="act_L_hip_rx" joint="L_hip_rx" kp="100" />
+    <position name="act_L_hip_ry" joint="L_hip_ry" kp="100" />
+    <position name="act_L_hip_rz" joint="L_hip_rz" kp="100" />
+    <position name="act_R_hip_rx" joint="R_hip_rx" kp="100" />
+    <position name="act_R_hip_ry" joint="R_hip_ry" kp="100" />
+    <position name="act_R_hip_rz" joint="R_hip_rz" kp="100" />
+    <position name="act_L_knee_rx" joint="L_knee_rx" kp="100" />
+    <position name="act_R_knee_rx" joint="R_knee_rx" kp="100" />
+    <position name="act_L_ankle_rx" joint="L_ankle_rx" kp="100" />
+    <position name="act_L_ankle_ry" joint="L_ankle_ry" kp="100" />
+    <position name="act_R_ankle_rx" joint="R_ankle_rx" kp="100" />
+    <position name="act_R_ankle_ry" joint="R_ankle_ry" kp="100" />
+  </actuator>
+</mujoco>
