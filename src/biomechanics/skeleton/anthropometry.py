@@ -52,6 +52,19 @@ SEGMENT_TO_JOINTS: dict[str, tuple[str, str]] = {
     "R_shank": ("R_knee", "R_ankle"),
 }
 
+# De Leva (1996) aggregated segment definitions for segment-based COM.
+# (proximal_joint, distal_joint, mass_fraction, com_proximal_ratio)
+# Trunk absorbs head+neck+arms (~6.8%) since this skeleton has no arm joints.
+SEGMENT_DEFS_COM: dict[str, tuple[str, str, float, float]] = {
+    "trunk":   ("pelvis", "head",    0.6028, 0.4486),
+    "L_thigh": ("L_hip",  "L_knee",  0.1416, 0.4095),
+    "R_thigh": ("R_hip",  "R_knee",  0.1416, 0.4095),
+    "L_shank": ("L_knee", "L_ankle", 0.0433, 0.4459),
+    "R_shank": ("R_knee", "R_ankle", 0.0433, 0.4459),
+    "L_foot":  ("L_ankle", "L_toe",  0.0137, 0.4415),
+    "R_foot":  ("R_ankle", "R_toe",  0.0137, 0.4415),
+}
+
 
 def scale_skeleton(
     height_m: float,
@@ -187,3 +200,4 @@ def _set_segment_masses(skeleton: SkeletonModel, weight_kg: float) -> None:
     joint_masses["trunk"] = joint_masses.get("trunk", 0.0) + arm_head_mass
 
     skeleton.set_joint_masses(joint_masses)
+    skeleton.set_segment_params(SEGMENT_DEFS_COM)

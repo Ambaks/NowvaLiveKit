@@ -195,6 +195,7 @@ def compute_athlete_params(frames_data, rep_boundaries, bone_constraints):
 
     cal = bone_constraints._calibrated_lengths
 
+    REF_HIP_WIDTH = 0.22
     REF_TORSO = 0.50
     REF_THIGH = 0.42
     REF_SHIN = 0.40
@@ -244,10 +245,9 @@ def compute_athlete_params(frames_data, rep_boundaries, bone_constraints):
             continue
 
         l_ankle, r_ankle = kpts[15], kpts[16]
-        ankle_dx = l_ankle[0] - r_ankle[0]
-        ankle_dz = l_ankle[2] - r_ankle[2]
-        ankle_xz_dist = np.sqrt(ankle_dx**2 + ankle_dz**2)
-        stance_widths.append(ankle_xz_dist / props.hip_width)
+        ankle_z_dist = abs(r_ankle[2] - l_ankle[2])
+        fk_hip_width = REF_HIP_WIDTH * body_scale
+        stance_widths.append(ankle_z_dist / fk_hip_width)
 
         # Toe-out: ankle→foot_index projected onto ground plane vs forward
         # vis_x = mp_z which points backward (away from person), so forward = -x
@@ -945,6 +945,7 @@ document.getElementById('baseline-info').innerHTML = `
 `;
 
 const AP = DATA.athleteParams;
+const CAPTURED_STANCE_WIDTH = AP ? AP.stanceWidth : 1.2;
 if (AP) {{
     document.getElementById('athlete-info').innerHTML = `
         <span class="lbl">Body scale:</span> <span class="val">${{AP.bodyScale.toFixed(2)}}</span>
@@ -1114,6 +1115,7 @@ sbSs.addEventListener('input', () => {{ speed = parseFloat(sbSs.value); sbSv.tex
 
 // ======== SANDBOX SLIDER BINDINGS ========
 let _slidersModified = false;
+let _stanceWidthTouched = false;
 function bindSlider(id, valId, suffix, decimals) {{
     const slider = document.getElementById(id);
     const valSpan = document.getElementById(valId);
@@ -1141,7 +1143,17 @@ bindSlider('sb-thigh-ratio', 'sb-thigh-ratio-val', '', 2);
 bindSlider('sb-shin-ratio', 'sb-shin-ratio-val', '', 2);
 bindSlider('sb-shoulder-width-ratio', 'sb-shoulder-width-ratio-val', '', 2);
 bindSlider('sb-foot-ratio', 'sb-foot-ratio-val', '', 2);
-bindSlider('sb-stance-width', 'sb-stance-width-val', 'x', 2);
+(function() {{
+    const slider = document.getElementById('sb-stance-width');
+    const valSpan = document.getElementById('sb-stance-width-val');
+    if (!slider || !valSpan) return;
+    slider.addEventListener('input', () => {{
+        _slidersModified = true;
+        _stanceWidthTouched = true;
+        const v = parseFloat(slider.value);
+        valSpan.textContent = v.toFixed(2) + 'x';
+    }});
+}})();
 bindSlider('sb-toe-out', 'sb-toe-out-val', '°', 0);
 bindSliderDelta('sb-d-knee-flex', 'sb-d-knee-flex-val', '°', 0);
 bindSliderDelta('sb-d-dorsi', 'sb-d-dorsi-val', '°', 1);
@@ -1414,7 +1426,7 @@ function _rotVec(v, ax, ang) {{
 }}
 function _norm(v) {{ const l=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1e-9; return [v[0]/l,v[1]/l,v[2]/l]; }}
 
-function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated) {{
+function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated, applyStanceOverride) {{
     const k = fd.kpts, a = fd.angles;
     const deg2rad = Math.PI / 180, rad2deg = 180 / Math.PI;
     const bs = bodyParams.bodyScale || 1.0;
@@ -1426,13 +1438,16 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
     const headH = REF.head_offset * bs;
     const toeOutRad = (bodyParams.toeOut || 15) * deg2rad;
 
-    // Delta amounts (degrees)
-    let dDorsiL = (deltas.dorsi || 0) + (deltas.dorsiL || 0);
-    let dDorsiR = (deltas.dorsi || 0) + (deltas.dorsiR || 0);
-    const dKF     = deltas.kneeFlex || 0;
-    let dValL   = (deltas.valgus || 0) + (deltas.valgusL || 0);
-    let dValR   = (deltas.valgus || 0) + (deltas.valgusR || 0);
-    const dLean   = deltas.forwardLean || 0;
+    // Phase: 0=standing, 1=squat bottom — scale joint angle deltas so top of rep matches captured
+    const phase = fd.phase || 0;
+
+    // Delta amounts (degrees), scaled by phase
+    let dDorsiL = ((deltas.dorsi || 0) + (deltas.dorsiL || 0)) * phase;
+    let dDorsiR = ((deltas.dorsi || 0) + (deltas.dorsiR || 0)) * phase;
+    let dKF     = (deltas.kneeFlex || 0) * phase;
+    let dValL   = ((deltas.valgus || 0) + (deltas.valgusL || 0)) * phase;
+    let dValR   = ((deltas.valgus || 0) + (deltas.valgusR || 0)) * phase;
+    let dLean   = (deltas.forwardLean || 0) * phase;
 
     const kpts = new Float64Array(19 * 3);
     function set(idx, x, y, z) {{ kpts[idx*3]=x; kpts[idx*3+1]=y; kpts[idx*3+2]=z; }}
@@ -1442,13 +1457,26 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
     const cKL = k[13]||capAL, cKR = k[14]||capAR;
     const cHL = k[11]||cKL, cHR = k[12]||cKR;
 
-    // Stance width: shift ankles laterally based on slider vs captured spread
+    // Stance width: in compensated mode keep captured ankles unless stance slider was touched
     const hipWidth = REF.hip_width * bs;
-    const capturedHalfSpread = (capAR[2] - capAL[2]) / 2;
-    const targetHalfSpread = (hipWidth / 2) * (bodyParams.stanceWidth || 1.2);
-    const stanceShift = targetHalfSpread - capturedHalfSpread;
-    const aL = [capAL[0], capAL[1], capAL[2] - stanceShift];
-    const aR = [capAR[0], capAR[1], capAR[2] + stanceShift];
+    let stanceShift = 0;
+    let aL, aR;
+    if (compensated && !applyStanceOverride) {{
+        aL = [capAL[0], capAL[1], capAL[2]];
+        aR = [capAR[0], capAR[1], capAR[2]];
+    }} else if (compensated && applyStanceOverride) {{
+        // Delta from captured baseline ratio — zero shift at slider == CAPTURED_STANCE_WIDTH
+        const stanceDeltaRatio = (bodyParams.stanceWidth || CAPTURED_STANCE_WIDTH) - CAPTURED_STANCE_WIDTH;
+        stanceShift = (hipWidth / 2) * stanceDeltaRatio;
+        aL = [capAL[0], capAL[1], capAL[2] - stanceShift];
+        aR = [capAR[0], capAR[1], capAR[2] + stanceShift];
+    }} else {{
+        const capturedHalfSpread = (capAR[2] - capAL[2]) / 2;
+        const targetHalfSpread = (hipWidth / 2) * (bodyParams.stanceWidth || CAPTURED_STANCE_WIDTH);
+        stanceShift = targetHalfSpread - capturedHalfSpread;
+        aL = [capAL[0], capAL[1], capAL[2] - stanceShift];
+        aR = [capAR[0], capAR[1], capAR[2] + stanceShift];
+    }}
 
     set(15, aL[0], aL[1], aL[2]);
     set(16, aR[0], aR[1], aR[2]);
@@ -1467,7 +1495,8 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
     // Per-leg biomechanical FK chain: ankle (planted) -> shin -> knee -> thigh -> hip
     // Dorsiflexion rotates the shin forward; knee flex angle is preserved from capture;
     // hip position is a free output of the chain (not pinned to captured height).
-    function adjustLeg(ankle, capAnkle, capKnee, capHip, dDorsi, dKnee, dValgus, side, toeDir, kneeTrackBlend) {{
+    // autoHipRotation: when true, fully rotate leg to track toe direction (hip int/ext rotation)
+    function adjustLeg(ankle, capAnkle, capKnee, capHip, dDorsi, dKnee, dValgus, side, toeDir, kneeTrackBlend, autoHipRotation) {{
         // Angles from CAPTURED geometry (original positions, unaffected by stance shift)
         const capShinVec = [capKnee[0]-capAnkle[0], capKnee[1]-capAnkle[1], capKnee[2]-capAnkle[2]];
         const capThighVec = [capHip[0]-capKnee[0], capHip[1]-capKnee[1], capHip[2]-capKnee[2]];
@@ -1478,14 +1507,22 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
         const capShinDir = _norm(capShinVec);
         const capThighDir = _norm(capThighVec);
 
-        // Knee tracking: rotate shin toward toe direction in ground plane (hip external rotation)
+        // Hip internal/external rotation: rotate entire leg to track toe direction
         let rotatedShinDir = capShinDir;
-        const blendAmt = kneeTrackBlend || 0;
-        if (toeDir && blendAmt > 0) {{
-            const shinAngle = Math.atan2(capShinVec[2], capShinVec[0]);
-            const toeAngle = Math.atan2(toeDir[2], toeDir[0]);
-            const rotAngle = -blendAmt * (toeAngle - shinAngle);
-            rotatedShinDir = _rotVec(capShinDir, [0, 1, 0], rotAngle);
+        let hipRotationRad = 0;
+        const capShinGroundAngle = Math.atan2(capShinVec[2], capShinVec[0]);
+
+        // autoHipRotation is a 0-1 blend (phase-scaled in compensated mode)
+        const effectiveBlend = (autoHipRotation || 0) + (kneeTrackBlend || 0);
+        if (effectiveBlend > 0 && toeDir) {{
+            const toeGroundAngle = Math.atan2(toeDir[2], toeDir[0]);
+            // Normalized angular difference (handles atan2 wraparound near +/-pi)
+            let angleDiff = toeGroundAngle - capShinGroundAngle;
+            if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+            if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+            const blendAmt = Math.min(1.0, effectiveBlend);
+            hipRotationRad = -blendAmt * angleDiff;
+            rotatedShinDir = _rotVec(capShinDir, [0, 1, 0], hipRotationRad);
         }}
 
         // Sagittal plane from (possibly rotated) shin ground projection
@@ -1510,20 +1547,30 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
         const newThighDir = _rotVec(newShinDir, lat, -newKneeFlexRad);
         const newHip = [newKnee[0]+newThighDir[0]*capThighLen, newKnee[1]+newThighDir[1]*capThighLen, newKnee[2]+newThighDir[2]*capThighLen];
 
-        return {{ knee: newKnee, hip: newHip }};
+        return {{ knee: newKnee, hip: newHip, hipRotationRad }};
     }}
 
     // Knee-over-toes: toe direction + blend factor from slider
     const toeDirL = [kpts[17*3]-kpts[15*3], 0, kpts[17*3+2]-kpts[15*3+2]];
     const toeDirR = [kpts[18*3]-kpts[16*3], 0, kpts[18*3+2]-kpts[16*3+2]];
-    const kneeTrackBlend = deltas.kneeTracking || 0;
+    const kneeTrackBlend = (deltas.kneeTracking || 0) * phase;
 
-    const L = adjustLeg(aL, capAL, cKL, cHL, dDorsiL, dKF, dValL, -1, toeDirL, kneeTrackBlend);
-    const R = adjustLeg(aR, capAR, cKR, cHR, dDorsiR, dKF, dValR, +1, toeDirR, kneeTrackBlend);
+    // In compensated mode, hip rotation blend scales with phase (0=standing, 1=depth)
+    // At standing the shin is nearly vertical so ground-plane angle is unreliable
+    const hipRotBlend = compensated ? phase : 0;
+    const L = adjustLeg(aL, capAL, cKL, cHL, dDorsiL, dKF, dValL, -1, toeDirL, kneeTrackBlend, hipRotBlend);
+    const R = adjustLeg(aR, capAR, cKR, cHR, dDorsiR, dKF, dValR, +1, toeDirR, kneeTrackBlend, hipRotBlend);
     set(13, L.knee[0], L.knee[1], L.knee[2]);
     set(14, R.knee[0], R.knee[1], R.knee[2]);
-    set(11, L.hip[0], L.hip[1], k[11] ? k[11][2] : L.hip[2]);
-    set(12, R.hip[0], R.hip[1], k[12] ? k[12][2] : R.hip[2]);
+    if (compensated) {{
+        // Pelvis is rigid: enforce fixed hip-to-hip distance regardless of leg rotation
+        const hipMidZ = (L.hip[2] + R.hip[2]) / 2;
+        set(11, L.hip[0], L.hip[1], hipMidZ - hipWidth / 2);
+        set(12, R.hip[0], R.hip[1], hipMidZ + hipWidth / 2);
+    }} else {{
+        set(11, L.hip[0], L.hip[1], k[11] ? k[11][2] : L.hip[2]);
+        set(12, R.hip[0], R.hip[1], k[12] ? k[12][2] : R.hip[2]);
+    }}
 
     const hipMidX = (L.hip[0]+R.hip[0])/2, hipMidY = (L.hip[1]+R.hip[1])/2;
 
@@ -1536,8 +1583,9 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
     const midfootRatio = (footLength / 2 - heelOffset) / footLength;
     const toeMidX = (kpts[17*3] + kpts[18*3]) / 2;
     const midfootTargetX = ankleMidX + midfootRatio * (toeMidX - ankleMidX);
-    const stanceRatio = bodyParams.stanceWidth || 1.2;
-    const stanceLeanShift = compensated ? 0.05 * (1.2 - stanceRatio) : 0;
+    const stanceRatio = bodyParams.stanceWidth || CAPTURED_STANCE_WIDTH;
+    const stanceLeanShift = (compensated && applyStanceOverride)
+        ? 0.05 * (CAPTURED_STANCE_WIDTH - stanceRatio) : 0;
     const targetX = midfootTargetX + stanceLeanShift;
     const kneeMidX = (L.knee[0] + R.knee[0]) / 2;
 
@@ -1562,13 +1610,18 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
     const capturedTrunkLean = lockedShoulder ? Math.atan2(lockedShoulder.x - capHipMidX, lockedShoulder.y - capHipMidY) : 0;
 
     // Phase-weighted blend: at standing use captured trunk; at depth use COM-balanced trunk
-    const phase = fd.phase || 0;
     let comWeight;
     if (compensated) {{
-        // Soft attractor: strength grows with squat depth, never fully overrides
-        const legDeltaMagComp = Math.sqrt(dDorsiL * dDorsiL + dDorsiR * dDorsiR + dKF * dKF);
+        // Soft attractor: proportional to total slider magnitude across ALL deltas
+        const rawDorsiMag = Math.abs((deltas.dorsi||0)+(deltas.dorsiL||0)) + Math.abs((deltas.dorsi||0)+(deltas.dorsiR||0));
+        const rawKfMag = Math.abs(deltas.kneeFlex||0);
+        const rawKneeTrackMag = Math.abs(deltas.kneeTracking||0);
+        const stanceChangeMag = applyStanceOverride
+            ? Math.abs(stanceRatio - CAPTURED_STANCE_WIDTH) * 50 : 0;
+        const toeOutChangeMag = Math.abs((bodyParams.toeOut||15) - 15);
+        const totalDeltaMag = rawDorsiMag + rawKfMag + rawKneeTrackMag + stanceChangeMag + toeOutChangeMag;
         const phaseBlendComp = Math.min(1, Math.max(0, (phase - 0.1) * 3));
-        const deltaBlendComp = Math.min(1, legDeltaMagComp / 15);
+        const deltaBlendComp = Math.min(1, totalDeltaMag / 15);
         comWeight = phaseBlendComp * deltaBlendComp * 0.5;
     }} else {{
         const legDeltaMag = Math.sqrt(dDorsiL * dDorsiL + dDorsiR * dDorsiR + dKF * dKF);
@@ -1629,9 +1682,17 @@ function computePerSidePose(fd, deltas, bodyParams, lockedShoulder, compensated)
     const avgKneeDeg = (kfLDeg + kfRDeg) / 2;
     const avgDorsiDeg = (dorsiLDeg + dorsiRDeg) / 2;
 
+    // Hip internal/external rotation from leg chain
+    // Left leg: external rotation = negative hipRotationRad (toward -Z)
+    // Right leg: external rotation = positive hipRotationRad (toward +Z)
+    // Normalize so positive = external for both sides
+    const hipRotLDeg = -L.hipRotationRad * rad2deg;
+    const hipRotRDeg = R.hipRotationRad * rad2deg;
+
     return {{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg: avgDorsiDeg,
               totalTrunkLeanDeg: totalTrunkLean * rad2deg,
               dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg,
+              hipRotLDeg, hipRotRDeg,
               hipMidX, hipMidY, shoulderMidX: sMidX, shoulderMidY: sMidY }};
 }}
 
@@ -2656,6 +2717,7 @@ function updateSandbox(fd) {{
 
     let kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg;
     let dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg;
+    let hipRotLDeg = 0, hipRotRDeg = 0;
 
     let _kinoOrigKpts = null;
     if (solverMode === 'kinodynamics' && _kinoSolver && KINO_DATA && _slidersModified) {{
@@ -2688,16 +2750,18 @@ function updateSandbox(fd) {{
         // Compensated mode: per-side FK with symmetry + knee-over-toes constraints
         const lockedShoulder = (k[5] && k[6]) ?
             {{ x: (k[5][0]+k[6][0])/2, y: (k[5][1]+k[6][1])/2 }} : null;
-        const pose = computePerSidePose(fd, deltas, bodyParams, lockedShoulder, true);
+        const pose = computePerSidePose(fd, deltas, bodyParams, lockedShoulder, true, _stanceWidthTouched);
         ({{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg,
-            dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg }} = pose);
+            dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg,
+            hipRotLDeg, hipRotRDeg }} = pose);
     }} else {{
         // Independent mode: per-side delta FK from captured angles
         const lockedShoulder = (k[5] && k[6]) ?
             {{ x: (k[5][0]+k[6][0])/2, y: (k[5][1]+k[6][1])/2 }} : null;
         const pose = computePerSidePose(fd, deltas, bodyParams, lockedShoulder);
         ({{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg,
-            dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg }} = pose);
+            dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg,
+            hipRotLDeg, hipRotRDeg }} = pose);
     }}
 
     // Fault classification from effective per-side valgus
@@ -2736,6 +2800,9 @@ function updateSandbox(fd) {{
     updateCOMVisuals(sbCom, sbBos, sbBal);
 
     const leanOff = (180 - trunkAngleDeg).toFixed(1);
+    const hipRotStr = (hipRotLDeg !== 0 || hipRotRDeg !== 0)
+        ? `<br><span class="lbl">Hip Rot L/R:</span> <span class="val">${{hipRotLDeg.toFixed(1)}}° / ${{hipRotRDeg.toFixed(1)}}°</span> <span class="val" style="opacity:0.5">(ext+)</span>`
+        : '';
     document.getElementById('sb-angles-info').innerHTML = `
         <span class="lbl">Knee Flex L/R:</span> <span class="val">${{kfLDeg.toFixed(1)}}° / ${{kfRDeg.toFixed(1)}}°</span>
         <span class="val" style="opacity:0.5">(avg ${{avgKneeDeg.toFixed(1)}}°)</span><br>
@@ -2745,7 +2812,8 @@ function updateSandbox(fd) {{
         <span class="val" style="opacity:0.5">(avg ${{dorsiDeg.toFixed(1)}}°)</span><br>
         <span class="lbl">Valgus L/R:</span> <span class="val">${{valLDeg.toFixed(1)}}° / ${{valRDeg.toFixed(1)}}°</span>
         ${{valgusSev !== 'none' ? sb(valgusSev) : ''}}<br>
-        <span class="lbl">Hip Flex L/R:</span> <span class="val">${{a.hip_flex_l.toFixed(1)}}° / ${{a.hip_flex_r.toFixed(1)}}°</span><br>
+        <span class="lbl">Hip Flex L/R:</span> <span class="val">${{a.hip_flex_l.toFixed(1)}}° / ${{a.hip_flex_r.toFixed(1)}}°</span>
+        ${{hipRotStr}}<br>
         <span class="lbl">Phase:</span> <span class="val">${{(fd.phase || 0).toFixed(3)}}</span>
         ${{_slidersModified ? '<span style="color:#4ecdc4; margin-left:8px">&Delta; active</span>' : ''}}
         ${{solverMode==='kinodynamics' ? '<br><span class="lbl">Solver:</span> <span style="color:#4ecdc4">Kino</span> <span class="val">'+_kinoSolveMs.toFixed(1)+'ms</span>' : ''}}`;

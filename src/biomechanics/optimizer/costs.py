@@ -16,17 +16,34 @@ from .ik import _fk_jac, _build_descendants
 # ─── helpers ────────────────────────────────────────────────────────────
 
 def _com_from_pos(skeleton: SkeletonModel, pos: np.ndarray) -> np.ndarray:
-    m = skeleton.joint_masses
-    return (m[:, None] * pos).sum(axis=0) / m.sum()
+    segment_params = skeleton.segment_params
+    if segment_params is None:
+        m = skeleton.joint_masses
+        return (m[:, None] * pos).sum(axis=0) / m.sum()
+    com = np.zeros(3)
+    for proximal_idx, distal_idx, mass_frac, com_ratio in segment_params:
+        com += mass_frac * (
+            pos[proximal_idx] + com_ratio * (pos[distal_idx] - pos[proximal_idx])
+        )
+    return com
 
 
 def _com_jac(skeleton: SkeletonModel, J: np.ndarray) -> np.ndarray:
-    m = skeleton.joint_masses
-    total = m.sum()
-    nj = skeleton.n_joints
+    segment_params = skeleton.segment_params
+    if segment_params is None:
+        m = skeleton.joint_masses
+        total = m.sum()
+        nj = skeleton.n_joints
+        jac = np.zeros((3, J.shape[1]))
+        for j in range(nj):
+            jac += (m[j] / total) * J[j * 3 : j * 3 + 3, :]
+        return jac
     jac = np.zeros((3, J.shape[1]))
-    for j in range(nj):
-        jac += (m[j] / total) * J[j * 3 : j * 3 + 3, :]
+    for proximal_idx, distal_idx, mass_frac, com_ratio in segment_params:
+        jac += mass_frac * (
+            (1 - com_ratio) * J[proximal_idx * 3 : proximal_idx * 3 + 3, :]
+            + com_ratio * J[distal_idx * 3 : distal_idx * 3 + 3, :]
+        )
     return jac
 
 

@@ -78,6 +78,7 @@ class SkeletonModel:
             self._offsets[i] = jd.offset
 
         self._joint_masses: np.ndarray | None = None
+        self._segment_params: list[tuple[int, int, float, float]] | None = None
 
     @property
     def n_dof(self) -> int:
@@ -153,3 +154,31 @@ class SkeletonModel:
     @property
     def joint_masses(self) -> np.ndarray | None:
         return self._joint_masses
+
+    def set_segment_params(
+        self,
+        segment_defs: dict[str, tuple[str, str, float, float]],
+    ) -> None:
+        """Store segment-based COM parameters (De Leva 1996).
+
+        segment_defs maps segment name →
+            (proximal_joint, distal_joint, mass_fraction, com_proximal_ratio)
+        Mass fractions are normalized to sum to 1.0.
+        """
+        raw = []
+        total_frac = 0.0
+        for proximal_joint, distal_joint, mass_frac, com_ratio in segment_defs.values():
+            raw.append((
+                self._name_to_idx[proximal_joint],
+                self._name_to_idx[distal_joint],
+                mass_frac,
+                com_ratio,
+            ))
+            total_frac += mass_frac
+        self._segment_params = [
+            (pi, di, mf / total_frac, cr) for pi, di, mf, cr in raw
+        ]
+
+    @property
+    def segment_params(self) -> list[tuple[int, int, float, float]] | None:
+        return self._segment_params
