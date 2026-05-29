@@ -719,6 +719,7 @@ def build_html(
     fps,
     athlete_params=None,
     foot_length_m=None,
+    diagnosis_data=None,
 ):
     if foot_length_m is None:
         foot_length_m = eur_size_to_foot_length_m(46)
@@ -732,6 +733,7 @@ def build_html(
             foot_length_m / 0.00667 + 2,
             1,
         ),
+        "diagnosis": diagnosis_data,
     })
 
     return f"""<!DOCTYPE html>
@@ -859,6 +861,78 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
 .balance-section .dot {{ background: #f0a040; }}
 #sb-balance-header {{ display: none; }}
 #sb-balance-header.visible {{ display: block; }}
+/* ── Diagnosis Panel ── */
+.diagnosis .section-title {{ color: #4ecdc4; }} .diagnosis .dot {{ background: #4ecdc4; }}
+.confidence-badge {{
+    display: inline-block; background: #1a1a35; border: 1px solid #2a2a4a;
+    border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600;
+}}
+.tier-section {{
+    background: #1a1a35; border: 1px solid #2a2a4a; border-radius: 8px;
+    overflow: hidden; margin-bottom: 8px;
+}}
+.tier-header {{
+    padding: 10px 12px; cursor: pointer; display: flex; align-items: center;
+    gap: 8px; user-select: none; transition: background 0.15s;
+}}
+.tier-header:hover {{ background: #222245; }}
+.tier-icon {{
+    font-size: 10px; transition: transform 0.2s; display: inline-block;
+    width: 14px; text-align: center; color: #888;
+}}
+.tier-icon.expanded {{ transform: rotate(90deg); }}
+.tier-label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }}
+.tier-count {{ font-size: 11px; color: #777; margin-left: auto; }}
+.tier-body {{ padding: 0 12px 12px; display: none; }}
+.tier-body.visible {{ display: block; }}
+.tier-section[data-tier="1"] .tier-label {{ color: #4ecdc4; }}
+.tier-section[data-tier="2"] .tier-label {{ color: #f1c40f; }}
+.tier-section[data-tier="3"] .tier-label {{ color: #e67e22; }}
+.tier-section[data-tier="0"] .tier-label {{ color: #a0a0ff; }}
+.cause-card {{
+    background: #0f0f25; border: 1px solid #252545; border-radius: 6px;
+    padding: 10px 12px; margin-top: 8px;
+}}
+.cause-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }}
+.cause-id {{ font-size: 12px; font-weight: 600; color: #ccc; }}
+.score-bar-container {{
+    width: 50px; height: 6px; background: #1a1a35; border-radius: 3px;
+    overflow: hidden; flex-shrink: 0;
+}}
+.score-bar-fill {{ height: 100%; border-radius: 3px; }}
+.cause-explanation {{ font-size: 11px; color: #aaa; line-height: 1.5; }}
+.cause-evidence {{ font-size: 10px; color: #666; margin-top: 4px; }}
+.diag-morph-controls {{
+    display: flex; align-items: center; gap: 8px; margin-top: 8px;
+}}
+.diag-morph-controls button {{
+    width: 32px; height: 32px; border-radius: 50%; border: 1px solid #3a3a5a;
+    background: #2a2a4a; color: #e0e0e0; font-size: 14px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}}
+.no-issues {{ color: #2ecc71; font-size: 13px; padding: 12px; text-align: center; }}
+/* ── Sparkline bars ── */
+.sparkline-group {{ margin-bottom: 14px; }}
+.sparkline-label {{ font-size: 11px; font-weight: 600; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }}
+.sparkline-row {{ display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }}
+.sparkline-rep {{ font-size: 10px; color: #666; width: 26px; text-align: right; flex-shrink: 0; }}
+.sparkline-bar-bg {{ flex: 1; height: 10px; background: #1a1a35; border-radius: 5px; overflow: hidden; }}
+.sparkline-bar {{ height: 100%; border-radius: 5px; min-width: 2px; }}
+.sparkline-val {{ font-size: 10px; color: #aaa; width: 44px; text-align: right; flex-shrink: 0; }}
+/* ── Fault map grid ── */
+.fault-map-row {{ display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }}
+.fault-map-header {{ font-size: 10px; color: #666; margin-bottom: 8px; }}
+.fault-map-label {{ font-size: 11px; color: #aaa; min-width: 90px; max-width: 120px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.fault-map-cell {{ width: 28px; text-align: center; flex-shrink: 0; font-size: 10px; }}
+.fault-dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 50%; }}
+.fault-dot.present {{ background: #e74c3c; box-shadow: 0 0 4px #e74c3c66; }}
+.fault-dot.absent {{ background: #1a1a35; border: 1px solid #2a2a4a; }}
+/* ── Performance trend ── */
+.trend-line {{ font-size: 11px; margin-bottom: 5px; line-height: 1.5; }}
+.trend-bad {{ color: #e74c3c; }}
+.trend-good {{ color: #2ecc71; }}
+.trend-neutral {{ color: #4ecdc4; }}
+.trend-warn {{ color: #f1c40f; }}
 </style>
 </head>
 <body>
@@ -873,6 +947,7 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
             <button class="mode-tab active" id="tab-replay">Replay</button>
             <button class="mode-tab" id="tab-sandbox">Sandbox</button>
+            <button class="mode-tab" id="tab-diagnosis" style="display:none">Diagnosis</button>
             <button type="button" id="sb-balance-btn" class="btn-primary" style="display:none; min-width:100px;">Balance</button>
         </div>
         <div id="sb-balance-header">
@@ -935,6 +1010,10 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
             <div class="section-title"><span class="dot"></span> Dorsiflexion (delta)</div>
             <div class="slider-row"><label>Both ankles &Delta;</label><input type="range" id="sb-d-dorsi" min="-20" max="20" value="0" step="0.5" disabled><span class="value" id="sb-d-dorsi-val">0°</span></div>
         </div>
+        <div class="section sandbox">
+            <div class="section-title"><span class="dot"></span> Knee Depth (delta)</div>
+            <div class="slider-row"><label>Both knees &Delta;</label><input type="range" id="sb-d-knee-flex" min="-40" max="40" value="0" step="0.5" disabled><span class="value" id="sb-d-knee-flex-val">0&deg;</span></div>
+        </div>
         <div class="section barbell-s">
             <div class="section-title"><span class="dot"></span> Barbell</div>
             <div class="slider-row"><label>Weight</label><input type="range" id="sb-barbell-weight" min="0" max="200" value="0" step="5" disabled><span class="value" id="sb-barbell-weight-val">0 kg</span></div>
@@ -961,6 +1040,67 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
         <div class="section angles">
             <div class="section-title"><span class="dot"></span> Live Angles</div>
             <div class="mono" id="sb-angles-info"></div>
+        </div>
+    </div>
+
+    <!-- ======== DIAGNOSIS PANEL ======== -->
+    <div id="diagnosis-panel" style="display:none">
+        <!-- Rep selector -->
+        <div class="section diagnosis">
+            <div class="section-title"><span class="dot"></span> Diagnosis</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;" id="diag-rep-selector"></div>
+        </div>
+
+        <!-- Per-rep view (hidden by default, shown when a rep is selected) -->
+        <div id="diag-rep-view" style="display:none">
+            <div class="section diagnosis">
+                <div class="confidence-badge" id="diag-rep-confidence">--</div>
+                <div id="diag-rep-symptoms" style="margin-top:8px; font-size:11px; color:#888;"></div>
+            </div>
+            <div id="diag-rep-tiers"></div>
+            <div class="section diagnosis" id="diag-morph-section" style="display:none">
+                <div class="section-title"><span class="dot"></span> Correction Preview</div>
+                <div class="diag-morph-controls">
+                    <button id="diag-play-btn" title="Play/Pause">&#9646;&#9646;</button>
+                    <span class="mono" style="font-size:11px; color:#888;">Ghost = current form &nbsp;|&nbsp; <span style="color:#4ecdc4;">Teal = corrected</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Set Overview (shown by default) -->
+        <div id="diag-set-view">
+            <div class="section diagnosis">
+                <div class="confidence-badge" id="diag-set-confidence">--</div>
+                <div id="diag-set-symptoms" style="margin-top:8px; font-size:11px; color:#888;"></div>
+            </div>
+            <div class="section diagnosis">
+                <div class="section-title"><span class="dot"></span> Rep Comparison</div>
+                <div id="diag-sparklines"></div>
+            </div>
+            <div class="section diagnosis" id="diag-fault-section" style="display:none">
+                <div class="section-title"><span class="dot"></span> Fault Map</div>
+                <div id="diag-fault-map"></div>
+            </div>
+            <div class="section diagnosis" id="diag-trend-section">
+                <div class="section-title"><span class="dot"></span> Performance Trend</div>
+                <div id="diag-trend" class="mono"></div>
+            </div>
+            <div id="diag-set-tiers"></div>
+        </div>
+
+        <!-- Playback (always visible in diagnosis mode) -->
+        <div class="section playback">
+            <div class="section-title"><span class="dot"></span> Playback</div>
+            <div class="anim-controls">
+                <button id="diag-anim-play-btn" title="Play/Pause">&#9646;&#9646;</button>
+                <input type="range" id="diag-frame-scrubber" min="0" max="100" value="0" step="1">
+                <span class="value" id="diag-frame-val" style="min-width:50px;">0/0</span>
+            </div>
+            <div class="slider-row">
+                <label>Speed</label>
+                <input type="range" id="diag-speed-slider" min="0.1" max="3.0" value="1.0" step="0.1">
+                <span class="value" id="diag-speed-val">1.0x</span>
+            </div>
         </div>
     </div>
 </div>
@@ -1034,6 +1174,7 @@ if (AP) {{
         'sb-stance-width': [AP.stanceWidth, 'sb-stance-width-val', 'x', 2],
         'sb-toe-out': [AP.toeOut, 'sb-toe-out-val', '°', 0],
         'sb-d-dorsi': [0, 'sb-d-dorsi-val', '°', 1],
+        'sb-d-knee-flex': [0, 'sb-d-knee-flex-val', '°', 1],
     }};
     for (const [id, [val, valId, suf, dec]] of Object.entries(sliderInit)) {{
         const el = document.getElementById(id);
@@ -1122,7 +1263,7 @@ for (let i = 0; i < 4; i++) {{
 barbellGroup.visible = false;
 
 // ======== STATE ========
-let viewMode = 'replay'; // 'replay' or 'sandbox'
+let viewMode = 'replay'; // 'replay', 'sandbox', or 'diagnosis'
 let curRep = 0, curFrame = 0, playing = true, lastT = performance.now(), speed = 1.0, frameAcc = 0;
 const reps = DATA.reps, dataFps = DATA.fps;
 let repFilter = -1;
@@ -1177,7 +1318,7 @@ const baselineToeOut = AP ? AP.toeOut : 15;
 const SB_PARAM_IDS = [
     'sb-stance-width', 'sb-toe-out',
     'sb-barbell-weight', 'sb-body-mass',
-    'sb-d-dorsi',
+    'sb-d-dorsi', 'sb-d-knee-flex',
 ];
 
 function setSandboxParamsEnabled(enabled) {{
@@ -1219,6 +1360,7 @@ function bindDisplaySlider(id, valId, suffix, decimals) {{
 bindStanceSlider('sb-stance-width', 'sb-stance-width-val', 'x', 2);
 bindStanceSlider('sb-toe-out', 'sb-toe-out-val', '°', 0);
 bindSliderDelta('sb-d-dorsi', 'sb-d-dorsi-val', '°', 1);
+bindSliderDelta('sb-d-knee-flex', 'sb-d-knee-flex-val', '°', 1);
 bindDisplaySlider('sb-barbell-weight', 'sb-barbell-weight-val', ' kg', 0);
 bindDisplaySlider('sb-body-mass', 'sb-body-mass-val', ' kg', 0);
 bindDisplaySlider('sb-speed-slider', 'sb-speed-val', 'x', 1);
@@ -1248,7 +1390,7 @@ function attachRebalanceHook(id) {{
         updateSandbox(fd);
     }});
 }}
-['sb-stance-width', 'sb-toe-out', 'sb-d-dorsi', 'sb-barbell-weight', 'sb-body-mass']
+['sb-stance-width', 'sb-toe-out', 'sb-d-dorsi', 'sb-d-knee-flex', 'sb-barbell-weight', 'sb-body-mass']
     .forEach(attachRebalanceHook);
 
 function showSandboxBalanceUI(visible) {{
@@ -1506,22 +1648,31 @@ document.getElementById('controls').addEventListener('click', (e) => {{
 }});
 
 // ======== MODE SWITCHING ========
+function setActiveTab(tabId) {{
+    ['tab-replay', 'tab-sandbox', 'tab-diagnosis'].forEach(id => {{
+        const el = document.getElementById(id);
+        if (el) el.classList.remove('active');
+    }});
+    const active = document.getElementById(tabId);
+    if (active) active.classList.add('active');
+    document.getElementById('replay-panel').style.display = 'none';
+    document.getElementById('sandbox-panel').style.display = 'none';
+    document.getElementById('diagnosis-panel').style.display = 'none';
+}}
 document.getElementById('tab-replay').addEventListener('click', () => {{
     viewMode = 'replay';
-    document.getElementById('tab-replay').classList.add('active');
-    document.getElementById('tab-sandbox').classList.remove('active');
+    setActiveTab('tab-replay');
     document.getElementById('replay-panel').style.display = '';
-    document.getElementById('sandbox-panel').style.display = 'none';
     showSandboxBalanceUI(false);
     hideSandboxVisuals();
+    hideDiagnosisVisuals();
 }});
 document.getElementById('tab-sandbox').addEventListener('click', () => {{
     viewMode = 'sandbox';
-    document.getElementById('tab-sandbox').classList.add('active');
-    document.getElementById('tab-replay').classList.remove('active');
+    setActiveTab('tab-sandbox');
     document.getElementById('sandbox-panel').style.display = '';
-    document.getElementById('replay-panel').style.display = 'none';
     showSandboxBalanceUI(true);
+    hideDiagnosisVisuals();
     const depthAngle = baselineData.peakKneeFlex;
     const depthOk = depthAngle >= 90;
     const depthEl = document.getElementById('sb-depth-check');
@@ -1531,6 +1682,14 @@ document.getElementById('tab-sandbox').addEventListener('click', () => {{
             : `<span class="balance-bad">Depth: ${{depthAngle.toFixed(1)}}° — parallel is ~90°</span>`;
     }}
 }});
+document.getElementById('tab-diagnosis').addEventListener('click', () => {{
+    viewMode = 'diagnosis';
+    setActiveTab('tab-diagnosis');
+    document.getElementById('diagnosis-panel').style.display = '';
+    showSandboxBalanceUI(false);
+    hideSandboxVisuals();
+    refreshDiagnosisView();
+}});
 
 function hideSandboxVisuals() {{
     ghostTorsoLine.visible = false;
@@ -1538,6 +1697,481 @@ function hideSandboxVisuals() {{
     barbellGroup.visible = false;
     comSphere.visible = false; comDisc.visible = false; comLine.visible = false; bosLine.visible = false;
 }}
+
+// ======== DIAGNOSIS MODE ========
+const diagData = DATA.diagnosis;
+let diagMorphPlaying = true;
+let diagMorphFrame = 0;
+let diagMorphLastT = 0;
+let diagCurrentRep = 0;
+let diagViewMode = 'set'; // 'set' or 'rep'
+
+const ghostJointMat = new THREE.MeshPhongMaterial({{ color: 0x6688aa, transparent: true, opacity: 0.35 }});
+const ghostBoneMat = new THREE.MeshPhongMaterial({{ color: 0x556688, transparent: true, opacity: 0.3 }});
+const corrJointMat = new THREE.MeshPhongMaterial({{ color: 0x4ecdc4 }});
+const corrBoneMat = new THREE.MeshPhongMaterial({{ color: 0x3aaa9a }});
+
+const ghostJoints = [], ghostBones = [], corrJoints = [], corrBones = [];
+for (let i = 0; i < 19; i++) {{
+    const gj = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 6), ghostJointMat);
+    gj.visible = false; scene.add(gj); ghostJoints.push(gj);
+    const cj = new THREE.Mesh(new THREE.SphereGeometry(0.018, 12, 8), corrJointMat);
+    cj.visible = false; scene.add(cj); corrJoints.push(cj);
+}}
+for (let i = 0; i < BONE_CONNECTIONS.length; i++) {{
+    const gb = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 1, 5), ghostBoneMat);
+    gb.visible = false; scene.add(gb); ghostBones.push(gb);
+    const cb = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 1, 6), corrBoneMat);
+    cb.visible = false; scene.add(cb); corrBones.push(cb);
+}}
+
+function updateDiagSkeleton(joints, bones, kpts) {{
+    if (!kpts || kpts.length < 19) return;
+    for (let i = 0; i < 19; i++) {{
+        joints[i].position.set(kpts[i][0], kpts[i][1], kpts[i][2]);
+        joints[i].visible = true;
+    }}
+    for (let bi = 0; bi < BONE_CONNECTIONS.length; bi++) {{
+        const [si, ei] = BONE_CONNECTIONS[bi];
+        const sp = joints[si].position, ep = joints[ei].position;
+        const mid = new THREE.Vector3().addVectors(sp, ep).multiplyScalar(0.5);
+        const dir = new THREE.Vector3().subVectors(ep, sp);
+        const blen = dir.length();
+        bones[bi].position.copy(mid);
+        bones[bi].scale.set(1, blen, 1);
+        bones[bi].quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+        bones[bi].visible = true;
+    }}
+}}
+
+function hideDiagSkeleton(joints, bones) {{
+    joints.forEach(j => j.visible = false);
+    bones.forEach(b => b.visible = false);
+}}
+
+function showDiagnosisRepSkeleton() {{
+    if (!diagData || !diagData.per_rep || !diagData.per_rep.length) return;
+    const repData = diagData.per_rep[diagCurrentRep];
+    if (!repData) return;
+    // Main skeleton stays visible for playback; ghost+corrected overlay when corrections exist
+    for (let i = 0; i < 19; i++) jointMeshes[i].visible = true;
+    boneMeshes.forEach(b => b.visible = true);
+    if (repData.has_correction && repData.morph_frames) {{
+        updateDiagSkeleton(ghostJoints, ghostBones, repData.observed_kpts);
+        updateDiagSkeleton(corrJoints, corrBones, repData.morph_frames[0]);
+    }} else {{
+        hideDiagSkeleton(ghostJoints, ghostBones);
+        hideDiagSkeleton(corrJoints, corrBones);
+    }}
+}}
+
+function showDiagnosisSetSkeleton() {{
+    hideDiagSkeleton(ghostJoints, ghostBones);
+    hideDiagSkeleton(corrJoints, corrBones);
+    for (let i = 0; i < 19; i++) jointMeshes[i].visible = true;
+    boneMeshes.forEach(b => b.visible = true);
+}}
+
+function refreshDiagnosisView() {{
+    // Sync playback state with current diagnosis view
+    if (diagViewMode === 'set') {{
+        repFilter = -1;
+        curRep = 0;
+        showDiagnosisSetSkeleton();
+    }} else {{
+        repFilter = diagCurrentRep;
+        curRep = diagCurrentRep;
+        showDiagnosisRepSkeleton();
+    }}
+    curFrame = 0;
+}}
+
+function hideDiagnosisVisuals() {{
+    hideDiagSkeleton(ghostJoints, ghostBones);
+    hideDiagSkeleton(corrJoints, corrBones);
+}}
+
+function updateDiagnosisMorph(now) {{
+    if (!diagData || !diagData.per_rep || !diagData.per_rep.length) return;
+    if (diagViewMode === 'set') return;
+    const repData = diagData.per_rep[diagCurrentRep];
+    if (!repData || !repData.has_correction || !repData.morph_frames) return;
+    const morphInterval = 1000 / 30;
+    if (diagMorphPlaying && (now - diagMorphLastT) >= morphInterval) {{
+        diagMorphFrame = (diagMorphFrame + 1) % repData.morph_frames.length;
+        diagMorphLastT = now;
+    }}
+    updateDiagSkeleton(corrJoints, corrBones, repData.morph_frames[diagMorphFrame]);
+}}
+
+// ---- Tier card builder (shared by set and per-rep views) ----
+function buildTierCards(container, tiers, expandFirst) {{
+    container.innerHTML = '';
+    const tierOrder = ['1', '2', '3', '0'];
+    const tierLabels = {{ '1': 'Cue-correctable (fix now)', '2': 'Session-level', '3': 'Long-term', '0': 'Contextual' }};
+
+    for (const tierKey of tierOrder) {{
+        const tier = tiers[tierKey];
+        if (!tier || tier.causes.length === 0) continue;
+
+        const section = document.createElement('div');
+        section.className = 'tier-section';
+        section.dataset.tier = tierKey;
+
+        const header = document.createElement('div');
+        header.className = 'tier-header';
+        const icon = document.createElement('span');
+        icon.className = 'tier-icon' + (expandFirst && tierKey === '1' ? ' expanded' : '');
+        icon.textContent = '\\u25B6';
+        const label = document.createElement('span');
+        label.className = 'tier-label';
+        label.textContent = tierLabels[tierKey] || ('Tier ' + tierKey);
+        const count = document.createElement('span');
+        count.className = 'tier-count';
+        count.textContent = '(' + tier.causes.length + ')';
+        header.appendChild(icon);
+        header.appendChild(label);
+        header.appendChild(count);
+
+        const body = document.createElement('div');
+        body.className = 'tier-body' + (expandFirst && tierKey === '1' ? ' visible' : '');
+
+        for (const cause of tier.causes) {{
+            const card = document.createElement('div');
+            card.className = 'cause-card';
+            const ch = document.createElement('div');
+            ch.className = 'cause-header';
+            const cid = document.createElement('span');
+            cid.className = 'cause-id';
+            cid.textContent = cause.cause_id.replace(/_/g, ' ');
+            const sc = document.createElement('div');
+            sc.className = 'score-bar-container';
+            const sf = document.createElement('div');
+            sf.className = 'score-bar-fill';
+            const scorePct = Math.round(cause.score * 100);
+            sf.style.width = scorePct + '%';
+            sf.style.background = cause.score > 0.5 ? '#4ecdc4' : cause.score > 0.3 ? '#f1c40f' : '#e67e22';
+            sc.appendChild(sf);
+            ch.appendChild(cid); ch.appendChild(sc);
+            const expl = document.createElement('div');
+            expl.className = 'cause-explanation';
+            expl.textContent = cause.explanation;
+            card.appendChild(ch); card.appendChild(expl);
+            if (cause.implicated_by && cause.implicated_by.length > 0) {{
+                const ev = document.createElement('div');
+                ev.className = 'cause-evidence';
+                ev.textContent = 'Evidence: ' + cause.implicated_by.join(', ').replace(/_/g, ' ');
+                card.appendChild(ev);
+            }}
+            body.appendChild(card);
+        }}
+
+        header.addEventListener('click', () => {{
+            body.classList.toggle('visible');
+            icon.classList.toggle('expanded');
+        }});
+        section.appendChild(header);
+        section.appendChild(body);
+        container.appendChild(section);
+    }}
+}}
+
+// ---- Symptom HTML helper ----
+function renderSymptoms(element, symptoms) {{
+    if (symptoms && symptoms.length > 0) {{
+        element.innerHTML = 'Detected: ' + symptoms.map(
+            s => '<span style="color:#a0a0ff">' + s.id.replace(/_/g, ' ') + '</span> (' + Math.round(s.severity * 100) + '%)'
+        ).join(', ');
+    }} else {{
+        element.innerHTML = '<span style="color:#2ecc71">No form issues detected</span>';
+    }}
+}}
+
+// ---- Sparkline bars (set overview) ----
+function buildSparklines() {{
+    const container = document.getElementById('diag-sparklines');
+    container.innerHTML = '';
+
+    const metricDefs = [
+        {{ key: 'trunk_lean', label: 'Trunk Lean', unit: '°', goodMax: 25, warnMax: 40 }},
+        {{ key: 'knee_valgus', label: 'Knee Valgus', unit: '°', goodMax: 8, warnMax: 15 }},
+        {{ key: 'depth_angle', label: 'Squat Depth', unit: '°', goodMax: null, warnMax: null }},
+        {{ key: 'dorsiflexion', label: 'Dorsiflexion', unit: '°', goodMax: null, warnMax: null }},
+    ];
+
+    for (const metric of metricDefs) {{
+        const values = diagData.per_rep.map(r => r.metrics[metric.key]);
+        const maxVal = Math.max(...values, 1);
+
+        const group = document.createElement('div');
+        group.className = 'sparkline-group';
+
+        const label = document.createElement('div');
+        label.className = 'sparkline-label';
+        label.textContent = metric.label;
+        group.appendChild(label);
+
+        for (let repIdx = 0; repIdx < diagData.per_rep.length; repIdx++) {{
+            const rep = diagData.per_rep[repIdx];
+            const val = rep.metrics[metric.key];
+
+            const row = document.createElement('div');
+            row.className = 'sparkline-row';
+
+            const repLabel = document.createElement('span');
+            repLabel.className = 'sparkline-rep';
+            repLabel.textContent = 'R' + rep.rep_number;
+
+            const barBg = document.createElement('div');
+            barBg.className = 'sparkline-bar-bg';
+            const bar = document.createElement('div');
+            bar.className = 'sparkline-bar';
+            bar.style.width = (val / maxVal * 100) + '%';
+            if (metric.goodMax !== null) {{
+                bar.style.background = val <= metric.goodMax ? '#2ecc71'
+                    : val <= metric.warnMax ? '#f1c40f' : '#e74c3c';
+            }} else {{
+                bar.style.background = '#4ecdc4';
+            }}
+            barBg.appendChild(bar);
+
+            const valLabel = document.createElement('span');
+            valLabel.className = 'sparkline-val';
+            valLabel.textContent = val + metric.unit;
+
+            row.appendChild(repLabel);
+            row.appendChild(barBg);
+            row.appendChild(valLabel);
+            group.appendChild(row);
+        }}
+
+        container.appendChild(group);
+    }}
+}}
+
+// ---- Fault map (set overview) ----
+function buildFaultMap() {{
+    const container = document.getElementById('diag-fault-map');
+    const faultSection = document.getElementById('diag-fault-section');
+    container.innerHTML = '';
+
+    const symptoms = diagData.set_symptoms;
+    if (!symptoms || symptoms.length === 0) {{
+        faultSection.style.display = 'none';
+        return;
+    }}
+    faultSection.style.display = '';
+
+    // Header row
+    const header = document.createElement('div');
+    header.className = 'fault-map-row fault-map-header';
+    const spacer = document.createElement('span');
+    spacer.className = 'fault-map-label';
+    spacer.textContent = '';
+    header.appendChild(spacer);
+    diagData.per_rep.forEach(rep => {{
+        const cell = document.createElement('span');
+        cell.className = 'fault-map-cell';
+        cell.textContent = 'R' + rep.rep_number;
+        header.appendChild(cell);
+    }});
+    container.appendChild(header);
+
+    // Fault rows
+    for (const symptom of symptoms) {{
+        const row = document.createElement('div');
+        row.className = 'fault-map-row';
+
+        const label = document.createElement('span');
+        label.className = 'fault-map-label';
+        label.title = symptom.id.replace(/_/g, ' ');
+        label.textContent = symptom.id.replace(/_/g, ' ');
+        row.appendChild(label);
+
+        diagData.per_rep.forEach(rep => {{
+            const cell = document.createElement('span');
+            cell.className = 'fault-map-cell';
+            const isPresent = symptom.contributing_reps && symptom.contributing_reps.includes(rep.rep_number);
+            const dot = document.createElement('span');
+            dot.className = 'fault-dot ' + (isPresent ? 'present' : 'absent');
+            cell.appendChild(dot);
+            row.appendChild(cell);
+        }});
+
+        container.appendChild(row);
+    }}
+}}
+
+// ---- Performance trend (set overview) ----
+function diagStdDev(arr) {{
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return Math.sqrt(arr.reduce((sum, v) => sum + (v - mean) ** 2, 0) / arr.length);
+}}
+
+function buildPerformanceTrend() {{
+    const container = document.getElementById('diag-trend');
+    const repList = diagData.per_rep;
+    if (repList.length < 2) {{
+        container.innerHTML = '<span style="color:#888">Need 2+ reps to detect trends.</span>';
+        return;
+    }}
+
+    const confidences = repList.map(r => r.confidence);
+    const halfIdx = Math.ceil(confidences.length / 2);
+    const avgFirst = confidences.slice(0, halfIdx).reduce((a, b) => a + b, 0) / halfIdx;
+    const avgSecond = confidences.slice(halfIdx).reduce((a, b) => a + b, 0) / (confidences.length - halfIdx);
+
+    const trunkValues = repList.map(r => r.metrics.trunk_lean);
+    const valgusValues = repList.map(r => r.metrics.knee_valgus);
+    const trunkStd = diagStdDev(trunkValues);
+    const valgusStd = diagStdDev(valgusValues);
+
+    let html = '';
+
+    if (avgSecond > avgFirst * 1.15) {{
+        html += '<div class="trend-line trend-bad">⚠ Form degradation detected — later reps show more issues</div>';
+    }} else if (avgSecond < avgFirst * 0.85) {{
+        html += '<div class="trend-line trend-good">✓ Form improving over the set</div>';
+    }} else {{
+        html += '<div class="trend-line trend-neutral">◆ Consistent form across reps</div>';
+    }}
+
+    if (trunkStd > 5) {{
+        html += '<div class="trend-line trend-warn">Trunk lean varies ±' + trunkStd.toFixed(1) + '° across reps</div>';
+    }}
+    if (valgusStd > 3) {{
+        html += '<div class="trend-line trend-warn">Knee valgus varies ±' + valgusStd.toFixed(1) + '° across reps</div>';
+    }}
+
+    // Depth consistency
+    const depthValues = repList.map(r => r.metrics.depth_angle);
+    const depthStd = diagStdDev(depthValues);
+    if (depthStd > 8) {{
+        html += '<div class="trend-line trend-warn">Depth varies ±' + depthStd.toFixed(1) + '° across reps</div>';
+    }}
+
+    container.innerHTML = html;
+}}
+
+// ---- Switch to Set Overview ----
+function switchToDiagSetView() {{
+    diagViewMode = 'set';
+    repFilter = -1;
+    curRep = 0;
+    curFrame = 0;
+    document.getElementById('diag-set-view').style.display = '';
+    document.getElementById('diag-rep-view').style.display = 'none';
+    showDiagnosisSetSkeleton();
+}}
+
+// ---- Switch to per-rep view ----
+function switchToDiagRepView(repIdx) {{
+    diagViewMode = 'rep';
+    diagCurrentRep = repIdx;
+    diagMorphFrame = 0;
+    repFilter = repIdx;
+    curRep = repIdx;
+    curFrame = 0;
+
+    document.getElementById('diag-set-view').style.display = 'none';
+    document.getElementById('diag-rep-view').style.display = '';
+
+    const repData = diagData.per_rep[repIdx];
+    if (!repData) return;
+
+    // Confidence
+    const confPct = Math.round(repData.confidence * 100);
+    document.getElementById('diag-rep-confidence').textContent = 'Confidence: ' + confPct + '%';
+
+    // Symptoms
+    renderSymptoms(document.getElementById('diag-rep-symptoms'), repData.symptoms);
+
+    // Tiers
+    buildTierCards(document.getElementById('diag-rep-tiers'), repData.tiers, true);
+
+    // Morph section
+    const morphSection = document.getElementById('diag-morph-section');
+    if (repData.has_correction && repData.morph_frames) {{
+        morphSection.style.display = '';
+    }} else {{
+        morphSection.style.display = 'none';
+    }}
+
+    showDiagnosisRepSkeleton();
+}}
+
+// ---- Main panel builder ----
+function buildDiagnosisPanel() {{
+    if (!diagData) return;
+    document.getElementById('tab-diagnosis').style.display = '';
+
+    // Build rep selector
+    const selector = document.getElementById('diag-rep-selector');
+    selector.innerHTML = '';
+
+    const overviewBtn = document.createElement('button');
+    overviewBtn.className = 'rep-btn active';
+    overviewBtn.textContent = 'Set Overview';
+    overviewBtn.addEventListener('click', () => {{
+        selector.querySelectorAll('.rep-btn').forEach(b => b.classList.remove('active'));
+        overviewBtn.classList.add('active');
+        switchToDiagSetView();
+    }});
+    selector.appendChild(overviewBtn);
+
+    diagData.per_rep.forEach((repData, idx) => {{
+        const btn = document.createElement('button');
+        btn.className = 'rep-btn';
+        btn.textContent = 'Rep ' + repData.rep_number;
+        btn.addEventListener('click', () => {{
+            selector.querySelectorAll('.rep-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            switchToDiagRepView(idx);
+        }});
+        selector.appendChild(btn);
+    }});
+
+    // Build Set Overview content
+    const setConfPct = Math.round(diagData.set_confidence * 100);
+    document.getElementById('diag-set-confidence').textContent = 'Confidence: ' + setConfPct + '%';
+    renderSymptoms(document.getElementById('diag-set-symptoms'), diagData.set_symptoms);
+    buildSparklines();
+    buildFaultMap();
+    buildPerformanceTrend();
+    buildTierCards(document.getElementById('diag-set-tiers'), diagData.set_tiers, true);
+
+    // Morph play button (correction preview)
+    document.getElementById('diag-play-btn')?.addEventListener('click', () => {{
+        diagMorphPlaying = !diagMorphPlaying;
+        document.getElementById('diag-play-btn').innerHTML = diagMorphPlaying ? '&#9646;&#9646;' : '&#9654;';
+    }});
+
+    // Playback controls (rep/set animation)
+    const diagScrub = document.getElementById('diag-frame-scrubber');
+    const diagFv = document.getElementById('diag-frame-val');
+    diagScrub.addEventListener('input', () => {{
+        curFrame = parseInt(diagScrub.value);
+        playing = false;
+        document.getElementById('diag-anim-play-btn').innerHTML = '&#9654;';
+    }});
+    document.getElementById('diag-anim-play-btn').addEventListener('click', () => {{
+        playing = !playing;
+        document.getElementById('diag-anim-play-btn').innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+    }});
+    const diagSs = document.getElementById('diag-speed-slider');
+    const diagSv = document.getElementById('diag-speed-val');
+    diagSs.addEventListener('input', () => {{
+        speed = parseFloat(diagSs.value);
+        diagSv.textContent = speed.toFixed(1) + 'x';
+    }});
+
+    // Auto-switch to diagnosis tab
+    if (diagData.auto_open) {{
+        document.getElementById('tab-diagnosis').click();
+    }}
+}}
+
+buildDiagnosisPanel();
 
 function balancePointAlongFoot(footLen) {{
     return BALANCE_FRAC * footLen - HEEL_OFFSET;
@@ -1805,9 +2439,10 @@ function solveKnee(H, A, thighLen, shinLen, ref) {{
 // per-side bone vectors, overriding only stance / toe-out / dorsiflexion. The hips
 // fall out of the leg geometry (rigid pelvis reconciled by averaging). Returns a
 // Float64Array(19*3) (upper body 0-10 copied verbatim), or null if degenerate.
-function bottomUpBuild(capturedKpts, stanceWidth, toeOutDeg, dorsiDeltaDeg) {{
+function bottomUpBuild(capturedKpts, stanceWidth, toeOutDeg, dorsiDeltaDeg, kneeFlexDeltaDeg) {{
     for (const idx of [11,12,13,14,15,16]) if (!capturedKpts[idx]) return null;
     const DEG = Math.PI / 180;
+    const dKnee = (kneeFlexDeltaDeg || 0) * DEG;
     const out = new Float64Array(19 * 3);
     for (let i = 0; i < 19; i++) {{
         if (!capturedKpts[i]) continue;
@@ -1846,6 +2481,7 @@ function bottomUpBuild(capturedKpts, stanceWidth, toeOutDeg, dorsiDeltaDeg) {{
         // 4. thigh = captured (hip-knee), yawed with the leg
         let thigh = [H0[0]-K0[0], H0[1]-K0[1], H0[2]-K0[2]];
         thigh = rotateYvec(thigh, S.sign * dToe);
+        if (dKnee !== 0) {{ thigh = rotateAboutAxis(thigh, latU, dKnee); }}
         hipEst.push([K[0]+thigh[0], K[1]+thigh[1], K[2]+thigh[2]]);
         out[S.aIdx*3]=A[0]; out[S.aIdx*3+1]=A[1]; out[S.aIdx*3+2]=A[2];
         out[S.kIdx*3]=K[0]; out[S.kIdx*3+1]=K[1]; out[S.kIdx*3+2]=K[2];
@@ -1880,12 +2516,14 @@ function deformLowerBody(capturedKpts) {{
     const sEl = document.getElementById('sb-stance-width');
     const tEl = document.getElementById('sb-toe-out');
     const dEl = document.getElementById('sb-d-dorsi');
+    const kEl = document.getElementById('sb-d-knee-flex');
     const stance = sEl ? parseFloat(sEl.value) : baselineStanceWidth;
     const toeOut = tEl ? parseFloat(tEl.value) : baselineToeOut;
     const dorsi  = dEl ? parseFloat(dEl.value) : 0;
-    if (stance === baselineStanceWidth && toeOut === baselineToeOut && dorsi === 0) return out;
-    const base = bottomUpBuild(capturedKpts, baselineStanceWidth, baselineToeOut, 0);
-    const mod  = bottomUpBuild(capturedKpts, stance, toeOut, dorsi);
+    const kneeDelta = kEl ? parseFloat(kEl.value) : 0;
+    if (stance === baselineStanceWidth && toeOut === baselineToeOut && dorsi === 0 && kneeDelta === 0) return out;
+    const base = bottomUpBuild(capturedKpts, baselineStanceWidth, baselineToeOut, 0, 0);
+    const mod  = bottomUpBuild(capturedKpts, stance, toeOut, dorsi, kneeDelta);
     if (!base || !mod) return out;
     for (let i = 11; i <= 18; i++) {{
         if (!capturedKpts[i]) continue;
@@ -1963,6 +2601,7 @@ function buildSandboxKpts(fd) {{
 
     const capturedKpts = fd.kpts;
     const capturedAngles = fd.angles;
+    const kneeFlexDelta = parseFloat(document.getElementById('sb-d-knee-flex')?.value || '0');
     const deformed = deformLowerBody(capturedKpts);
 
     if (_balanceLocked) {{
@@ -1974,12 +2613,12 @@ function buildSandboxKpts(fd) {{
         const kpts = posed.kpts;
         const totalTrunkLeanDeg = posed.newLean * (180 / Math.PI);
         const trunkAngleDeg = 180 - totalTrunkLeanDeg;
-        return {{ kpts, trunkAngleDeg, avgKneeDeg: capturedAngles.knee_flex,
+        return {{ kpts, trunkAngleDeg, avgKneeDeg: capturedAngles.knee_flex + kneeFlexDelta,
                   dorsiDeg: (capturedAngles.dorsi_l + capturedAngles.dorsi_r) / 2,
                   totalTrunkLeanDeg,
                   dorsiLDeg: capturedAngles.dorsi_l, dorsiRDeg: capturedAngles.dorsi_r,
-                  kfLDeg: capturedAngles.knee_flex_l || capturedAngles.knee_flex,
-                  kfRDeg: capturedAngles.knee_flex_r || capturedAngles.knee_flex,
+                  kfLDeg: (capturedAngles.knee_flex_l || capturedAngles.knee_flex) + kneeFlexDelta,
+                  kfRDeg: (capturedAngles.knee_flex_r || capturedAngles.knee_flex) + kneeFlexDelta,
                   valLDeg: capturedAngles.knee_valgus_l, valRDeg: capturedAngles.knee_valgus_r,
                   hipFlexL: capturedAngles.hip_flex_l, hipFlexR: capturedAngles.hip_flex_r,
                   hipMidX: posed.hipMidX, hipMidY: posed.hipMidY,
@@ -1997,12 +2636,12 @@ function buildSandboxKpts(fd) {{
     const trunkAngleDeg = capturedAngles.trunk_flexion;
     const totalTrunkLean = totalTrunkLeanDeg * Math.PI / 180;
 
-    return {{ kpts, trunkAngleDeg, avgKneeDeg: capturedAngles.knee_flex,
+    return {{ kpts, trunkAngleDeg, avgKneeDeg: capturedAngles.knee_flex + kneeFlexDelta,
               dorsiDeg: (capturedAngles.dorsi_l + capturedAngles.dorsi_r) / 2,
               totalTrunkLeanDeg,
               dorsiLDeg: capturedAngles.dorsi_l, dorsiRDeg: capturedAngles.dorsi_r,
-              kfLDeg: capturedAngles.knee_flex_l || capturedAngles.knee_flex,
-              kfRDeg: capturedAngles.knee_flex_r || capturedAngles.knee_flex,
+              kfLDeg: (capturedAngles.knee_flex_l || capturedAngles.knee_flex) + kneeFlexDelta,
+              kfRDeg: (capturedAngles.knee_flex_r || capturedAngles.knee_flex) + kneeFlexDelta,
               valLDeg: capturedAngles.knee_valgus_l, valRDeg: capturedAngles.knee_valgus_r,
               hipFlexL: capturedAngles.hip_flex_l, hipFlexR: capturedAngles.hip_flex_r,
               hipMidX, hipMidY, shoulderMidX, shoulderMidY,
@@ -2249,14 +2888,25 @@ function animate(now) {{
     fv.textContent = `${{curFrame+1}}/${{r.length}}`;
     sbScrub.max = r.length - 1; sbScrub.value = curFrame;
     sbFv.textContent = `${{curFrame+1}}/${{r.length}}`;
+    const diagScrubEl = document.getElementById('diag-frame-scrubber');
+    const diagFvEl = document.getElementById('diag-frame-val');
+    if (diagScrubEl) {{ diagScrubEl.max = r.length - 1; diagScrubEl.value = curFrame; }}
+    if (diagFvEl) {{ diagFvEl.textContent = `${{curFrame+1}}/${{r.length}}`; }}
 
     const fd = r[curFrame];
 
     if (viewMode === 'sandbox') {{
         updateSandbox(fd);
+    }} else if (viewMode === 'diagnosis') {{
+        updateReplay(fd);
+        if (diagViewMode === 'rep') {{
+            updateDiagnosisMorph(now);
+        }}
+        hideSandboxVisuals();
     }} else {{
         updateReplay(fd);
         hideSandboxVisuals();
+        hideDiagnosisVisuals();
     }}
 
     orbitCtrl.update();
@@ -2266,6 +2916,112 @@ requestAnimationFrame(animate);
 </script>
 </body>
 </html>"""
+
+
+def _diagnosis_to_tiers(diagnosis):
+    """Convert a DiagnosisResult's causes into tier dict for the viewer."""
+    tier_labels = {1: "Cue-correctable", 2: "Session-level", 3: "Long-term", 0: "Contextual"}
+    tiers = {}
+    all_causes = (
+        diagnosis.immediate_causes
+        + diagnosis.session_causes
+        + diagnosis.longterm_causes
+        + diagnosis.contextual_notes
+    )
+    for cause in all_causes:
+        tier_key = str(cause.tier)
+        if tier_key not in tiers:
+            tiers[tier_key] = {"label": tier_labels.get(cause.tier, "Other"), "causes": []}
+        tiers[tier_key]["causes"].append({
+            "cause_id": cause.cause_id,
+            "score": cause.score,
+            "explanation": cause.explanation,
+            "implicated_by": cause.implicated_by,
+        })
+    return tiers
+
+
+def _diagnosis_to_symptoms(diagnosis):
+    """Convert DetectedSymptom list to viewer-friendly dicts."""
+    return [
+        {
+            "id": symptom.symptom_id,
+            "severity": symptom.severity,
+            "contributing_reps": symptom.contributing_reps,
+        }
+        for symptom in diagnosis.detected_symptoms
+    ]
+
+
+def run_diagnosis(replay_reps, athlete_params, baseline):
+    """Run the diagnosis pipeline on captured/loaded session data."""
+    from biomechanics.diagnosis import HypothesisEngine
+    from biomechanics.diagnosis.bridge import (
+        build_rep_kinematic_summary,
+        build_set_features,
+        find_bottom_frame,
+    )
+    from biomechanics.diagnosis.keypoint_corrector import (
+        KeypointCorrector,
+        build_morph_frames,
+    )
+
+    # Set-level diagnosis (aggregates all reps)
+    set_features = build_set_features(replay_reps, athlete_params, baseline)
+    engine = HypothesisEngine()
+    set_diagnosis = engine.diagnose(set_features)
+
+    print(f"  Confidence: {set_diagnosis.confidence:.0%}")
+    print(f"  Symptoms: {[s.symptom_id for s in set_diagnosis.detected_symptoms]}")
+    print(f"  Tier-1 causes: {[c.cause_id for c in set_diagnosis.immediate_causes]}")
+
+    corrector = KeypointCorrector()
+    per_rep_data = []
+
+    for rep_idx, rep_frames in enumerate(replay_reps):
+        bottom_frame = find_bottom_frame(rep_frames)
+        observed_kpts = bottom_frame["kpts"]
+        rep_number = rep_idx + 2
+
+        # Per-rep diagnosis (single-rep SetFeatures)
+        single_rep_features = build_set_features([rep_frames], athlete_params, baseline)
+        rep_diagnosis = engine.diagnose(single_rep_features)
+
+        # Correction uses set-level diagnosis (tier-1 causes are set-scoped)
+        corrected_kpts = corrector.correct(observed_kpts, set_diagnosis)
+        has_correction = corrected_kpts is not None
+        morph_frames = None
+        if has_correction:
+            morph_frames = build_morph_frames(observed_kpts, corrected_kpts, num_frames=60)
+
+        # Kinematic metrics for sparkline comparison
+        rep_summary = build_rep_kinematic_summary(bottom_frame, athlete_params, rep_number)
+        metrics = {
+            "trunk_lean": round(rep_summary.trunk_pitch_at_bottom, 1),
+            "knee_valgus": round(max(rep_summary.knee_valgus_l, rep_summary.knee_valgus_r), 1),
+            "depth_angle": round(bottom_frame["angles"].get("knee_flex", 0.0), 1),
+            "dorsiflexion": round(max(rep_summary.ankle_df_l_max, rep_summary.ankle_df_r_max), 1),
+        }
+
+        per_rep_data.append({
+            "rep_number": rep_number,
+            "observed_kpts": observed_kpts,
+            "corrected_kpts": corrected_kpts,
+            "morph_frames": morph_frames,
+            "has_correction": has_correction,
+            "confidence": rep_diagnosis.confidence,
+            "tiers": _diagnosis_to_tiers(rep_diagnosis),
+            "symptoms": _diagnosis_to_symptoms(rep_diagnosis),
+            "metrics": metrics,
+        })
+
+    return {
+        "set_confidence": set_diagnosis.confidence,
+        "set_tiers": _diagnosis_to_tiers(set_diagnosis),
+        "set_symptoms": _diagnosis_to_symptoms(set_diagnosis),
+        "per_rep": per_rep_data,
+        "auto_open": True,
+    }
 
 
 def main():
@@ -2288,12 +3044,69 @@ def main():
         default=46,
         help="EU shoe size for foot length in sandbox balance (default: 46 ≈ 29.3 cm)",
     )
+    parser.add_argument(
+        "--diagnose",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="SESSION",
+        help="Run diagnosis on last session (or a .session.json path); shows corrected form",
+    )
     args = parser.parse_args()
 
     recordings_dir = Path(__file__).parent.parent / "recordings"
     recordings_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if args.diagnose is not None:
+        if args.diagnose:
+            session_path = Path(args.diagnose)
+        else:
+            session_path = resolve_last_session_path(recordings_dir)
+            if session_path is None:
+                print(
+                    "ERROR: No saved session found. Run a full capture first "
+                    "(creates recordings/*.session.json)."
+                )
+                sys.exit(1)
+
+        payload = load_session(session_path)
+        replay_reps = payload["replay_reps"]
+        athlete_params = payload.get("athlete_params")
+        baseline = payload["baseline"]
+        fps = payload["fps"]
+
+        if not athlete_params:
+            print("ERROR: Session has no athlete params. Re-run a full capture first.")
+            sys.exit(1)
+
+        print("=" * 50)
+        print("  SQUAT DIAGNOSIS")
+        print("=" * 50)
+        print(f"  Session → {session_path}")
+        print(f"  Reps    → {len(replay_reps)} replay")
+
+        print("\n  Running diagnosis engine...")
+        diagnosis_data = run_diagnosis(replay_reps, athlete_params, baseline)
+
+        if args.output:
+            html_path = Path(args.output)
+            if html_path.suffix.lower() != ".html":
+                html_path = html_path.with_suffix(".html")
+        else:
+            html_path = recordings_dir / f"squat_diagnosis_{timestamp}.html"
+
+        foot_length_m = eur_size_to_foot_length_m(args.shoe_size_eur)
+        html = build_html(
+            baseline, replay_reps, fps, athlete_params,
+            foot_length_m=foot_length_m, diagnosis_data=diagnosis_data,
+        )
+        html_path.write_text(html)
+        print(f"\n  HTML saved: {html_path}")
+        if not args.no_open:
+            webbrowser.open(f"file://{html_path.resolve()}")
+        return
 
     if args.refit is not None:
         if args.refit:

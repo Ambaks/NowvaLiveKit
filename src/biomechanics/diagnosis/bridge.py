@@ -1,0 +1,147 @@
+"""Bridge between the visualizer's frame data format and the diagnosis engine.
+
+Maps frame_data dicts (from visualize_video_squats.py) + athlete_params
+into the RepKinematicSummary / SetFeatures that HypothesisEngine expects.
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+from .types import RepKinematicSummary, SetFeatures
+
+
+def find_bottom_frame(rep_frames: list[dict]) -> dict:
+    """Return the frame with maximum knee flexion (deepest squat position)."""
+    best_frame = rep_frames[0]
+    best_knee_flex = -1.0
+    for frame in rep_frames:
+        if frame is None:
+            continue
+        knee_flex = frame["angles"].get("knee_flex", 0.0)
+        if knee_flex > best_knee_flex:
+            best_knee_flex = knee_flex
+            best_frame = frame
+    return best_frame
+
+
+def compute_foot_direction_angle(kpts: list[list[float]], ankle_idx: int, foot_idx: int) -> float:
+    """Compute foot direction angle in degrees from keypoints.
+
+    Uses the ankle→foot_index vector projected onto the ground plane (XZ).
+    Forward direction is [-1, 0] in viewer coords (vis_x = mp_z, pointing
+    away from camera = backward, so forward = -x).
+    Returns degrees of external rotation from straight ahead.
+    """
+    ankle = kpts[ankle_idx]
+    foot = kpts[foot_idx]
+    vec_xz = np.array([foot[0] - ankle[0], foot[2] - ankle[2]])
+    norm = np.linalg.norm(vec_xz)
+    if norm < 1e-6:
+        return 0.0
+    forward = np.array([-1.0, 0.0])
+    cos_angle = np.clip(np.dot(vec_xz, forward) / norm, -1.0, 1.0)
+    return float(np.degrees(np.arccos(cos_angle)))
+
+
+def classify_depth(knee_flex_degrees: float) -> int:
+    """Classify squat depth from knee flexion angle.
+
+    Returns: 0=quarter (<45), 1=half (45-70), 2=above-parallel (70-90),
+             3=parallel (90-105), 4=below-parallel (>105)
+    """
+    if knee_flex_degrees < 45.0:
+        return 0
+    elif knee_flex_degrees < 70.0:
+        return 1
+    elif knee_flex_degrees < 90.0:
+        return 2
+    elif knee_flex_degrees < 105.0:
+        return 3
+    else:
+        return 4
+
+
+def build_rep_kinematic_summary(
+    frame: dict,
+    athlete_params: dict,
+    rep_number: int,
+) -> RepKinematicSummary:
+    """Map a single bottom-of-rep frame + athlete params to engine input."""
+    angles = frame["angles"]
+    kpts = frame["kpts"]
+
+    trunk_pitch = 180.0 - angles["trunk_flexion"]
+
+    foot_angle_l = compute_foot_direction_angle(kpts, ankle_idx=15, foot_idx=17)
+    foot_angle_r = compute_foot_direction_angle(kpts, ankle_idx=16, foot_idx=18)
+
+    knee_flex = angles.get("knee_flex", 0.0)
+    depth_class = classify_depth(knee_flex)
+
+    return RepKinematicSummary(
+        rep_number=rep_number,
+        trunk_pitch_at_bottom=trunk_pitch,
+        knee_valgus_l=angles.get("knee_valgus_l", 0.0),
+        knee_valgus_r=angles.get("knee_valgus_r", 0.0),
+        ankle_df_l_max=angles.get("dorsi_l", 0.0),
+        ankle_df_r_max=angles.get("dorsi_r", 0.0),
+        hip_y_l_at_bottom=kpts[11][1] * 100.0,
+        hip_y_r_at_bottom=kpts[12][1] * 100.0,
+        knee_y_l_at_bottom=kpts[13][1] * 100.0,
+        knee_y_r_at_bottom=kpts[14][1] * 100.0,
+        stance_width_ratio=athlete_params.get("stanceWidth", 1.0),
+        foot_direction_angle_l=foot_angle_l,
+        foot_direction_angle_r=foot_angle_r,
+        depth_class_int=depth_class,
+    )
+
+
+def build_anthro_dict(athlete_params: dict) -> dict[str, float]:
+    """Extract anthropometry dict expected by evidence tests."""
+    femur_avg = athlete_params.get("femur_avg_m", 0.42)
+    torso_avg = athlete_params.get("torso_avg_m", 0.45)
+    return {
+        "femur_torso_ratio": femur_avg / max(torso_avg, 0.01),
+        "hip_width": athlete_params.get("hip_width_m", 0.30),
+        "shoulder_width": athlete_params.get("shoulder_width_m", 0.40),
+        "femur_length_avg": femur_avg,
+        "tibia_length_avg": athlete_params.get("tibia_avg_m", 0.43),
+        "torso_length": torso_avg,
+    }
+
+
+def build_rom_dict(athlete_params: dict, baseline: dict) -> dict[str, float]:
+    """Build ROM dict from baseline peak values."""
+    return {
+        "dorsiflexion_drop": baseline.get("peakDorsi", 35.0),
+        "avg_depth": baseline.get("peakKneeFlex", 120.0),
+    }
+
+
+def build_set_features(
+    replay_reps: list[list[dict]],
+    athlete_params: dict,
+    baseline: dict,
+) -> SetFeatures:
+    """Build SetFeatures from session data for the diagnosis engine."""
+    anthro = build_anthro_dict(athlete_params)
+    rom = build_rom_dict(athlete_params, baseline)
+
+    per_rep_kinematics = []
+    for rep_idx, rep_frames in enumerate(replay_reps):
+        bottom_frame = find_bottom_frame(rep_frames)
+        rep_number = rep_idx + 2
+        summary = build_rep_kinematic_summary(bottom_frame, athlete_params, rep_number)
+        per_rep_kinematics.append(summary)
+
+    return SetFeatures(
+        user_id=0,
+        set_id="session",
+        rep_count=len(replay_reps),
+        per_rep_kinematics=per_rep_kinematics,
+        anthropometry=anthro,
+        rom=rom,
+    )
