@@ -911,6 +911,20 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
     display: flex; align-items: center; justify-content: center;
 }}
 .no-issues {{ color: #2ecc71; font-size: 13px; padding: 12px; text-align: center; }}
+/* ── Quality score ── */
+.quality-composite {{ display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }}
+.quality-number {{ font-size: 28px; font-weight: 700; line-height: 1; }}
+.quality-label {{ font-size: 11px; color: #888; }}
+.quality-sub-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }}
+.quality-sub-label {{ font-size: 11px; color: #888; width: 90px; flex-shrink: 0; }}
+.quality-sub-bar-bg {{ flex: 1; height: 8px; background: #1a1a35; border-radius: 4px; overflow: hidden; }}
+.quality-sub-bar {{ height: 100%; border-radius: 4px; min-width: 2px; transition: width 0.3s; }}
+.quality-sub-val {{ font-size: 10px; color: #aaa; width: 36px; text-align: right; flex-shrink: 0; }}
+.set-score-row {{ display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }}
+.set-score-mean {{ font-size: 22px; font-weight: 700; }}
+.set-score-detail {{ font-size: 11px; color: #888; }}
+.set-score-best {{ color: #2ecc71; }}
+.set-score-trend {{ font-size: 13px; }}
 /* ── Sparkline bars ── */
 .sparkline-group {{ margin-bottom: 14px; }}
 .sparkline-label {{ font-size: 11px; font-weight: 600; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }}
@@ -1057,6 +1071,10 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
                 <div class="confidence-badge" id="diag-rep-confidence">--</div>
                 <div id="diag-rep-symptoms" style="margin-top:8px; font-size:11px; color:#888;"></div>
             </div>
+            <div class="section diagnosis">
+                <div class="section-title"><span class="dot"></span> Quality Score</div>
+                <div id="diag-rep-score"></div>
+            </div>
             <div id="diag-rep-tiers"></div>
             <div class="section diagnosis" id="diag-morph-section" style="display:none">
                 <div class="section-title"><span class="dot"></span> Correction Preview</div>
@@ -1072,6 +1090,10 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
             <div class="section diagnosis">
                 <div class="confidence-badge" id="diag-set-confidence">--</div>
                 <div id="diag-set-symptoms" style="margin-top:8px; font-size:11px; color:#888;"></div>
+            </div>
+            <div class="section diagnosis">
+                <div class="section-title"><span class="dot"></span> Set Quality</div>
+                <div id="diag-set-score"></div>
             </div>
             <div class="section diagnosis">
                 <div class="section-title"><span class="dot"></span> Rep Comparison</div>
@@ -1887,10 +1909,104 @@ function renderSymptoms(element, symptoms) {{
     }}
 }}
 
+// ---- Quality score helpers ----
+function scoreColor(score) {{
+    if (score >= 0.7) return '#2ecc71';
+    if (score >= 0.4) return '#f1c40f';
+    return '#e74c3c';
+}}
+
+function renderRepScore(container, repData) {{
+    if (!repData || repData.quality_score === undefined) {{
+        container.innerHTML = '';
+        return;
+    }}
+    const score = repData.quality_score;
+    const subs = repData.sub_scores;
+    const subDefs = [
+        {{ key: 'depth', label: 'Depth', weight: '30%' }},
+        {{ key: 'trunk_control', label: 'Trunk', weight: '25%' }},
+        {{ key: 'knee_tracking', label: 'Knee Track', weight: '20%' }},
+        {{ key: 'symmetry', label: 'Symmetry', weight: '15%' }},
+        {{ key: 'ankle_utilization', label: 'Ankles', weight: '10%' }},
+    ];
+
+    let html = '<div class="quality-composite">';
+    html += '<span class="quality-number" style="color:' + scoreColor(score) + '">' + Math.round(score * 100) + '</span>';
+    html += '<span class="quality-label">/ 100</span>';
+    html += '</div>';
+
+    for (const sub of subDefs) {{
+        const val = subs[sub.key];
+        html += '<div class="quality-sub-row">';
+        html += '<span class="quality-sub-label">' + sub.label + '</span>';
+        html += '<div class="quality-sub-bar-bg"><div class="quality-sub-bar" style="width:' + (val * 100) + '%;background:' + scoreColor(val) + '"></div></div>';
+        html += '<span class="quality-sub-val">' + Math.round(val * 100) + '</span>';
+        html += '</div>';
+    }}
+    container.innerHTML = html;
+}}
+
+function renderSetScore(container) {{
+    if (!diagData || !diagData.set_score) {{
+        container.innerHTML = '';
+        return;
+    }}
+    const ss = diagData.set_score;
+    const meanPct = Math.round(ss.mean * 100);
+    const trendArrow = ss.trend_slope > 0.01 ? '↑' : ss.trend_slope < -0.01 ? '↓' : '→';
+    const trendColor = ss.trend_slope > 0.01 ? '#2ecc71' : ss.trend_slope < -0.01 ? '#e74c3c' : '#888';
+    const trendLabel = ss.trend_slope > 0.01 ? 'Improving' : ss.trend_slope < -0.01 ? 'Degrading' : 'Steady';
+
+    let html = '<div class="set-score-row">';
+    html += '<span class="set-score-mean" style="color:' + scoreColor(ss.mean) + '">' + meanPct + '</span>';
+    html += '<span class="quality-label">/ 100 avg</span>';
+    html += '</div>';
+    html += '<div class="set-score-detail set-score-best">Best rep: #' + ss.best_rep + '</div>';
+    if (diagData.per_rep.length >= 2) {{
+        html += '<div class="set-score-detail">Trend: <span class="set-score-trend" style="color:' + trendColor + '">' + trendArrow + ' ' + trendLabel + '</span></div>';
+    }}
+    container.innerHTML = html;
+}}
+
 // ---- Sparkline bars (set overview) ----
 function buildSparklines() {{
     const container = document.getElementById('diag-sparklines');
     container.innerHTML = '';
+
+    // Quality score sparkline (0–100 scale)
+    if (diagData.per_rep.length > 0 && diagData.per_rep[0].quality_score !== undefined) {{
+        const qGroup = document.createElement('div');
+        qGroup.className = 'sparkline-group';
+        const qLabel = document.createElement('div');
+        qLabel.className = 'sparkline-label';
+        qLabel.textContent = 'Quality Score';
+        qGroup.appendChild(qLabel);
+
+        for (const rep of diagData.per_rep) {{
+            const score = rep.quality_score;
+            const row = document.createElement('div');
+            row.className = 'sparkline-row';
+            const repLabel = document.createElement('span');
+            repLabel.className = 'sparkline-rep';
+            repLabel.textContent = 'R' + rep.rep_number;
+            const barBg = document.createElement('div');
+            barBg.className = 'sparkline-bar-bg';
+            const bar = document.createElement('div');
+            bar.className = 'sparkline-bar';
+            bar.style.width = (score * 100) + '%';
+            bar.style.background = scoreColor(score);
+            barBg.appendChild(bar);
+            const valLabel = document.createElement('span');
+            valLabel.className = 'sparkline-val';
+            valLabel.textContent = Math.round(score * 100);
+            row.appendChild(repLabel);
+            row.appendChild(barBg);
+            row.appendChild(valLabel);
+            qGroup.appendChild(row);
+        }}
+        container.appendChild(qGroup);
+    }}
 
     const metricDefs = [
         {{ key: 'trunk_lean', label: 'Trunk Lean', unit: '°', goodMax: 25, warnMax: 40 }},
@@ -2086,6 +2202,9 @@ function switchToDiagRepView(repIdx) {{
     // Symptoms
     renderSymptoms(document.getElementById('diag-rep-symptoms'), repData.symptoms);
 
+    // Quality score
+    renderRepScore(document.getElementById('diag-rep-score'), repData);
+
     // Tiers
     buildTierCards(document.getElementById('diag-rep-tiers'), repData.tiers, true);
 
@@ -2123,6 +2242,9 @@ function buildDiagnosisPanel() {{
         const btn = document.createElement('button');
         btn.className = 'rep-btn';
         btn.textContent = 'Rep ' + repData.rep_number;
+        if (repData.quality_score !== undefined) {{
+            btn.style.borderBottom = '3px solid ' + scoreColor(repData.quality_score);
+        }}
         btn.addEventListener('click', () => {{
             selector.querySelectorAll('.rep-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
@@ -2135,6 +2257,7 @@ function buildDiagnosisPanel() {{
     const setConfPct = Math.round(diagData.set_confidence * 100);
     document.getElementById('diag-set-confidence').textContent = 'Confidence: ' + setConfPct + '%';
     renderSymptoms(document.getElementById('diag-set-symptoms'), diagData.set_symptoms);
+    renderSetScore(document.getElementById('diag-set-score'));
     buildSparklines();
     buildFaultMap();
     buildPerformanceTrend();
@@ -2965,11 +3088,19 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
         KeypointCorrector,
         build_morph_frames,
     )
+    from biomechanics.diagnosis.rep_scoring import score_set
 
     # Set-level diagnosis (aggregates all reps)
     set_features = build_set_features(replay_reps, athlete_params, baseline)
     engine = HypothesisEngine()
     set_diagnosis = engine.diagnose(set_features)
+
+    # Per-rep quality scoring
+    set_score_summary = score_set(
+        set_features.per_rep_kinematics,
+        set_features.anthropometry,
+        set_features.rom,
+    )
 
     print(f"  Confidence: {set_diagnosis.confidence:.0%}")
     print(f"  Symptoms: {[s.symptom_id for s in set_diagnosis.detected_symptoms]}")
@@ -3003,6 +3134,7 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
             "dorsiflexion": round(max(rep_summary.ankle_df_l_max, rep_summary.ankle_df_r_max), 1),
         }
 
+        rep_score = set_score_summary.per_rep_scores[rep_idx]
         per_rep_data.append({
             "rep_number": rep_number,
             "observed_kpts": observed_kpts,
@@ -3013,12 +3145,26 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
             "tiers": _diagnosis_to_tiers(rep_diagnosis),
             "symptoms": _diagnosis_to_symptoms(rep_diagnosis),
             "metrics": metrics,
+            "quality_score": rep_score.composite_score,
+            "sub_scores": {
+                "depth": rep_score.depth_score,
+                "trunk_control": rep_score.trunk_control_score,
+                "knee_tracking": rep_score.knee_tracking_score,
+                "symmetry": rep_score.symmetry_score,
+                "ankle_utilization": rep_score.ankle_utilization_score,
+            },
         })
 
     return {
         "set_confidence": set_diagnosis.confidence,
         "set_tiers": _diagnosis_to_tiers(set_diagnosis),
         "set_symptoms": _diagnosis_to_symptoms(set_diagnosis),
+        "set_score": {
+            "mean": set_score_summary.mean_score,
+            "best_rep": set_score_summary.best_rep_number,
+            "worst_rep": set_score_summary.worst_rep_number,
+            "trend_slope": set_score_summary.trend_slope,
+        },
         "per_rep": per_rep_data,
         "auto_open": True,
     }

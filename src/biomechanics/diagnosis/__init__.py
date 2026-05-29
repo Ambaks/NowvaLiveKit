@@ -1,2 +1,9 @@
 from .engine import HypothesisEngine
-from .types import DiagnosisResult, RepKinematicSummary, SetFeatures
+from .rep_scoring import score_rep, score_set
+from .types import (
+    DiagnosisResult,
+    RepKinematicSummary,
+    RepScore,
+    SetFeatures,
+    SetScoreSummary,
+)

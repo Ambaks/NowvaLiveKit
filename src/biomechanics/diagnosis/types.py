@@ -46,6 +46,24 @@ class HypothesizedCause(BaseModel):
     explanation: str
 
 
+class RepScore(BaseModel):
+    rep_number: int
+    depth_score: float
+    trunk_control_score: float
+    knee_tracking_score: float
+    symmetry_score: float
+    ankle_utilization_score: float
+    composite_score: float
+
+
+class SetScoreSummary(BaseModel):
+    mean_score: float
+    best_rep_number: int
+    worst_rep_number: int
+    trend_slope: float
+    per_rep_scores: list[RepScore]
+
+
 class DiagnosisResult(BaseModel):
     set_id: str
     detected_symptoms: list[DetectedSymptom]
