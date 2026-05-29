@@ -201,7 +201,7 @@ class VelocityClampConfig(BaseModel):
 class BoneConstraintsConfig(BaseModel):
     """Bone length constraint configuration."""
     calibration_frames: int = 30
-    tolerance: float = 0.15
+    tolerance: float = 0.0
 
 
 class ConfidenceBlendConfig(BaseModel):

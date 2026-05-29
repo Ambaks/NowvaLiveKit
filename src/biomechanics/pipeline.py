@@ -360,6 +360,7 @@ class BiomechanicsPipeline:
             skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
             skeleton_3d = self._position_smoother.smooth(skeleton_3d)
+            skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
 
             # Apply body-proportion scaling once after bone calibration

@@ -57,7 +57,7 @@ velocity_clamp:
 
 bone_constraints:
   calibration_frames: 30
-  tolerance: 0.15
+  tolerance: 0.0
 
 standing_gate:
   min_confidence: 0.5

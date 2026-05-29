@@ -91,14 +91,14 @@ class BoneLengthConstraints:
     Args:
         calibration_frames: Number of frames to observe before locking
             bone lengths. Default 30 (~1 second at 30fps).
-        tolerance: Fractional tolerance before correction kicks in.
-            0.15 means 15% deviation is allowed. Default 0.15.
+        tolerance: Fractional tolerance before correction kicks in (pre-calibration
+            only; after calibration, lengths are always locked). Default 0.0.
     """
 
     def __init__(
         self,
         calibration_frames: int = 30,
-        tolerance: float = 0.15,
+        tolerance: float = 0.0,
         standing_gate: Optional["StandingPoseGate"] = None,
     ):
         self.calibration_frames = calibration_frames
@@ -172,10 +172,11 @@ class BoneLengthConstraints:
             if target_length is None or target_length < 1e-6:
                 continue
 
-            # Check if violation exceeds tolerance
-            deviation = abs(current_length - target_length) / target_length
+            # After calibration, bone lengths are rigid (no drift allowed).
+            length_error = abs(current_length - target_length)
+            enforce_threshold = max(self.tolerance * target_length, 1e-6)
 
-            if deviation > self.tolerance:
+            if length_error > enforce_threshold:
                 # Project distal point onto sphere of radius target_length
                 # centered at proximal point
                 if current_length < 1e-10:

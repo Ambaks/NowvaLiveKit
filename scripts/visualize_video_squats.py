@@ -12,6 +12,9 @@ Flow:
 Usage:
     python scripts/visualize_video_squats.py
     python scripts/visualize_video_squats.py --output my_session.mp4 --camera 0
+    python scripts/visualize_video_squats.py --refit
+    python scripts/visualize_video_squats.py --refit recordings/squat_20260101_120000.session.json
+    python scripts/visualize_video_squats.py --shoe-size-eur 46
 """
 
 import argparse
@@ -41,6 +44,11 @@ from biomechanics.utils.predictive_state import PredictiveStateEstimator
 from biomechanics.utils.standing_gate import StandingPoseGate
 
 
+def eur_size_to_foot_length_m(eur_size: float) -> float:
+    """ISO/TS 19407: foot length in metres from EU shoe size."""
+    return (eur_size - 2) * 0.00667
+
+
 COCO_CONNECTIONS = [
     (0, 1), (0, 2), (1, 3), (2, 4),
     (0, 5), (0, 6),
@@ -53,6 +61,8 @@ COCO_CONNECTIONS = [
 TARGET_REPS = 5
 CALIBRATION_FRAMES = 30  # frames of stable detection before ready
 JITTER_THRESHOLD = 8.0   # max pixel stddev across calibration window
+SESSION_VERSION = 1
+LAST_SESSION_POINTER = "last_session.path"
 
 
 def draw_skeleton(frame, skeleton_2d, color=(0, 255, 0)):
@@ -279,33 +289,203 @@ def compute_athlete_params(frames_data, rep_boundaries, bone_constraints):
             peak_shoulder_flex = (a["shoulder_flex_l"] + a["shoulder_flex_r"]) / 2.0
             peak_elbow_flex = (a["elbow_flex_l"] + a["elbow_flex_r"]) / 2.0
 
+    return _round_athlete_params({
+        "bodyScale": body_scale,
+        "torsoRatio": torso_ratio,
+        "thighRatio": thigh_ratio,
+        "shinRatio": shin_ratio,
+        "armRatio": arm_ratio,
+        "upperArmRatio": upper_arm_ratio,
+        "forearmRatio": forearm_ratio,
+        "shoulderWidthRatio": shoulder_width_ratio,
+        "footRatio": foot_ratio,
+        "stanceWidth": stance_width,
+        "toeOut": toe_out,
+        "dorsiRatio": peak_dorsi_ratio,
+        "maxKneeFlex": max_knee,
+        "forwardLean": peak_trunk_offset,
+        "kneeValgus": peak_valgus,
+        "shoulderFlex": peak_shoulder_flex,
+        "elbowFlex": peak_elbow_flex,
+        "hip_width_m": props.hip_width,
+        "femur_avg_m": props.femur_length_avg,
+        "tibia_avg_m": props.tibia_length_avg,
+        "torso_avg_m": props.torso_length_avg,
+        "upper_arm_avg_m": upper_arm_avg,
+        "forearm_avg_m": forearm_avg,
+        "shoulder_width_m": shoulder_width,
+        "foot_avg_m": foot_avg,
+    })
+
+
+def _round_athlete_params(params):
     return {
-        "bodyScale": round(body_scale, 3),
-        "torsoRatio": round(torso_ratio, 3),
-        "thighRatio": round(thigh_ratio, 3),
-        "shinRatio": round(shin_ratio, 3),
-        "armRatio": round(arm_ratio, 3),
-        "upperArmRatio": round(upper_arm_ratio, 3),
-        "forearmRatio": round(forearm_ratio, 3),
-        "shoulderWidthRatio": round(shoulder_width_ratio, 3),
-        "footRatio": round(foot_ratio, 3),
-        "stanceWidth": round(stance_width, 2),
-        "toeOut": round(toe_out, 1),
-        "dorsiRatio": round(peak_dorsi_ratio, 3),
-        "maxKneeFlex": round(max_knee, 1),
-        "forwardLean": round(peak_trunk_offset, 1),
-        "kneeValgus": round(peak_valgus, 1),
-        "shoulderFlex": round(peak_shoulder_flex, 1),
-        "elbowFlex": round(peak_elbow_flex, 1),
-        "hip_width_m": round(props.hip_width, 4),
-        "femur_avg_m": round(props.femur_length_avg, 4),
-        "tibia_avg_m": round(props.tibia_length_avg, 4),
-        "torso_avg_m": round(props.torso_length_avg, 4),
-        "upper_arm_avg_m": round(upper_arm_avg, 4),
-        "forearm_avg_m": round(forearm_avg, 4),
-        "shoulder_width_m": round(shoulder_width, 4),
-        "foot_avg_m": round(foot_avg, 4),
+        "bodyScale": round(params["bodyScale"], 3),
+        "torsoRatio": round(params["torsoRatio"], 3),
+        "thighRatio": round(params["thighRatio"], 3),
+        "shinRatio": round(params["shinRatio"], 3),
+        "armRatio": round(params["armRatio"], 3),
+        "upperArmRatio": round(params["upperArmRatio"], 3),
+        "forearmRatio": round(params["forearmRatio"], 3),
+        "shoulderWidthRatio": round(params["shoulderWidthRatio"], 3),
+        "footRatio": round(params["footRatio"], 3),
+        "stanceWidth": round(params["stanceWidth"], 2),
+        "toeOut": round(params["toeOut"], 1),
+        "dorsiRatio": round(params["dorsiRatio"], 3),
+        "maxKneeFlex": round(params["maxKneeFlex"], 1),
+        "forwardLean": round(params["forwardLean"], 1),
+        "kneeValgus": round(params["kneeValgus"], 1),
+        "shoulderFlex": round(params["shoulderFlex"], 1),
+        "elbowFlex": round(params["elbowFlex"], 1),
+        "hip_width_m": round(params["hip_width_m"], 4),
+        "femur_avg_m": round(params["femur_avg_m"], 4),
+        "tibia_avg_m": round(params["tibia_avg_m"], 4),
+        "torso_avg_m": round(params["torso_avg_m"], 4),
+        "upper_arm_avg_m": round(params["upper_arm_avg_m"], 4),
+        "forearm_avg_m": round(params["forearm_avg_m"], 4),
+        "shoulder_width_m": round(params["shoulder_width_m"], 4),
+        "foot_avg_m": round(params["foot_avg_m"], 4),
     }
+
+
+def process_captured_reps(frames_data, rep_boundaries, bone_constraints):
+    """Turn raw capture into baseline, replay reps, and athlete params."""
+    rep_frame_slices = []
+    for start, end in rep_boundaries:
+        rep_slice = [frame for frame in frames_data[start:end + 1] if frame is not None]
+        rep_frame_slices.append(rep_slice)
+
+    for rep_frames in rep_frame_slices:
+        ground_and_center(rep_frames)
+        add_phase_to_rep(rep_frames)
+
+    baseline = compute_baseline(rep_frame_slices[0])
+    athlete_params = compute_athlete_params(frames_data, rep_boundaries, bone_constraints)
+    replay_reps = rep_frame_slices[1:]
+    return baseline, replay_reps, athlete_params
+
+
+def save_session(
+    session_path,
+    *,
+    source_video,
+    fps,
+    baseline,
+    athlete_params,
+    replay_reps,
+    rep_count,
+):
+    """Persist processed session data for --refit."""
+    session_path = Path(session_path)
+    payload = {
+        "version": SESSION_VERSION,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "source_video": str(source_video),
+        "fps": fps,
+        "baseline": baseline,
+        "athlete_params": athlete_params,
+        "replay_reps": replay_reps,
+        "rep_count": rep_count,
+    }
+    session_path.write_text(json.dumps(payload, indent=2))
+    pointer_path = session_path.parent / LAST_SESSION_POINTER
+    pointer_path.write_text(str(session_path.resolve()) + "\n")
+    return session_path
+
+
+def resolve_last_session_path(recordings_dir):
+    """Find the most recent .session.json from pointer or directory scan."""
+    recordings_dir = Path(recordings_dir)
+    pointer_path = recordings_dir / LAST_SESSION_POINTER
+    if pointer_path.exists():
+        pointed = Path(pointer_path.read_text().strip())
+        if pointed.exists():
+            return pointed
+
+    candidates = sorted(
+        recordings_dir.glob("*.session.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    return None
+
+
+def load_session(session_path):
+    """Load a saved session; exit with a helpful message if missing/invalid."""
+    session_path = Path(session_path)
+    if not session_path.exists():
+        print(f"ERROR: Session file not found: {session_path}")
+        sys.exit(1)
+
+    try:
+        payload = json.loads(session_path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: Invalid session JSON ({session_path}): {exc}")
+        sys.exit(1)
+
+    version = payload.get("version")
+    if version != SESSION_VERSION:
+        print(
+            f"ERROR: Unsupported session version {version!r} "
+            f"(expected {SESSION_VERSION}). Re-run a full capture first."
+        )
+        sys.exit(1)
+
+    required = ("baseline", "replay_reps", "fps")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        print(f"ERROR: Session file missing fields: {', '.join(missing)}")
+        sys.exit(1)
+
+    replay_reps = payload["replay_reps"]
+    if not replay_reps:
+        print("ERROR: Session has no replay reps. Re-run a full capture first.")
+        sys.exit(1)
+
+    return payload
+
+
+def run_refit(session_path, html_path, open_browser, shoe_size_eur=46):
+    """Regenerate HTML from a prior session without webcam capture."""
+    payload = load_session(session_path)
+    baseline = payload["baseline"]
+    replay_reps = payload["replay_reps"]
+    fps = payload["fps"]
+    athlete_params = payload.get("athlete_params")
+
+    print("=" * 50)
+    print("  SQUAT REFIT (from saved session)")
+    print("=" * 50)
+    print(f"  Session → {session_path}")
+    if payload.get("source_video"):
+        print(f"  Source  → {payload['source_video']}")
+    print(f"  Reps    → {payload.get('rep_count', len(replay_reps) + 1)} total "
+          f"({len(replay_reps)} replay)")
+    print(f"  HTML    → {html_path}")
+    print("=" * 50)
+
+    if athlete_params:
+        print("  Athlete params (from session):")
+        print(f"    Stance width: {athlete_params['stanceWidth']}x  "
+              f"Toe-out: {athlete_params['toeOut']}°")
+        print(f"    Dorsi ratio: {athlete_params['dorsiRatio']}  "
+              f"Body scale: {athlete_params['bodyScale']}")
+    else:
+        print("  WARNING: No athlete params in session; sandbox sliders won't pre-fill.")
+
+    foot_length_m = eur_size_to_foot_length_m(shoe_size_eur)
+    print(f"  Shoe size: EU {shoe_size_eur} → foot length {foot_length_m * 100:.1f} cm")
+
+    html = build_html(
+        baseline, replay_reps, fps, athlete_params, foot_length_m=foot_length_m,
+    )
+    html_path.write_text(html)
+    print(f"\nHTML saved: {html_path}")
+
+    if open_browser:
+        webbrowser.open(f"file://{html_path.resolve()}")
 
 
 def run_capture(camera_id, video_output_path):
@@ -348,7 +528,7 @@ def run_capture(camera_id, video_output_path):
     confidence_blender = ConfidenceBlender(min_confidence=0.1, max_confidence=0.9)
     velocity_clamp = VelocityClamp(max_velocity_m_per_s=2.5, target_fps=int(fps))
     bone_constraints = BoneLengthConstraints(
-        calibration_frames=30, tolerance=0.15, standing_gate=standing_gate,
+        calibration_frames=30, tolerance=0.0, standing_gate=standing_gate,
     )
     position_smoother = KeypointPositionSmoother(min_cutoff=0.8, beta=4.0, d_cutoff=1.0)
     predictive_estimator = PredictiveStateEstimator(
@@ -389,6 +569,7 @@ def run_capture(camera_id, video_output_path):
             skeleton_3d = velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = bone_constraints.enforce(skeleton_3d)
             skeleton_3d = position_smoother.smooth(skeleton_3d)
+            skeleton_3d = bone_constraints.enforce(skeleton_3d)
 
             # Apply body proportions once after bone calibration
             if (
@@ -532,12 +713,25 @@ def run_capture(camera_id, video_output_path):
     return frames_data, reps, rep_boundaries, fps, bone_constraints
 
 
-def build_html(baseline, replay_reps_data, fps, athlete_params=None):
+def build_html(
+    baseline,
+    replay_reps_data,
+    fps,
+    athlete_params=None,
+    foot_length_m=None,
+):
+    if foot_length_m is None:
+        foot_length_m = eur_size_to_foot_length_m(46)
     data_json = json.dumps({
         "baseline": baseline,
         "reps": replay_reps_data,
         "fps": fps,
         "athleteParams": athlete_params,
+        "footLengthM": foot_length_m,
+        "shoeSizeEur": round(
+            foot_length_m / 0.00667 + 2,
+            1,
+        ),
     })
 
     return f"""<!DOCTYPE html>
@@ -561,10 +755,13 @@ body {{
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     overflow: hidden; height: 100vh; display: flex;
 }}
-#scene-container {{ flex: 1; position: relative; }}
+#scene-container {{ flex: 1; position: relative; z-index: 1; min-width: 0; }}
+#three-canvas {{ display: block; width: 100%; height: 100%; }}
 #controls {{
-    width: 380px; background: #12122a; border-left: 1px solid #2a2a4a;
+    width: 380px; flex-shrink: 0; position: relative; z-index: 20;
+    background: #12122a; border-left: 1px solid #2a2a4a;
     overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px;
+    pointer-events: auto;
 }}
 h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
 .section {{
@@ -650,6 +847,18 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
 .legend-severe {{ background: #3a1a1a; color: #e74c3c; }}
 .balance-ok {{ color: #2ecc71; font-weight: 600; }}
 .balance-bad {{ color: #ff4444; font-weight: 600; }}
+.btn-primary {{
+    padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer;
+    background: linear-gradient(135deg, #5050cc, #4040aa); color: white;
+    font-size: 14px; font-weight: 600; transition: background 0.2s;
+    pointer-events: auto; position: relative; z-index: 1;
+}}
+.btn-primary:hover {{ background: linear-gradient(135deg, #6060dd, #5050bb); }}
+.btn-primary:disabled {{ opacity: 0.45; cursor: not-allowed; }}
+.balance-section .section-title {{ color: #f0a040; }}
+.balance-section .dot {{ background: #f0a040; }}
+#sb-balance-header {{ display: none; }}
+#sb-balance-header.visible {{ display: block; }}
 </style>
 </head>
 <body>
@@ -661,9 +870,15 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
 <div id="controls">
     <div>
         <h1>Squat Replay</h1>
-        <div style="display:flex; gap:8px; margin-top:8px;">
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
             <button class="mode-tab active" id="tab-replay">Replay</button>
             <button class="mode-tab" id="tab-sandbox">Sandbox</button>
+            <button type="button" id="sb-balance-btn" class="btn-primary" style="display:none; min-width:100px;">Balance</button>
+        </div>
+        <div id="sb-balance-header">
+            <p class="mono" id="sb-balance-status" style="margin-top:6px; font-size:11px; color:#888">
+                Click Balance to enable parameter controls
+            </p>
         </div>
     </div>
 
@@ -703,70 +918,31 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
 
     <!-- ======== SANDBOX PANEL ======== -->
     <div id="sandbox-panel" style="display:none">
-        <div class="section sandbox">
-            <div class="section-title"><span class="dot"></span> Body Proportions</div>
-            <div class="slider-row"><label>Body scale</label><input type="range" id="sb-body-scale" min="0.7" max="1.3" value="1.0" step="0.01"><span class="value" id="sb-body-scale-val">1.00</span></div>
-            <div class="slider-row"><label>Torso ratio</label><input type="range" id="sb-torso-ratio" min="0.8" max="1.2" value="1.0" step="0.01"><span class="value" id="sb-torso-ratio-val">1.00</span></div>
-            <div class="slider-row"><label>Thigh ratio</label><input type="range" id="sb-thigh-ratio" min="0.8" max="1.2" value="1.0" step="0.01"><span class="value" id="sb-thigh-ratio-val">1.00</span></div>
-            <div class="slider-row"><label>Shin ratio</label><input type="range" id="sb-shin-ratio" min="0.8" max="1.2" value="1.0" step="0.01"><span class="value" id="sb-shin-ratio-val">1.00</span></div>
-            <div class="slider-row"><label>Shoulder width</label><input type="range" id="sb-shoulder-width-ratio" min="0.8" max="1.2" value="1.0" step="0.01"><span class="value" id="sb-shoulder-width-ratio-val">1.00</span></div>
-            <div class="slider-row"><label>Foot ratio</label><input type="range" id="sb-foot-ratio" min="0.5" max="1.5" value="1.0" step="0.01"><span class="value" id="sb-foot-ratio-val">1.00</span></div>
+        <div class="section">
+            <div class="section-title"><span class="dot"></span> Depth Check</div>
+            <div class="mono" id="sb-depth-check"></div>
+        </div>
+        <div class="section balance-section">
+            <div class="section-title"><span class="dot"></span> Balance</div>
+            <p class="mono" style="font-size:11px; color:#888">Click Balance to lock COM over mid-foot and enable correction sliders.</p>
         </div>
         <div class="section sandbox">
             <div class="section-title"><span class="dot"></span> Stance</div>
-            <div class="slider-row"><label>Stance width</label><input type="range" id="sb-stance-width" min="0.8" max="2.5" value="1.2" step="0.05"><span class="value" id="sb-stance-width-val">1.20x</span></div>
-            <div class="slider-row"><label>Toe-out angle</label><input type="range" id="sb-toe-out" min="0" max="45" value="15" step="1"><span class="value" id="sb-toe-out-val">15°</span></div>
-        </div>
-        <div class="section barbell-s">
-            <div class="section-title"><span class="dot"></span> Barbell</div>
-            <div class="slider-row"><label>Weight</label><input type="range" id="sb-barbell-weight" min="0" max="200" value="0" step="5"><span class="value" id="sb-barbell-weight-val">0 kg</span></div>
-            <div class="slider-row"><label>Body mass</label><input type="range" id="sb-body-mass" min="40" max="150" value="75" step="1"><span class="value" id="sb-body-mass-val">75 kg</span></div>
-        </div>
-        <div class="section sandbox">
-            <div class="section-title"><span class="dot"></span> Knee Flexion (delta)</div>
-            <div class="slider-row"><label>Knee flex &Delta;</label><input type="range" id="sb-d-knee-flex" min="-30" max="30" value="0" step="1"><span class="value" id="sb-d-knee-flex-val">0°</span></div>
+            <div class="slider-row"><label>Stance width</label><input type="range" id="sb-stance-width" min="0.8" max="2.5" value="1.2" step="0.05" disabled><span class="value" id="sb-stance-width-val">1.20x</span></div>
+            <div class="slider-row"><label>Toe-out angle</label><input type="range" id="sb-toe-out" min="0" max="45" value="15" step="1" disabled><span class="value" id="sb-toe-out-val">15°</span></div>
         </div>
         <div class="section sandbox">
             <div class="section-title"><span class="dot"></span> Dorsiflexion (delta)</div>
-            <div class="slider-row"><label>Both ankles &Delta;</label><input type="range" id="sb-d-dorsi" min="-20" max="20" value="0" step="0.5"><span class="value" id="sb-d-dorsi-val">0°</span></div>
-            <div class="slider-row"><label>Left ankle &Delta;</label><input type="range" id="sb-d-dorsi-l" min="-20" max="20" value="0" step="0.5"><span class="value" id="sb-d-dorsi-l-val">0°</span></div>
-            <div class="slider-row"><label>Right ankle &Delta;</label><input type="range" id="sb-d-dorsi-r" min="-20" max="20" value="0" step="0.5"><span class="value" id="sb-d-dorsi-r-val">0°</span></div>
+            <div class="slider-row"><label>Both ankles &Delta;</label><input type="range" id="sb-d-dorsi" min="-20" max="20" value="0" step="0.5" disabled><span class="value" id="sb-d-dorsi-val">0°</span></div>
         </div>
-        <div class="section sandbox">
-            <div class="section-title"><span class="dot"></span> Trunk Lean (delta)</div>
-            <div class="slider-row"><label>Forward lean &Delta;</label><input type="range" id="sb-d-forward-lean" min="-30" max="30" value="0" step="1"><span class="value" id="sb-d-forward-lean-val">0°</span></div>
+        <div class="section barbell-s">
+            <div class="section-title"><span class="dot"></span> Barbell</div>
+            <div class="slider-row"><label>Weight</label><input type="range" id="sb-barbell-weight" min="0" max="200" value="0" step="5" disabled><span class="value" id="sb-barbell-weight-val">0 kg</span></div>
+            <div class="slider-row"><label>Body mass</label><input type="range" id="sb-body-mass" min="40" max="150" value="75" step="1" disabled><span class="value" id="sb-body-mass-val">75 kg</span></div>
         </div>
-        <div class="section faults">
-            <div class="section-title"><span class="dot"></span> Forward Lean (thresholds)</div>
-            <div class="threshold-legend"><span class="legend-ok">OK</span><span class="legend-mild">Mild</span><span class="legend-moderate">Moderate</span><span class="legend-severe">Severe</span></div>
-            <div class="threshold-bar" id="sb-lean-threshold-bar"></div>
-        </div>
-        <div class="section faults">
-            <div class="section-title"><span class="dot"></span> Knee Valgus (delta)</div>
-            <div class="slider-row"><label>Both knees &Delta;</label><input type="range" id="sb-d-valgus" min="-15" max="15" value="0" step="0.5"><span class="value" id="sb-d-valgus-val">0°</span></div>
-            <div class="slider-row"><label>Left knee &Delta;</label><input type="range" id="sb-d-valgus-l" min="-15" max="15" value="0" step="0.5"><span class="value" id="sb-d-valgus-l-val">0°</span></div>
-            <div class="slider-row"><label>Right knee &Delta;</label><input type="range" id="sb-d-valgus-r" min="-15" max="15" value="0" step="0.5"><span class="value" id="sb-d-valgus-r-val">0°</span></div>
-            <div class="threshold-legend"><span class="legend-ok">OK</span><span class="legend-mild">Mild</span><span class="legend-moderate">Moderate</span><span class="legend-severe">Severe</span></div>
-            <div class="threshold-bar" id="sb-valgus-threshold-bar"></div>
-        </div>
-        <div class="section sandbox">
-            <div class="section-title"><span class="dot"></span> Chain Solver</div>
-            <div class="slider-row" style="gap:12px">
-                <label style="display:flex; align-items:center; gap:4px; cursor:pointer">
-                    <input type="radio" name="sb-solver-mode" value="independent" checked> Independent
-                </label>
-                <label style="display:flex; align-items:center; gap:4px; cursor:pointer">
-                    <input type="radio" name="sb-solver-mode" value="compensated"> Compensated
-                </label>
-            </div>
-            <div id="sb-compensated-controls" style="display:none">
-                <div class="slider-row"><label>Ankle dorsi override</label><input type="range" id="sb-ankle-override" min="0" max="45" value="15" step="0.5"><span class="value" id="sb-ankle-override-val">15°</span></div>
-                <div class="mono" id="sb-solved-angles" style="margin-top:6px; font-size:11px"></div>
-            </div>
-        </div>
-        <div class="section baseline">
-            <div class="section-title"><span class="dot"></span> Baseline</div>
-            <div class="mono" id="sb-baseline-results"></div>
+        <div class="section">
+            <div class="section-title"><span class="dot"></span> Trunk Lean</div>
+            <div class="mono" id="sb-trunk-lean-status"></div>
         </div>
         <div class="section playback">
             <div class="section-title"><span class="dot"></span> Playback</div>
@@ -831,6 +1007,13 @@ document.getElementById('baseline-info').innerHTML = `
     <span class="lbl">Valgus thresholds:</span> <span class="val">${{VALG_T.mild}}° / ${{VALG_T.moderate}}° / ${{VALG_T.severe}}°</span>
 `;
 
+const FOOT_LEN_M = DATA.footLengthM || 0.2937;
+const SHOE_SIZE_EUR = DATA.shoeSizeEur || 46;
+const HEEL_OFFSET = 0.06;
+const BALANCE_FRAC = 0.35;
+const BALANCE_MARGIN_MIN = 0.10;
+const HIP_IR_COUPLING = 0.75;
+
 const AP = DATA.athleteParams;
 if (AP) {{
     document.getElementById('athlete-info').innerHTML = `
@@ -842,26 +1025,15 @@ if (AP) {{
         <span class="lbl" style="margin-left:8px">Toe-out:</span> <span class="val">${{AP.toeOut.toFixed(1)}}°</span>
         <span class="lbl" style="margin-left:8px">Dorsi:</span> <span class="val">${{AP.dorsiRatio.toFixed(3)}}</span><br>
         <span class="lbl">Lean:</span> <span class="val">${{AP.forwardLean.toFixed(1)}}°</span>
-        <span class="lbl" style="margin-left:8px">Max knee:</span> <span class="val">${{AP.maxKneeFlex.toFixed(1)}}°</span>
+        <span class="lbl" style="margin-left:8px">Max knee:</span> <span class="val">${{AP.maxKneeFlex.toFixed(1)}}°</span><br>
+        <span class="lbl">Shoe (EU):</span> <span class="val">${{SHOE_SIZE_EUR}}</span>
+        <span class="lbl" style="margin-left:8px">Foot len:</span> <span class="val">${{(FOOT_LEN_M * 100).toFixed(1)}} cm</span>
     `;
     // Pre-populate sandbox sliders
     const sliderInit = {{
-        'sb-body-scale': [AP.bodyScale, 'sb-body-scale-val', '', 2],
-        'sb-torso-ratio': [AP.torsoRatio, 'sb-torso-ratio-val', '', 2],
-        'sb-thigh-ratio': [AP.thighRatio, 'sb-thigh-ratio-val', '', 2],
-        'sb-shin-ratio': [AP.shinRatio, 'sb-shin-ratio-val', '', 2],
-        'sb-shoulder-width-ratio': [AP.shoulderWidthRatio || 1.0, 'sb-shoulder-width-ratio-val', '', 2],
-        'sb-foot-ratio': [AP.footRatio || 1.0, 'sb-foot-ratio-val', '', 2],
         'sb-stance-width': [AP.stanceWidth, 'sb-stance-width-val', 'x', 2],
         'sb-toe-out': [AP.toeOut, 'sb-toe-out-val', '°', 0],
-        'sb-d-knee-flex': [0, 'sb-d-knee-flex-val', '°', 0],
         'sb-d-dorsi': [0, 'sb-d-dorsi-val', '°', 1],
-        'sb-d-dorsi-l': [0, 'sb-d-dorsi-l-val', '°', 1],
-        'sb-d-dorsi-r': [0, 'sb-d-dorsi-r-val', '°', 1],
-        'sb-d-forward-lean': [0, 'sb-d-forward-lean-val', '°', 0],
-        'sb-d-valgus': [0, 'sb-d-valgus-val', '°', 1],
-        'sb-d-valgus-l': [0, 'sb-d-valgus-l-val', '°', 1],
-        'sb-d-valgus-r': [0, 'sb-d-valgus-r-val', '°', 1],
     }};
     for (const [id, [val, valId, suf, dec]] of Object.entries(sliderInit)) {{
         const el = document.getElementById(id);
@@ -875,14 +1047,6 @@ if (AP) {{
     document.getElementById('athlete-info').innerHTML = '<span class="lbl">Not available</span>';
 }}
 
-// Populate sandbox baseline
-document.getElementById('sb-baseline-results').innerHTML = `
-    <span class="lbl">Peak trunk offset:</span> <span class="val">${{baselineData.peakTrunkOffset.toFixed(1)}}°</span><br>
-    <span class="lbl">Peak knee flex:</span> <span class="val">${{baselineData.peakKneeFlex.toFixed(1)}}°</span><br>
-    <span class="lbl">Peak dorsiflexion:</span> <span class="val">${{baselineData.peakDorsi.toFixed(1)}}°</span><br>
-    <span class="lbl">Lean thresholds:</span> <span class="val">${{LEAN_T.mild.toFixed(0)}}° / ${{LEAN_T.moderate.toFixed(0)}}° / ${{LEAN_T.severe.toFixed(0)}}°</span><br>
-    <span class="lbl">Valgus thresholds:</span> <span class="val">${{VALG_T.mild.toFixed(0)}}° / ${{VALG_T.moderate.toFixed(0)}}° / ${{VALG_T.severe.toFixed(0)}}°</span>
-`;
 
 // ======== THREE.JS SETUP ========
 const canvas = document.getElementById('three-canvas');
@@ -1000,13 +1164,35 @@ const sbSs = document.getElementById('sb-speed-slider'), sbSv = document.getElem
 sbSs.addEventListener('input', () => {{ speed = parseFloat(sbSs.value); sbSv.textContent = speed.toFixed(1) + 'x'; }});
 
 // ======== SANDBOX SLIDER BINDINGS ========
-let _slidersModified = false;
-function bindSlider(id, valId, suffix, decimals) {{
+let _balanceLocked = false;
+let _balanceLeanOffsetDeg = 0;
+let _balanceHipShiftX = 0;
+let _balanceHipShiftZ = 0;
+const BALANCE_TARGET_EPS = 0.002;
+const BALANCE_LEAN_OFFSET_MAX_DEG = 50;
+const LOWER_BODY_SEG_KEYS = ['foot_l', 'foot_r', 'shank_l', 'shank_r', 'thigh_l', 'thigh_r'];
+const baselineStanceWidth = AP ? AP.stanceWidth : 1.2;
+const baselineToeOut = AP ? AP.toeOut : 15;
+
+const SB_PARAM_IDS = [
+    'sb-stance-width', 'sb-toe-out',
+    'sb-barbell-weight', 'sb-body-mass',
+    'sb-d-dorsi',
+];
+
+function setSandboxParamsEnabled(enabled) {{
+    for (const id of SB_PARAM_IDS) {{
+        const el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+    }}
+}}
+setSandboxParamsEnabled(false);
+
+function bindStanceSlider(id, valId, suffix, decimals) {{
     const slider = document.getElementById(id);
     const valSpan = document.getElementById(valId);
     if (!slider || !valSpan) return;
     slider.addEventListener('input', () => {{
-        _slidersModified = true;
         const v = parseFloat(slider.value);
         valSpan.textContent = decimals > 0 ? v.toFixed(decimals) + suffix : Math.round(v) + suffix;
     }});
@@ -1016,31 +1202,308 @@ function bindSliderDelta(id, valId, suffix, decimals) {{
     const valSpan = document.getElementById(valId);
     if (!slider || !valSpan) return;
     slider.addEventListener('input', () => {{
-        _slidersModified = true;
         const v = parseFloat(slider.value);
         const sign = v > 0 ? '+' : '';
         valSpan.textContent = sign + (decimals > 0 ? v.toFixed(decimals) : Math.round(v)) + suffix;
     }});
 }}
-bindSlider('sb-body-scale', 'sb-body-scale-val', '', 2);
-bindSlider('sb-torso-ratio', 'sb-torso-ratio-val', '', 2);
-bindSlider('sb-thigh-ratio', 'sb-thigh-ratio-val', '', 2);
-bindSlider('sb-shin-ratio', 'sb-shin-ratio-val', '', 2);
-bindSlider('sb-shoulder-width-ratio', 'sb-shoulder-width-ratio-val', '', 2);
-bindSlider('sb-foot-ratio', 'sb-foot-ratio-val', '', 2);
-bindSlider('sb-stance-width', 'sb-stance-width-val', 'x', 2);
-bindSlider('sb-toe-out', 'sb-toe-out-val', '°', 0);
-bindSliderDelta('sb-d-knee-flex', 'sb-d-knee-flex-val', '°', 0);
+function bindDisplaySlider(id, valId, suffix, decimals) {{
+    const slider = document.getElementById(id);
+    const valSpan = document.getElementById(valId);
+    if (!slider || !valSpan) return;
+    slider.addEventListener('input', () => {{
+        const v = parseFloat(slider.value);
+        valSpan.textContent = decimals > 0 ? v.toFixed(decimals) + suffix : Math.round(v) + suffix;
+    }});
+}}
+bindStanceSlider('sb-stance-width', 'sb-stance-width-val', 'x', 2);
+bindStanceSlider('sb-toe-out', 'sb-toe-out-val', '°', 0);
 bindSliderDelta('sb-d-dorsi', 'sb-d-dorsi-val', '°', 1);
-bindSliderDelta('sb-d-dorsi-l', 'sb-d-dorsi-l-val', '°', 1);
-bindSliderDelta('sb-d-dorsi-r', 'sb-d-dorsi-r-val', '°', 1);
-bindSliderDelta('sb-d-forward-lean', 'sb-d-forward-lean-val', '°', 0);
-bindSliderDelta('sb-d-valgus', 'sb-d-valgus-val', '°', 1);
-bindSliderDelta('sb-d-valgus-l', 'sb-d-valgus-l-val', '°', 1);
-bindSliderDelta('sb-d-valgus-r', 'sb-d-valgus-r-val', '°', 1);
-bindSlider('sb-barbell-weight', 'sb-barbell-weight-val', ' kg', 0);
-bindSlider('sb-body-mass', 'sb-body-mass-val', ' kg', 0);
-bindSlider('sb-speed-slider', 'sb-speed-val', 'x', 1);
+bindDisplaySlider('sb-barbell-weight', 'sb-barbell-weight-val', ' kg', 0);
+bindDisplaySlider('sb-body-mass', 'sb-body-mass-val', ' kg', 0);
+bindDisplaySlider('sb-speed-slider', 'sb-speed-val', 'x', 1);
+
+// When balance is locked, re-solve the (hip-shift, lean) counterbalance whenever a
+// parameter changes so the COM stays over mid-foot. Holds the last balance on failure.
+function attachRebalanceHook(id) {{
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => {{
+        if (!_balanceLocked) return;
+        const rep = reps[curRep];
+        if (!rep || !rep.length) return;
+        const fd = rep[curFrame] || rep[0];
+        if (!fd) return;
+        const solved = solveBalanceLeanOffsetDeg(fd);
+        const statusEl = document.getElementById('sb-balance-status');
+        if (solved.success) {{
+            _balanceLeanOffsetDeg = solved.leanDeg;
+            _balanceHipShiftX = solved.hipShiftX || 0;
+            _balanceHipShiftZ = solved.hipShiftZ || 0;
+            if (statusEl) statusEl.style.color = '';
+        }} else if (statusEl) {{
+            statusEl.textContent = 'Holding last balance (re-balance unavailable at this setting).';
+            statusEl.style.color = '#f0a040';
+        }}
+        updateSandbox(fd);
+    }});
+}}
+['sb-stance-width', 'sb-toe-out', 'sb-d-dorsi', 'sb-barbell-weight', 'sb-body-mass']
+    .forEach(attachRebalanceHook);
+
+function showSandboxBalanceUI(visible) {{
+    const balanceBtn = document.getElementById('sb-balance-btn');
+    const balanceHeader = document.getElementById('sb-balance-header');
+    if (balanceBtn) balanceBtn.style.display = visible ? '' : 'none';
+    if (balanceHeader) balanceHeader.classList.toggle('visible', visible);
+}}
+
+function getNormalizedBodyFracs() {{
+    let totalFrac = 0;
+    const bodyFracs = {{}};
+    for (const [key, seg] of Object.entries(SEGMENT_MASS)) {{
+        bodyFracs[key] = seg.frac;
+        totalFrac += seg.frac;
+    }}
+    for (const key of Object.keys(bodyFracs)) bodyFracs[key] /= totalFrac;
+    return bodyFracs;
+}}
+
+function buildSegmentCOMs(kpts, footLen) {{
+    function g(i) {{ return {{ x: kpts[i*3], y: kpts[i*3+1], z: kpts[i*3+2] }}; }}
+    const lS = g(5), rS = g(6), lH = g(11), rH = g(12);
+    const sMid = {{ x:(lS.x+rS.x)/2, y:(lS.y+rS.y)/2, z:(lS.z+rS.z)/2 }};
+    const hMid = {{ x:(lH.x+rH.x)/2, y:(lH.y+rH.y)/2, z:(lH.z+rH.z)/2 }};
+    const segCOMs = {{ head: g(0), trunk: {{ x:(sMid.x+hMid.x)/2, y:(sMid.y+hMid.y)/2, z:(sMid.z+hMid.z)/2 }} }};
+    for (const [key, seg] of Object.entries(SEGMENT_MASS)) {{
+        if (!seg.joints || seg.joints[0] === null || seg.joints[1] === null) continue;
+        if (key === 'head' || key === 'trunk' || key.startsWith('foot')) continue;
+        const a = g(seg.joints[0]), b = g(seg.joints[1]);
+        segCOMs[key] = {{ x:(a.x+b.x)/2, y:(a.y+b.y)/2, z:(a.z+b.z)/2 }};
+    }}
+    const aL = g(15), aR = g(16), kL = g(13), kR = g(14);
+    function footFwd(ankle, knee) {{
+        const dx = knee.x - ankle.x, dz = knee.z - ankle.z;
+        const legLen = Math.sqrt(dx * dx + dz * dz) || 1;
+        return {{ x: dx / legLen, z: dz / legLen }};
+    }}
+    const fL = footFwd(aL, kL), fR = footFwd(aR, kR);
+    const footAlong = balancePointAlongFoot(footLen || FOOT_LEN_M);
+    segCOMs.foot_l = {{ x: aL.x + fL.x * footAlong, y: aL.y, z: aL.z + fL.z * footAlong }};
+    segCOMs.foot_r = {{ x: aR.x + fR.x * footAlong, y: aR.y, z: aR.z + fR.z * footAlong }};
+    return segCOMs;
+}}
+
+function blendSegmentCOMGround(segCOMs, bodyFracs, segmentKeys, bodyMass, barWeight, barPos) {{
+    const barFrac = barWeight > 0 ? barWeight / (bodyMass + barWeight) : 0;
+    const bodyF = 1 - barFrac;
+    let selectedFrac = 0;
+    for (const key of segmentKeys) selectedFrac += bodyFracs[key] || 0;
+    let cx = 0, cz = 0;
+    for (const key of segmentKeys) {{
+        const segmentCom = segCOMs[key];
+        const frac = bodyFracs[key];
+        if (!segmentCom || !frac) continue;
+        cx += segmentCom.x * frac * bodyF;
+        cz += segmentCom.z * frac * bodyF;
+    }}
+    if (selectedFrac > 1e-9) {{
+        cx /= selectedFrac;
+        cz /= selectedFrac;
+    }}
+    if (barWeight > 0 && barPos) {{
+        cx = cx * bodyF + barPos.x * barFrac;
+        cz = cz * bodyF + barPos.z * barFrac;
+    }}
+    return {{ x: cx, z: cz }};
+}}
+
+function computeLowerBodyCOMGround(kpts, footLen) {{
+    const segCOMs = buildSegmentCOMs(kpts, footLen);
+    const bodyFracs = getNormalizedBodyFracs();
+    return blendSegmentCOMGround(segCOMs, bodyFracs, LOWER_BODY_SEG_KEYS, 1, 0, null);
+}}
+
+function solveBalanceLeanOffsetDeg(frameData) {{
+    if (!frameData || !frameData.kpts) {{
+        return {{ success: false, reason: 'no_frame' }};
+    }}
+    const capturedKpts = frameData.kpts;
+    if (!capturedKpts[5] || !capturedKpts[6] || !capturedKpts[11] || !capturedKpts[12]) {{
+        return {{ success: false, reason: 'missing_keypoints' }};
+    }}
+
+    const barWeight = _sv('sb-barbell-weight') || 0;
+    const bodyMass = _sv('sb-body-mass') || 75;
+    const deformed = deformLowerBody(capturedKpts);
+
+    // Sagittal axis from the (deformed) hip lateral axis
+    const hipLeftX = deformed[11 * 3], hipLeftZ = deformed[11 * 3 + 2];
+    const hipRightX = deformed[12 * 3], hipRightZ = deformed[12 * 3 + 2];
+    const hipLateralX = hipRightX - hipLeftX, hipLateralZ = hipRightZ - hipLeftZ;
+    const hipLateralLen = Math.sqrt(hipLateralX * hipLateralX + hipLateralZ * hipLateralZ) || 1e-9;
+    const sagittalDirX = -hipLateralZ / hipLateralLen;
+    const sagittalDirZ = hipLateralX / hipLateralLen;
+
+    // Mass fractions + head height (normalized to match computeCOM)
+    const fr = getNormalizedBodyFracs();
+    const armFrac = (fr.upper_arm_l || 0) + (fr.upper_arm_r || 0) +
+                    (fr.forearm_l || 0) + (fr.forearm_r || 0);
+    const barFrac = barWeight > 0 ? barWeight / (bodyMass + barWeight) : 0;
+    const bodyF = 1 - barFrac;
+    const bodyScale = AP ? AP.bodyScale : 1.0;
+    const headHeight = REF.head_offset * bodyScale;
+
+    // Balance by rotating ONLY the upper body about the fixed hip — the lower body
+    // (hips included) never moves. Newton-refined against the real computeCOM.
+    let lean = 0;
+    let lastCom = null, lastTarget = null, lastGapPerp = 0, lastGapSagittal = 0;
+    for (let iteration = 0; iteration < 16; iteration++) {{
+        const posed = applyCounterbalance(deformed, 0, 0, lean);
+        if (barWeight > 0) {{
+            const sinL = Math.sin(posed.newLean), cosL = Math.cos(posed.newLean);
+            _barbellPos = {{
+                x: posed.shoulderMidX + 0.04 * sinL - 0.05 * cosL,
+                y: posed.shoulderMidY + 0.04 * cosL + 0.05 * sinL,
+                z: 0,
+            }};
+        }}
+        const com = computeCOM(posed.kpts, barWeight, bodyMass, FOOT_LEN_M);
+        const target = computeBalanceTargetGround(posed.kpts, FOOT_LEN_M);
+        const gapX = target.x - com.groundX, gapZ = target.z - com.groundZ;
+        const gapSagittal = gapX * sagittalDirX + gapZ * sagittalDirZ;
+        lastCom = com; lastTarget = target;
+        lastGapPerp = gapX * (-sagittalDirZ) + gapZ * sagittalDirX;
+        lastGapSagittal = gapSagittal;
+        if (Math.abs(gapSagittal) <= BALANCE_TARGET_EPS) break;
+        const cosL = Math.cos(posed.newLean), sinL = Math.sin(posed.newLean);
+        const upperMoment = (fr.trunk || 0) * 0.5 * posed.torsoLen +
+                            (fr.head || 0) * (posed.torsoLen + 0.5 * headHeight) +
+                            armFrac * posed.torsoLen;
+        let sensLean = bodyF * upperMoment * cosL;
+        if (barWeight > 0) sensLean += barFrac * (posed.torsoLen * cosL + 0.04 * cosL + 0.05 * sinL);
+        // The upper body translates only in +X with lean, but the gap is measured along
+        // the sagittal axis. Project the COM sensitivity onto that axis so the Newton step
+        // has the correct sign for either hip orientation (otherwise lean runs to the clamp).
+        sensLean *= sagittalDirX;
+        if (!isFinite(sensLean) || Math.abs(sensLean) < 1e-9) break;
+        // Damped, step-limited Newton (the barbell term is nonlinear in lean and can
+        // overshoot); a hard bound keeps a divergent solve from running away.
+        let step = gapSagittal / sensLean;
+        step = Math.max(-0.3, Math.min(0.3, step));
+        lean += 0.8 * step;
+        const hardMax = (BALANCE_LEAN_OFFSET_MAX_DEG + 10) * Math.PI / 180;
+        lean = Math.max(-hardMax, Math.min(hardMax, lean));
+    }}
+
+    if (!isFinite(lean)) {{
+        return {{ success: false, reason: 'error', message: 'nonfinite_solve' }};
+    }}
+    const leanDeg = lean * (180 / Math.PI);
+    if (Math.abs(leanDeg) > BALANCE_LEAN_OFFSET_MAX_DEG) {{
+        return {{ success: false, reason: 'clamped',
+                  neededDeg: parseFloat(Math.abs(leanDeg).toFixed(1)),
+                  limitDeg: BALANCE_LEAN_OFFSET_MAX_DEG }};
+    }}
+    return {{ success: true, leanDeg, hipShiftX: 0, hipShiftZ: 0,
+              com: lastCom, target: lastTarget,
+              errorAlong: Math.abs(lastGapSagittal), errorPerp: Math.abs(lastGapPerp) }};
+}}
+
+function finishBalanceSearch(statusEl, balanceBtn, solveResult, bosInside) {{
+    if (!solveResult.success) {{
+        _balanceLocked = false;
+        _balanceLeanOffsetDeg = 0;
+        _balanceHipShiftX = 0;
+        _balanceHipShiftZ = 0;
+        let message;
+        switch (solveResult.reason) {{
+            case 'missing_keypoints':
+                message = 'Balance needs shoulder and hip keypoints on this frame.';
+                break;
+            case 'clamped':
+                message = `Balance needs ${{solveResult.neededDeg}}° lean, limit is ±${{solveResult.limitDeg}}°.`;
+                break;
+            case 'error':
+                message = `Balance error: ${{solveResult.message}}`;
+                break;
+            default:
+                message = 'No valid pose data for this frame.';
+        }}
+        if (statusEl) {{
+            statusEl.textContent = message;
+            statusEl.style.color = '#ff4444';
+        }}
+        if (balanceBtn) {{
+            balanceBtn.disabled = false;
+            balanceBtn.textContent = 'Balance';
+        }}
+        return;
+    }}
+    _balanceLeanOffsetDeg = solveResult.leanDeg;
+    _balanceHipShiftX = solveResult.hipShiftX || 0;
+    _balanceHipShiftZ = solveResult.hipShiftZ || 0;
+    _balanceLocked = true;
+    setSandboxParamsEnabled(true);
+    const alongMm = (solveResult.errorAlong * 1000).toFixed(1);
+    const perpMm = (solveResult.errorPerp * 1000).toFixed(1);
+    const bosLabel = bosInside ? 'BOS inside' : 'BOS outside';
+    if (statusEl) {{
+        statusEl.innerHTML = `<span class="balance-ok">Balanced</span> (along: ${{alongMm}} mm, perp: ${{perpMm}} mm; ${{bosLabel}}). COM locked.`;
+        statusEl.style.color = '';
+    }}
+    if (balanceBtn) {{
+        balanceBtn.disabled = true;
+        balanceBtn.textContent = 'Balanced';
+    }}
+}}
+
+function balanceSandbox() {{
+    if (_balanceLocked) return;
+    const statusEl = document.getElementById('sb-balance-status');
+    const balanceBtn = document.getElementById('sb-balance-btn');
+
+    const rep = reps[curRep];
+    if (!rep || !rep.length) {{
+        finishBalanceSearch(statusEl, balanceBtn, {{ success: false, reason: 'no_frame' }}, false);
+        return;
+    }}
+    const frameData = rep[curFrame] || rep[0];
+    if (!frameData) {{
+        finishBalanceSearch(statusEl, balanceBtn, {{ success: false, reason: 'no_frame' }}, false);
+        return;
+    }}
+
+    try {{
+        const solved = solveBalanceLeanOffsetDeg(frameData);
+        let bosInside = false;
+        if (solved.success) {{
+            const verifyPose = buildSandboxKpts(frameData);
+            if (verifyPose) {{
+                const bos = computeBOS(verifyPose.kpts, 0, FOOT_LEN_M);
+                bosInside = isBalanced(solved.com, bos).inside;
+            }}
+        }}
+        finishBalanceSearch(statusEl, balanceBtn, solved, bosInside);
+        if (solved.success) updateSandbox(frameData);
+    }} catch (balanceError) {{
+        console.error('Balance solve failed:', balanceError);
+        finishBalanceSearch(statusEl, balanceBtn,
+            {{ success: false, reason: 'error', message: balanceError.message }}, false);
+    }}
+}}
+
+const balanceBtnEl = document.getElementById('sb-balance-btn');
+if (balanceBtnEl) {{
+    balanceBtnEl.addEventListener('click', (e) => {{
+        e.preventDefault();
+        e.stopPropagation();
+        balanceSandbox();
+    }});
+}}
+document.getElementById('controls').addEventListener('click', (e) => {{
+    if (e.target && e.target.id === 'sb-balance-btn') balanceSandbox();
+}});
 
 // ======== MODE SWITCHING ========
 document.getElementById('tab-replay').addEventListener('click', () => {{
@@ -1049,6 +1512,7 @@ document.getElementById('tab-replay').addEventListener('click', () => {{
     document.getElementById('tab-sandbox').classList.remove('active');
     document.getElementById('replay-panel').style.display = '';
     document.getElementById('sandbox-panel').style.display = 'none';
+    showSandboxBalanceUI(false);
     hideSandboxVisuals();
 }});
 document.getElementById('tab-sandbox').addEventListener('click', () => {{
@@ -1057,12 +1521,64 @@ document.getElementById('tab-sandbox').addEventListener('click', () => {{
     document.getElementById('tab-replay').classList.remove('active');
     document.getElementById('sandbox-panel').style.display = '';
     document.getElementById('replay-panel').style.display = 'none';
+    showSandboxBalanceUI(true);
+    const depthAngle = baselineData.peakKneeFlex;
+    const depthOk = depthAngle >= 90;
+    const depthEl = document.getElementById('sb-depth-check');
+    if (depthEl) {{
+        depthEl.innerHTML = depthOk
+            ? `<span class="balance-ok">Depth: ${{depthAngle.toFixed(1)}}° — below parallel ✓</span>`
+            : `<span class="balance-bad">Depth: ${{depthAngle.toFixed(1)}}° — parallel is ~90°</span>`;
+    }}
 }});
 
 function hideSandboxVisuals() {{
     ghostTorsoLine.visible = false;
     midfootLine.visible = false; midfootDisc.visible = false;
     barbellGroup.visible = false;
+    comSphere.visible = false; comDisc.visible = false; comLine.visible = false; bosLine.visible = false;
+}}
+
+function balancePointAlongFoot(footLen) {{
+    return BALANCE_FRAC * footLen - HEEL_OFFSET;
+}}
+
+function computeBalanceTargetGround(kpts, footLen) {{
+    function g(i) {{ return {{ x: kpts[i*3], y: kpts[i*3+1], z: kpts[i*3+2] }}; }}
+    const along = balancePointAlongFoot(footLen);
+    const targets = [];
+    for (const [ankleIdx, footIdx] of [[15, 17], [16, 18]]) {{
+        const ankle = g(ankleIdx);
+        const foot = footIdx < 19 && kpts[footIdx * 3] !== undefined ? g(footIdx) : null;
+        let fx, fz;
+        if (foot && (Math.abs(foot.x - ankle.x) > 1e-6 || Math.abs(foot.z - ankle.z) > 1e-6)) {{
+            fx = foot.x - ankle.x;
+            fz = foot.z - ankle.z;
+        }} else {{
+            const toeOutRad = (_sv('sb-toe-out') || baselineToeOut) * Math.PI / 180;
+            const sideSign = ankleIdx === 15 ? -1 : 1;
+            fx = Math.cos(toeOutRad);
+            fz = sideSign * Math.sin(toeOutRad);
+        }}
+        const fl = Math.sqrt(fx * fx + fz * fz) || 1;
+        fx /= fl; fz /= fl;
+        targets.push({{ x: ankle.x + fx * along, z: ankle.z + fz * along }});
+    }}
+    if (!targets.length) return {{ x: 0, z: 0 }};
+    let tx = 0, tz = 0;
+    for (const t of targets) {{ tx += t.x; tz += t.z; }}
+    return {{ x: tx / targets.length, z: tz / targets.length }};
+}}
+
+function updateBalanceTargetVisual(kpts, footLen) {{
+    const tgt = computeBalanceTargetGround(kpts, footLen);
+    const barTopY = 1.6;
+    const positions = new Float32Array([tgt.x, 0.003, tgt.z, tgt.x, barTopY, tgt.z]);
+    midfootLineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    midfootLine.computeLineDistances();
+    midfootLine.visible = viewMode === 'sandbox';
+    midfootDisc.position.set(tgt.x, 0.001, tgt.z);
+    midfootDisc.visible = viewMode === 'sandbox';
 }}
 
 // ======== FAULT CLASSIFICATION ========
@@ -1155,8 +1671,7 @@ function computeSquatPose(phase, params, lockedShoulder) {{
     const kpts = new Float64Array(19 * 3);
     function set(idx, x, y, z) {{ kpts[idx*3]=x; kpts[idx*3+1]=y; kpts[idx*3+2]=z; }}
     function get(idx) {{ return [kpts[idx*3], kpts[idx*3+1], kpts[idx*3+2]]; }}
-    const fr = params.footRatio || 1.0;
-    const fl = REF.foot_len * bodyScale * fr;
+    const fl = FOOT_LEN_M;
 
     const shinTilt = ankleDF;
     const thighDirAngle = shinTilt - kneeFlexRad;
@@ -1193,16 +1708,14 @@ function computeSquatPose(phase, params, lockedShoulder) {{
         const leanDelta = ((forwardLean - (lockedShoulder.refLean || forwardLean)) * deg2rad) * profile;
         totalTrunkLean = Math.max(0, baseAngle + leanDelta);
     }} else if (bw && bw > 0) {{
-        const heelOffset = 0.06;
-        const midfootX = (fl / 2 - heelOffset) * Math.cos(toeOutRad);
-        const A = tl + 0.04, B = -0.05, C = midfootX - hipMidX;
+        const balanceX = balancePointAlongFoot(fl) * Math.cos(toeOutRad);
+        const A = tl + 0.04, B = -0.05, C = balanceX - hipMidX;
         const Rv = Math.sqrt(A*A + B*B), phi = Math.atan2(B, A);
         const sinArg = Math.max(-1, Math.min(1, C / Rv));
         totalTrunkLean = Math.max(0, Math.asin(sinArg) - phi + extraLeanRad);
     }} else {{
-        const heelOffset = 0.06;
-        const midfootX = (fl / 2 - heelOffset) * Math.cos(toeOutRad);
-        const sinArg = Math.max(-1, Math.min(1, (midfootX - hipMidX) / tl));
+        const balanceX = balancePointAlongFoot(fl) * Math.cos(toeOutRad);
+        const sinArg = Math.max(-1, Math.min(1, (balanceX - hipMidX) / tl));
         totalTrunkLean = Math.max(0, Math.asin(sinArg) + extraLeanRad);
     }}
 
@@ -1237,355 +1750,295 @@ function computeSquatPose(phase, params, lockedShoulder) {{
               toeOutRad, tl, sw, totalTrunkLean }};
 }}
 
-// ======== PER-SIDE DELTA FK ========
-// Rodrigues rotation: rotate vector v around unit axis ax by angle ang (radians)
-function _rotVec(v, ax, ang) {{
-    const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
-    const d = v[0]*ax[0] + v[1]*ax[1] + v[2]*ax[2];
-    const cr = [ax[1]*v[2]-ax[2]*v[1], ax[2]*v[0]-ax[0]*v[2], ax[0]*v[1]-ax[1]*v[0]];
-    return [v[0]*c+cr[0]*s+ax[0]*d*t, v[1]*c+cr[1]*s+ax[1]*d*t, v[2]*c+cr[2]*s+ax[2]*d*t];
+// ======== CAPTURED-POSE DEFORMATION (sandbox sliders) ========
+// Rotate a [x,y,z] vector about an arbitrary axis by ang radians (Rodrigues).
+function rotateAboutAxis(v, axis, ang) {{
+    const al = Math.sqrt(axis[0]*axis[0] + axis[1]*axis[1] + axis[2]*axis[2]) || 1e-9;
+    const kx = axis[0]/al, ky = axis[1]/al, kz = axis[2]/al;
+    const c = Math.cos(ang), s = Math.sin(ang);
+    const dot = kx*v[0] + ky*v[1] + kz*v[2];
+    const crossX = ky*v[2] - kz*v[1];
+    const crossY = kz*v[0] - kx*v[2];
+    const crossZ = kx*v[1] - ky*v[0];
+    return [
+        v[0]*c + crossX*s + kx*dot*(1-c),
+        v[1]*c + crossY*s + ky*dot*(1-c),
+        v[2]*c + crossZ*s + kz*dot*(1-c),
+    ];
 }}
-function _norm(v) {{ const l=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1e-9; return [v[0]/l,v[1]/l,v[2]/l]; }}
-
-function computePerSidePose(fd, deltas, bodyParams, lockedShoulder) {{
-    const k = fd.kpts, a = fd.angles;
-    const deg2rad = Math.PI / 180, rad2deg = 180 / Math.PI;
-    const bs = bodyParams.bodyScale || 1.0;
-    const shl = REF.shin_len * bs * (bodyParams.shinRatio || 1.0);
-    const thl = REF.thigh_len * bs * (bodyParams.thighRatio || 1.0);
-    const tl = REF.torso_len * bs * (bodyParams.torsoRatio || 1.0);
-    const sw = REF.shoulder_width * bs * (bodyParams.shoulderWidthRatio || 1.0);
-    const fl = REF.foot_len * bs * (bodyParams.footRatio || 1.0);
-    const headH = REF.head_offset * bs;
-    const toeOutRad = (bodyParams.toeOut || 15) * deg2rad;
-
-    // Delta amounts (degrees)
-    const dDorsiL = (deltas.dorsi || 0) + (deltas.dorsiL || 0);
-    const dDorsiR = (deltas.dorsi || 0) + (deltas.dorsiR || 0);
-    const dKF     = deltas.kneeFlex || 0;
-    const dValL   = (deltas.valgus || 0) + (deltas.valgusL || 0);
-    const dValR   = (deltas.valgus || 0) + (deltas.valgusR || 0);
-    const dLean   = deltas.forwardLean || 0;
-
-    const kpts = new Float64Array(19 * 3);
-    function set(idx, x, y, z) {{ kpts[idx*3]=x; kpts[idx*3+1]=y; kpts[idx*3+2]=z; }}
-
-    // Captured positions
-    const aL = k[15]||[0,0,0], aR = k[16]||[0,0,0];
-    const cKL = k[13]||aL, cKR = k[14]||aR;
-    const cHL = k[11]||cKL, cHR = k[12]||cKR;
-    set(15, aL[0], aL[1], aL[2]);
-    set(16, aR[0], aR[1], aR[2]);
-
-    // Feet from captured foot_index positions (preserve captured direction)
-    if (k[17]) set(17, k[17][0], k[17][1], k[17][2]);
-    else set(17, aL[0]-fl*Math.cos(toeOutRad), aL[1], aL[2]-fl*Math.sin(toeOutRad));
-    if (k[18]) set(18, k[18][0], k[18][1], k[18][2]);
-    else set(18, aR[0]-fl*Math.cos(toeOutRad), aR[1], aR[2]+fl*Math.sin(toeOutRad));
-
-    // Per-leg rotation-based adjustment
-    // For each leg: derive the forward direction from the captured shin,
-    // then rotate shin & thigh by the delta angles.
-    function adjustLeg(ankle, capKnee, capHip, dDorsi, dKnee, dValgus, side) {{
-        // Captured shin and thigh vectors
-        const shinVec = [capKnee[0]-ankle[0], capKnee[1]-ankle[1], capKnee[2]-ankle[2]];
-        const thighVec = [capHip[0]-capKnee[0], capHip[1]-capKnee[1], capHip[2]-capKnee[2]];
-
-        // Forward direction: shin ground projection
-        const gLen = Math.sqrt(shinVec[0]*shinVec[0] + shinVec[2]*shinVec[2]) || 1e-6;
-        const fwd = [shinVec[0]/gLen, 0, shinVec[2]/gLen];
-
-        // Lateral axis: perpendicular to forward in ground plane
-        // Chosen so positive rotation = more forward tilt (dorsiflexion)
-        const lat = [fwd[2], 0, -fwd[0]];
-
-        // Rotate shin by dorsi delta around lateral axis
-        let newShinDir = _rotVec(_norm(shinVec), lat, dDorsi * deg2rad);
-        // Rotate shin by valgus delta around forward axis
-        // Positive valgus = medial collapse: for left leg rotate toward +Z, for right toward -Z
-        if (Math.abs(dValgus) > 0.001) {{
-            newShinDir = _rotVec(newShinDir, fwd, dValgus * deg2rad * side);
-        }}
-        const newKnee = [ankle[0]+newShinDir[0]*shl, ankle[1]+newShinDir[1]*shl, ankle[2]+newShinDir[2]*shl];
-
-        // Thigh: rotate by (dDorsi - dKnee) around lateral axis
-        // dDorsi propagates the shin tilt change through the knee joint
-        // dKnee additionally opens/closes the knee angle
-        let newThighDir = _rotVec(_norm(thighVec), lat, (dDorsi - dKnee) * deg2rad);
-        const newHip = [newKnee[0]+newThighDir[0]*thl, newKnee[1]+newThighDir[1]*thl, newKnee[2]+newThighDir[2]*thl];
-
-        return {{ knee: newKnee, hip: newHip }};
-    }}
-
-    const L = adjustLeg(aL, cKL, cHL, dDorsiL, dKF, dValL, -1);
-    const R = adjustLeg(aR, cKR, cHR, dDorsiR, dKF, dValR, +1);
-    set(13, L.knee[0], L.knee[1], L.knee[2]);
-    set(14, R.knee[0], R.knee[1], R.knee[2]);
-    set(11, L.hip[0], L.hip[1], k[11] ? k[11][2] : L.hip[2]);
-    set(12, R.hip[0], R.hip[1], k[12] ? k[12][2] : R.hip[2]);
-
-    const hipMidX = (L.hip[0]+R.hip[0])/2, hipMidY = (L.hip[1]+R.hip[1])/2;
-
-    // Trunk angle from locked shoulder
-    let totalTrunkLean;
-    if (lockedShoulder) {{
-        totalTrunkLean = Math.max(0, Math.atan2(lockedShoulder.x - hipMidX, lockedShoulder.y - hipMidY)
-            + (dLean * deg2rad));
-    }} else {{
-        totalTrunkLean = 0;
-    }}
-
-    const sMidX = hipMidX + tl * Math.sin(totalTrunkLean);
-    const sMidY = hipMidY + tl * Math.cos(totalTrunkLean);
-    set(5, sMidX, sMidY, k[5] ? k[5][2] : -sw/2);
-    set(6, sMidX, sMidY, k[6] ? k[6][2] : sw/2);
-
-    // Head & arms: offset from delta-FK shoulders using captured relative positions
-    if (k[5] && k[6]) {{
-        const capSMid = [(k[5][0]+k[6][0])/2, (k[5][1]+k[6][1])/2, (k[5][2]+k[6][2])/2];
-        const fkSMid = [sMidX, sMidY, (kpts[5*3+2]+kpts[6*3+2])/2];
-        for (const hIdx of [0, 1, 2, 3, 4]) {{
-            if (k[hIdx]) {{
-                kpts[hIdx*3]   = fkSMid[0] + (k[hIdx][0] - capSMid[0]);
-                kpts[hIdx*3+1] = fkSMid[1] + (k[hIdx][1] - capSMid[1]);
-                kpts[hIdx*3+2] = fkSMid[2] + (k[hIdx][2] - capSMid[2]);
-            }}
-        }}
-        for (const [armJoints, sIdx] of [[[7, 9], 5], [[8, 10], 6]]) {{
-            const fkS = [kpts[sIdx*3], kpts[sIdx*3+1], kpts[sIdx*3+2]];
-            const capS = k[sIdx];
-            for (const jIdx of armJoints) {{
-                if (k[jIdx]) {{
-                    kpts[jIdx*3]   = fkS[0] + (k[jIdx][0] - capS[0]);
-                    kpts[jIdx*3+1] = fkS[1] + (k[jIdx][1] - capS[1]);
-                    kpts[jIdx*3+2] = fkS[2] + (k[jIdx][2] - capS[2]);
-                }}
-            }}
-        }}
-    }} else {{
-        const headX = sMidX + headH * Math.sin(totalTrunkLean) * 0.5;
-        const headY = sMidY + headH;
-        set(0, headX, headY, 0);
-        set(1, headX, headY+0.02, -0.03*bs); set(2, headX, headY+0.02, 0.03*bs);
-        set(3, headX, headY-0.01, -0.06*bs); set(4, headX, headY-0.01, 0.06*bs);
-        const ual = REF.upper_arm * bs, fal = REF.forearm * bs;
-        set(7, sMidX, sMidY-ual*0.7-0.15, k[5]?k[5][2]:-sw/2);
-        set(8, sMidX, sMidY-ual*0.7-0.15, k[6]?k[6][2]:sw/2);
-        set(9, kpts[7*3]+0.02, kpts[7*3+1]-fal*0.5, kpts[7*3+2]);
-        set(10, kpts[8*3]+0.02, kpts[8*3+1]-fal*0.5, kpts[8*3+2]);
-    }}
-
-    // Effective per-side angles for display
-    const dorsiLDeg = a.dorsi_l + dDorsiL;
-    const dorsiRDeg = a.dorsi_r + dDorsiR;
-    const kfLDeg = (a.knee_flex_l || a.knee_flex) + dKF;
-    const kfRDeg = (a.knee_flex_r || a.knee_flex) + dKF;
-    const valLDeg = a.knee_valgus_l + dValL;
-    const valRDeg = a.knee_valgus_r + dValR;
-    const trunkAngleDeg = 180 - (totalTrunkLean * rad2deg);
-    const avgKneeDeg = (kfLDeg + kfRDeg) / 2;
-    const avgDorsiDeg = (dorsiLDeg + dorsiRDeg) / 2;
-
-    return {{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg: avgDorsiDeg,
-              totalTrunkLeanDeg: totalTrunkLean * rad2deg,
-              dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg,
-              hipMidX, hipMidY, shoulderMidX: sMidX, shoulderMidY: sMidY }};
+// Rotate a [x,y,z] vector about the vertical (Y) axis by ang radians.
+function rotateYvec(v, ang) {{
+    const c = Math.cos(ang), s = Math.sin(ang);
+    return [ v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c ];
 }}
 
-// ======== CONSTRAINED CHAIN SOLVER ========
-const JOINT_LIMITS = {{
-    ankle: {{ min: 0, max: 45 * Math.PI / 180 }},
-    knee:  {{ min: 0, max: 140 * Math.PI / 180 }},
-    hip:   {{ min: 0, max: 130 * Math.PI / 180 }},
-    trunk: {{ min: 0, max: 90 * Math.PI / 180 }},
-}};
-
-class ConstrainedChainSolver {{
-    constructor(bodyScale, torsoRatio, thighRatio, shinRatio, toeOut, footRatio) {{
-        this.shinLen = REF.shin_len * bodyScale * shinRatio;
-        this.thighLen = REF.thigh_len * bodyScale * thighRatio;
-        this.torsoLen = REF.torso_len * bodyScale * torsoRatio;
-        this.headOffset = REF.head_offset * bodyScale;
-        this.toeOutRad = toeOut * Math.PI / 180;
-        this.heelOffset = 0.06;
-        const scaledFootLen = REF.foot_len * bodyScale * (footRatio || 1.0);
-        this.midfootX = (scaledFootLen / 2 - this.heelOffset) * Math.cos(this.toeOutRad);
-        const S = SEGMENT_MASS;
-        this.massFoot  = S.foot_l.frac + S.foot_r.frac;
-        this.massShank = S.shank_l.frac + S.shank_r.frac;
-        this.massThigh = S.thigh_l.frac + S.thigh_r.frac;
-        this.massTrunk = S.trunk.frac;
-        this.massHead  = S.head.frac;
-        this.massArms  = S.upper_arm_l.frac + S.upper_arm_r.frac + S.forearm_l.frac + S.forearm_r.frac;
-        this.massTotal = this.massFoot + this.massShank + this.massThigh + this.massTrunk + this.massHead + this.massArms;
+// 2-link IK: place the knee so |hip-knee| == thighLen and |knee-ankle| == shinLen
+// exactly (bones locked to capture). Hip H and ankle A stay fixed; the captured/prior
+// knee `ref` disambiguates the bend half-plane (prevents flipping).
+function solveKnee(H, A, thighLen, shinLen, ref) {{
+    const HAx = A[0]-H[0], HAy = A[1]-H[1], HAz = A[2]-H[2];
+    const d = Math.sqrt(HAx*HAx + HAy*HAy + HAz*HAz) || 1e-9;
+    const ux = HAx/d, uy = HAy/d, uz = HAz/d;
+    const dmin = Math.abs(thighLen - shinLen) + 1e-4, dmax = thighLen + shinLen - 1e-4;
+    const dc = Math.max(dmin, Math.min(dmax, d));
+    let cosA = (thighLen*thighLen + dc*dc - shinLen*shinLen) / (2*thighLen*dc);
+    cosA = Math.max(-1, Math.min(1, cosA));
+    const sinA = Math.sin(Math.acos(cosA));
+    // pole = component of (ref-H) perpendicular to the hip->ankle axis
+    let px = (ref[0]-H[0]), py = (ref[1]-H[1]), pz = (ref[2]-H[2]);
+    const rdotu = px*ux + py*uy + pz*uz;
+    px -= rdotu*ux; py -= rdotu*uy; pz -= rdotu*uz;
+    let pl = Math.sqrt(px*px + py*py + pz*pz);
+    if (pl < 1e-6) {{ // degenerate (straight leg): bend toward world up
+        px = -ux*uy; py = 1 - uy*uy; pz = -uz*uy;
+        pl = Math.sqrt(px*px + py*py + pz*pz) || 1e-9;
     }}
-    solve(ankleRad, targetHipY, barbellWeight, bodyMass) {{
-        const clamped = Math.max(JOINT_LIMITS.ankle.min, Math.min(JOINT_LIMITS.ankle.max, ankleRad));
-        const kneeResult = this._solveKneeFromDepth(clamped, targetHipY);
-        if (!kneeResult.valid) return {{ valid: false, reason: 'depth_infeasible' }};
-        const kneeRad = Math.max(JOINT_LIMITS.knee.min, Math.min(JOINT_LIMITS.knee.max, kneeResult.kneeRad));
-        const hipPos = this._computeHipPosition(clamped, kneeRad);
-        const lowerCOMx = this._computeLowerBodyCOMx(clamped, kneeRad);
-        let trunkRad;
-        if (barbellWeight > 0) {{
-            trunkRad = this._solveTrunkWithBarbell(hipPos.x, lowerCOMx, barbellWeight, bodyMass);
-        }} else {{
-            trunkRad = this._solveTrunkFromCOM(hipPos.x, lowerCOMx, 0, 0);
-        }}
-        if (trunkRad === null) return {{ valid: false, reason: 'com_infeasible' }};
-        trunkRad = Math.max(JOINT_LIMITS.trunk.min, Math.min(JOINT_LIMITS.trunk.max, trunkRad));
-        const thighAngle = clamped - kneeRad;
-        const hipFlexion = trunkRad - thighAngle;
-        const deg = 180 / Math.PI;
-        return {{ valid: true, ankle: clamped, knee: kneeRad, hip: hipFlexion, trunk: trunkRad,
-                  ankleDeg: clamped * deg, kneeDeg: kneeRad * deg, hipDeg: hipFlexion * deg, trunkDeg: trunkRad * deg,
-                  hipX: hipPos.x, hipY: hipPos.y }};
-    }}
-    _solveKneeFromDepth(ankleRad, targetHipY) {{
-        const remaining = targetHipY - this.shinLen * Math.cos(ankleRad);
-        const cosArg = remaining / this.thighLen;
-        if (Math.abs(cosArg) > 1) return {{ valid: false }};
-        const thighAngle = ankleRad - Math.acos(cosArg);
-        return {{ valid: true, kneeRad: ankleRad - thighAngle }};
-    }}
-    _computeHipPosition(ankleRad, kneeRad) {{
-        const thighAngle = ankleRad - kneeRad;
-        return {{ x: this.shinLen * Math.sin(ankleRad) + this.thighLen * Math.sin(thighAngle),
-                  y: this.shinLen * Math.cos(ankleRad) + this.thighLen * Math.cos(thighAngle) }};
-    }}
-    _computeLowerBodyCOMx(ankleRad, kneeRad) {{
-        const kneeX = this.shinLen * Math.sin(ankleRad);
-        const thighAngle = ankleRad - kneeRad;
-        const shankCOMx = 0.5 * kneeX;
-        const thighCOMx = kneeX + 0.5 * this.thighLen * Math.sin(thighAngle);
-        return (this.massShank * shankCOMx + this.massThigh * thighCOMx + this.massFoot * this.midfootX) / this.massTotal;
-    }}
-    _solveTrunkFromCOM(hipX, lowerCOMx, barContribX, barFrac) {{
-        const bodyFrac = 1 - barFrac;
-        const upperMass = this.massTrunk + this.massHead + this.massArms;
-        const A = (this.massTrunk * 0.5 * this.torsoLen +
-                   this.massHead * (this.torsoLen + this.headOffset * 0.5) +
-                   this.massArms * this.torsoLen) / this.massTotal * bodyFrac;
-        const B = upperMass / this.massTotal * hipX * bodyFrac + lowerCOMx * bodyFrac + barContribX;
-        const sinTrunk = (this.midfootX - B) / A;
-        if (Math.abs(sinTrunk) > 1) return null;
-        return Math.asin(sinTrunk);
-    }}
-    _solveTrunkWithBarbell(hipX, lowerCOMx, barbellWeight, bodyMass) {{
-        const barFrac = barbellWeight / (bodyMass + barbellWeight);
-        let trunkRad = this._solveTrunkFromCOM(hipX, lowerCOMx, 0, 0) || 0.2;
-        for (let i = 0; i < 3; i++) {{
-            const barX = hipX + 0.04 * Math.sin(trunkRad) - 0.05 * Math.cos(trunkRad);
-            const solved = this._solveTrunkFromCOM(hipX, lowerCOMx, barX * barFrac, barFrac);
-            if (solved === null) return trunkRad;
-            trunkRad = solved;
-        }}
-        return trunkRad;
-    }}
+    px /= pl; py /= pl; pz /= pl;
+    return [
+        H[0] + thighLen*cosA*ux + thighLen*sinA*px,
+        H[1] + thighLen*cosA*uy + thighLen*sinA*py,
+        H[2] + thighLen*cosA*uz + thighLen*sinA*pz,
+    ];
 }}
 
-function computeConstrainedSquatPose(phase, params, solverMode, lockedShoulder) {{
-    if (solverMode !== 'compensated') return computeSquatPose(phase, params, lockedShoulder);
-    const {{ maxKneeFlex, stanceWidth, toeOut, dorsiRatio, bodyScale, torsoRatio, thighRatio, shinRatio,
-             shoulderWidthRatio, barbellWeight: bw, bodyMass: bMass, ankleOverrideDeg, kneeValgus }} = params;
-    const deg2rad = Math.PI / 180;
-    const profile = phase;
-    const refParams = {{ ...params, forwardLean: 0, kneeValgus: 0 }};
-    const refPose = computeSquatPose(phase, refParams);
-    const targetHipY = refPose.hipMidY;
-    let ankleRad;
-    if (ankleOverrideDeg !== undefined && ankleOverrideDeg !== null) {{
-        ankleRad = ankleOverrideDeg * deg2rad * profile;
-    }} else {{
-        ankleRad = dorsiRatio * maxKneeFlex * deg2rad * profile;
+// Rebuild the lower body (11-18) bottom-up from the grounded feet using captured
+// per-side bone vectors, overriding only stance / toe-out / dorsiflexion. The hips
+// fall out of the leg geometry (rigid pelvis reconciled by averaging). Returns a
+// Float64Array(19*3) (upper body 0-10 copied verbatim), or null if degenerate.
+function bottomUpBuild(capturedKpts, stanceWidth, toeOutDeg, dorsiDeltaDeg) {{
+    for (const idx of [11,12,13,14,15,16]) if (!capturedKpts[idx]) return null;
+    const DEG = Math.PI / 180;
+    const out = new Float64Array(19 * 3);
+    for (let i = 0; i < 19; i++) {{
+        if (!capturedKpts[i]) continue;
+        out[i*3] = capturedKpts[i][0]; out[i*3+1] = capturedKpts[i][1]; out[i*3+2] = capturedKpts[i][2];
     }}
-    const solver = new ConstrainedChainSolver(bodyScale, torsoRatio, thighRatio, shinRatio, toeOut, params.footRatio);
-    const result = solver.solve(ankleRad, targetHipY, bw || 0, bMass || 75);
-    if (!result.valid) {{
-        const fallback = computeSquatPose(phase, params, lockedShoulder);
-        fallback.solverResult = result;
-        return fallback;
+    const hipL = capturedKpts[11], hipR = capturedKpts[12];
+    const latX = hipR[0]-hipL[0], latZ = hipR[2]-hipL[2];
+    const latLen = Math.sqrt(latX*latX + latZ*latZ) || 1e-9;
+    const latU = [latX/latLen, 0, latZ/latLen];           // hip lateral axis (ground, L->R)
+
+    const ankL = capturedKpts[15], ankR = capturedKpts[16];
+    const ankMidX = (ankL[0]+ankR[0])/2, ankMidZ = (ankL[2]+ankR[2])/2;
+    const spanX = ankR[0]-ankL[0], spanZ = ankR[2]-ankL[2];
+    const spanLen = Math.sqrt(spanX*spanX + spanZ*spanZ) || 1e-9;
+    const spanU = [spanX/spanLen, 0, spanZ/spanLen];      // inter-ankle direction (L->R)
+    const spanScale = stanceWidth / (baselineStanceWidth || 1e-9);
+    const dToe = (toeOutDeg - baselineToeOut) * DEG;
+    const dDorsi = dorsiDeltaDeg * DEG;
+
+    const sides = [
+        {{ aIdx:15, kIdx:13, hIdx:11, tIdx:17, sign:-1 }},
+        {{ aIdx:16, kIdx:14, hIdx:12, tIdx:18, sign:+1 }},
+    ];
+    const hipEst = [];
+    for (const S of sides) {{
+        const A0 = capturedKpts[S.aIdx], K0 = capturedKpts[S.kIdx], H0 = capturedKpts[S.hIdx];
+        const T0 = capturedKpts[S.tIdx] || null;
+        // 1. new grounded ankle: scale lateral span about the ankle midpoint
+        const halfDist = (spanLen/2) * spanScale * S.sign;
+        const A = [ankMidX + spanU[0]*halfDist, A0[1], ankMidZ + spanU[2]*halfDist];
+        // 2/3. shin = captured (knee-ankle), yawed by toe-out then tilted by dorsi
+        let shin = [K0[0]-A0[0], K0[1]-A0[1], K0[2]-A0[2]];
+        shin = rotateYvec(shin, S.sign * dToe);
+        shin = rotateAboutAxis(shin, latU, dDorsi);
+        const K = [A[0]+shin[0], A[1]+shin[1], A[2]+shin[2]];
+        // 4. thigh = captured (hip-knee), yawed with the leg
+        let thigh = [H0[0]-K0[0], H0[1]-K0[1], H0[2]-K0[2]];
+        thigh = rotateYvec(thigh, S.sign * dToe);
+        hipEst.push([K[0]+thigh[0], K[1]+thigh[1], K[2]+thigh[2]]);
+        out[S.aIdx*3]=A[0]; out[S.aIdx*3+1]=A[1]; out[S.aIdx*3+2]=A[2];
+        out[S.kIdx*3]=K[0]; out[S.kIdx*3+1]=K[1]; out[S.kIdx*3+2]=K[2];
+        if (T0) {{
+            let foot = [T0[0]-A0[0], T0[1]-A0[1], T0[2]-A0[2]];
+            foot = rotateYvec(foot, S.sign * dToe);
+            out[S.tIdx*3]=A[0]+foot[0]; out[S.tIdx*3+1]=A[1]+foot[1]; out[S.tIdx*3+2]=A[2]+foot[2];
+        }}
     }}
-    const solvedDorsiRatio = result.knee > 0.001 ? (result.ankle / result.knee) : dorsiRatio;
-    const solvedParams = {{ ...params,
-        maxKneeFlex: profile > 0.001 ? result.kneeDeg / profile : maxKneeFlex,
-        dorsiRatio: solvedDorsiRatio,
-        forwardLean: 0,
-        kneeValgus: kneeValgus,
-    }};
-    const pose = computeSquatPose(phase, solvedParams);
-    const tl = REF.torso_len * bodyScale * torsoRatio;
-    const sw = REF.shoulder_width * bodyScale * (shoulderWidthRatio || 1.0);
-    const kpts = pose.kpts;
-    function set(idx, x, y, z) {{ kpts[idx*3]=x; kpts[idx*3+1]=y; kpts[idx*3+2]=z; }}
-    const hipMidX = pose.hipMidX, hipMidY = pose.hipMidY;
-    const sMidX = hipMidX + tl * Math.sin(result.trunk);
-    const sMidY = hipMidY + tl * Math.cos(result.trunk);
-    set(5, sMidX, sMidY, -sw/2); set(6, sMidX, sMidY, sw/2);
-    const headH = REF.head_offset * bodyScale;
-    const headX = sMidX + headH * Math.sin(result.trunk) * 0.5;
-    const headY = sMidY + headH;
-    set(0, headX, headY, 0);
-    set(1, headX, headY+0.02, -0.03*bodyScale);
-    set(2, headX, headY+0.02, 0.03*bodyScale);
-    set(3, headX, headY-0.01, -0.06*bodyScale);
-    set(4, headX, headY-0.01, 0.06*bodyScale);
-    const ual = REF.upper_arm * bodyScale, fal = REF.forearm * bodyScale;
-    const armFwd = 0.05 * profile, armDown = 0.15 + 0.1 * profile;
-    const lS = [sMidX, sMidY, -sw/2], rS = [sMidX, sMidY, sw/2];
-    set(7, lS[0]+armFwd, lS[1]-ual*0.7-armDown, lS[2]);
-    set(8, rS[0]+armFwd, rS[1]-ual*0.7-armDown, rS[2]);
-    const lE = [kpts[7*3], kpts[7*3+1], kpts[7*3+2]], rE = [kpts[8*3], kpts[8*3+1], kpts[8*3+2]];
-    set(9, lE[0]+0.02, lE[1]-fal*0.5, lE[2]);
-    set(10, rE[0]+0.02, rE[1]-fal*0.5, rE[2]);
-    return {{ kpts, avgKneeDeg: result.kneeDeg, trunkAngleDeg: 180 - result.trunkDeg,
-              valgusActiveDeg: (kneeValgus||0) * profile, dorsiDeg: result.ankleDeg,
-              totalTrunkLeanDeg: result.trunkDeg, hipMidX, hipMidY, shoulderMidX: sMidX, shoulderMidY: sMidY,
-              toeOutRad: toeOut * deg2rad, tl, sw, totalTrunkLean: result.trunk, solverResult: result }};
+    // 5. rigid pelvis reconciliation: hip-mid = avg estimate, keep captured half-vector
+    const hipMidX = (hipEst[0][0]+hipEst[1][0])/2;
+    const hipMidY = (hipEst[0][1]+hipEst[1][1])/2;
+    const hipMidZ = (hipEst[0][2]+hipEst[1][2])/2;
+    const halfX = (hipR[0]-hipL[0])/2, halfY = (hipR[1]-hipL[1])/2, halfZ = (hipR[2]-hipL[2])/2;
+    out[11*3]=hipMidX-halfX; out[11*3+1]=hipMidY-halfY; out[11*3+2]=hipMidZ-halfZ;
+    out[12*3]=hipMidX+halfX; out[12*3+1]=hipMidY+halfY; out[12*3+2]=hipMidZ+halfZ;
+    // 6. re-ground guard (no-op by construction, protects against a dipped ankle)
+    const minAnkleY = Math.min(out[15*3+1], out[16*3+1]);
+    if (isFinite(minAnkleY) && minAnkleY < 0) {{ for (let i = 11; i <= 18; i++) out[i*3+1] -= minAnkleY; }}
+    return out;
 }}
+
+// Deform the captured pose from the live sliders, preserving identity at baseline
+// via delta-FK (captured + (FK_mod - FK_base)). The upper body (0-10) rides rigidly
+// with the pelvis so the captured torso length/lean are preserved.
+function deformLowerBody(capturedKpts) {{
+    const out = new Float64Array(19 * 3);
+    for (let i = 0; i < 19; i++) {{
+        if (!capturedKpts[i]) continue;
+        out[i*3] = capturedKpts[i][0]; out[i*3+1] = capturedKpts[i][1]; out[i*3+2] = capturedKpts[i][2];
+    }}
+    const sEl = document.getElementById('sb-stance-width');
+    const tEl = document.getElementById('sb-toe-out');
+    const dEl = document.getElementById('sb-d-dorsi');
+    const stance = sEl ? parseFloat(sEl.value) : baselineStanceWidth;
+    const toeOut = tEl ? parseFloat(tEl.value) : baselineToeOut;
+    const dorsi  = dEl ? parseFloat(dEl.value) : 0;
+    if (stance === baselineStanceWidth && toeOut === baselineToeOut && dorsi === 0) return out;
+    const base = bottomUpBuild(capturedKpts, baselineStanceWidth, baselineToeOut, 0);
+    const mod  = bottomUpBuild(capturedKpts, stance, toeOut, dorsi);
+    if (!base || !mod) return out;
+    for (let i = 11; i <= 18; i++) {{
+        if (!capturedKpts[i]) continue;
+        for (let c = 0; c < 3; c++) {{
+            const d = mod[i*3+c] - base[i*3+c];
+            if (Number.isFinite(d)) out[i*3+c] = capturedKpts[i][c] + d;
+        }}
+    }}
+    // Lock thigh + shin to captured lengths: re-solve each knee from the fixed hip
+    // (rigid pelvis) and the fixed grounded ankle. Feet and hips stay put.
+    for (const [hI, kI, aI] of [[11,13,15],[12,14,16]]) {{
+        if (!capturedKpts[hI] || !capturedKpts[kI] || !capturedKpts[aI]) continue;
+        const thighLen = Math.hypot(capturedKpts[hI][0]-capturedKpts[kI][0], capturedKpts[hI][1]-capturedKpts[kI][1], capturedKpts[hI][2]-capturedKpts[kI][2]);
+        const shinLen = Math.hypot(capturedKpts[kI][0]-capturedKpts[aI][0], capturedKpts[kI][1]-capturedKpts[aI][1], capturedKpts[kI][2]-capturedKpts[aI][2]);
+        const K = solveKnee(
+            [out[hI*3], out[hI*3+1], out[hI*3+2]],
+            [out[aI*3], out[aI*3+1], out[aI*3+2]],
+            thighLen, shinLen,
+            [out[kI*3], out[kI*3+1], out[kI*3+2]],
+        );
+        out[kI*3]=K[0]; out[kI*3+1]=K[1]; out[kI*3+2]=K[2];
+    }}
+    if (capturedKpts[11] && capturedKpts[12]) {{
+        const capMidX=(capturedKpts[11][0]+capturedKpts[12][0])/2;
+        const capMidY=(capturedKpts[11][1]+capturedKpts[12][1])/2;
+        const capMidZ=(capturedKpts[11][2]+capturedKpts[12][2])/2;
+        const defMidX=(out[11*3]+out[12*3])/2;
+        const defMidY=(out[11*3+1]+out[12*3+1])/2;
+        const defMidZ=(out[11*3+2]+out[12*3+2])/2;
+        const dX=defMidX-capMidX, dY=defMidY-capMidY, dZ=defMidZ-capMidZ;
+        for (let i = 0; i <= 10; i++) {{ if(!capturedKpts[i]) continue; out[i*3]+=dX; out[i*3+1]+=dY; out[i*3+2]+=dZ; }}
+    }}
+    return out;
+}}
+
+// Apply a counterbalance (hip horizontal shift + trunk lean) to a deformed pose so
+// the total COM tracks the mid-foot. The pelvis + upper body (0-12) translate by the
+// shift; the trunk (0-10) then leans about the shifted hip-mid. Lower legs stay put.
+function applyCounterbalance(srcKpts, hipShiftX, hipShiftZ, leanDeltaRad) {{
+    const k = new Float64Array(srcKpts);
+    for (let i = 0; i <= 12; i++) {{ k[i*3] += hipShiftX; k[i*3+2] += hipShiftZ; }}
+    const hipMidX = (k[11*3] + k[12*3]) / 2;
+    const hipMidY = (k[11*3+1] + k[12*3+1]) / 2;
+    const shMidX = (k[5*3] + k[6*3]) / 2;
+    const shMidY = (k[5*3+1] + k[6*3+1]) / 2;
+    const tDX = shMidX - hipMidX, tDY = shMidY - hipMidY;
+    const torsoLen = Math.sqrt(tDX*tDX + tDY*tDY) || 1e-9;
+    const currentLean = Math.atan2(tDX, tDY);
+    const newLean = currentLean + leanDeltaRad;
+    const newShMidX = hipMidX + torsoLen * Math.sin(newLean);
+    const newShMidY = hipMidY + torsoLen * Math.cos(newLean);
+    const offX = newShMidX - shMidX, offY = newShMidY - shMidY;
+    for (let i = 0; i <= 10; i++) {{ k[i*3] += offX; k[i*3+1] += offY; }}
+    // Only when the hip is shifted (relative to the planted feet) do the knees need
+    // re-solving to keep thigh + shin locked. With no shift (the Balance case) the
+    // lower body — hips included — is left completely untouched.
+    if (hipShiftX !== 0 || hipShiftZ !== 0) {{
+        for (const [hI, kI, aI] of [[11,13,15],[12,14,16]]) {{
+            const thighLen = Math.hypot(srcKpts[hI*3]-srcKpts[kI*3], srcKpts[hI*3+1]-srcKpts[kI*3+1], srcKpts[hI*3+2]-srcKpts[kI*3+2]);
+            const shinLen = Math.hypot(srcKpts[kI*3]-srcKpts[aI*3], srcKpts[kI*3+1]-srcKpts[aI*3+1], srcKpts[kI*3+2]-srcKpts[aI*3+2]);
+            const K = solveKnee(
+                [k[hI*3], k[hI*3+1], k[hI*3+2]],
+                [k[aI*3], k[aI*3+1], k[aI*3+2]],
+                thighLen, shinLen,
+                [k[kI*3], k[kI*3+1], k[kI*3+2]],
+            );
+            k[kI*3]=K[0]; k[kI*3+1]=K[1]; k[kI*3+2]=K[2];
+        }}
+    }}
+    return {{ kpts:k, hipMidX, hipMidY, shoulderMidX:newShMidX, shoulderMidY:newShMidY, newLean, torsoLen }};
+}}
+
+function buildSandboxKpts(fd) {{
+    if (!fd || !fd.kpts) return null;
+
+    const capturedKpts = fd.kpts;
+    const capturedAngles = fd.angles;
+    const deformed = deformLowerBody(capturedKpts);
+
+    if (_balanceLocked) {{
+        // Counterbalance: shift hips + lean trunk so total COM tracks the mid-foot.
+        const posed = applyCounterbalance(
+            deformed, _balanceHipShiftX, _balanceHipShiftZ,
+            _balanceLeanOffsetDeg * (Math.PI / 180),
+        );
+        const kpts = posed.kpts;
+        const totalTrunkLeanDeg = posed.newLean * (180 / Math.PI);
+        const trunkAngleDeg = 180 - totalTrunkLeanDeg;
+        return {{ kpts, trunkAngleDeg, avgKneeDeg: capturedAngles.knee_flex,
+                  dorsiDeg: (capturedAngles.dorsi_l + capturedAngles.dorsi_r) / 2,
+                  totalTrunkLeanDeg,
+                  dorsiLDeg: capturedAngles.dorsi_l, dorsiRDeg: capturedAngles.dorsi_r,
+                  kfLDeg: capturedAngles.knee_flex_l || capturedAngles.knee_flex,
+                  kfRDeg: capturedAngles.knee_flex_r || capturedAngles.knee_flex,
+                  valLDeg: capturedAngles.knee_valgus_l, valRDeg: capturedAngles.knee_valgus_r,
+                  hipFlexL: capturedAngles.hip_flex_l, hipFlexR: capturedAngles.hip_flex_r,
+                  hipMidX: posed.hipMidX, hipMidY: posed.hipMidY,
+                  shoulderMidX: posed.shoulderMidX, shoulderMidY: posed.shoulderMidY,
+                  totalTrunkLean: posed.newLean, toeOutRad: 0, torsoLen: posed.torsoLen, shoulderWidth: 0 }};
+    }}
+
+    // Non-locked path: deformed pose as-is (identity when sliders are at baseline)
+    const kpts = deformed;
+    const hipMidX = (kpts[11 * 3] + kpts[12 * 3]) / 2;
+    const hipMidY = (kpts[11 * 3 + 1] + kpts[12 * 3 + 1]) / 2;
+    const shoulderMidX = (kpts[5 * 3] + kpts[6 * 3]) / 2;
+    const shoulderMidY = (kpts[5 * 3 + 1] + kpts[6 * 3 + 1]) / 2;
+    const totalTrunkLeanDeg = 180 - capturedAngles.trunk_flexion;
+    const trunkAngleDeg = capturedAngles.trunk_flexion;
+    const totalTrunkLean = totalTrunkLeanDeg * Math.PI / 180;
+
+    return {{ kpts, trunkAngleDeg, avgKneeDeg: capturedAngles.knee_flex,
+              dorsiDeg: (capturedAngles.dorsi_l + capturedAngles.dorsi_r) / 2,
+              totalTrunkLeanDeg,
+              dorsiLDeg: capturedAngles.dorsi_l, dorsiRDeg: capturedAngles.dorsi_r,
+              kfLDeg: capturedAngles.knee_flex_l || capturedAngles.knee_flex,
+              kfRDeg: capturedAngles.knee_flex_r || capturedAngles.knee_flex,
+              valLDeg: capturedAngles.knee_valgus_l, valRDeg: capturedAngles.knee_valgus_r,
+              hipFlexL: capturedAngles.hip_flex_l, hipFlexR: capturedAngles.hip_flex_r,
+              hipMidX, hipMidY, shoulderMidX, shoulderMidY,
+              totalTrunkLean, toeOutRad: 0, torsoLen: 0, shoulderWidth: 0,
+              anyDeltaActive: false }};
+}}
+
 
 // ======== COM / BOS / BALANCE ========
 function computeCOM(kpts, bw, bodyMass, footLen) {{
-    function g(i) {{ return {{ x: kpts[i*3], y: kpts[i*3+1], z: kpts[i*3+2] }}; }}
-    const lS = g(5), rS = g(6), lH = g(11), rH = g(12);
-    const sMid = {{ x:(lS.x+rS.x)/2, y:(lS.y+rS.y)/2, z:(lS.z+rS.z)/2 }};
-    const hMid = {{ x:(lH.x+rH.x)/2, y:(lH.y+rH.y)/2, z:(lH.z+rH.z)/2 }};
-    const segCOMs = {{ head: g(0), trunk: {{ x:(sMid.x+hMid.x)/2, y:(sMid.y+hMid.y)/2, z:(sMid.z+hMid.z)/2 }} }};
-    for (const [key, seg] of Object.entries(SEGMENT_MASS)) {{
-        if (!seg.joints || seg.joints[0] === null || seg.joints[1] === null) continue;
-        if (key === 'head' || key === 'trunk' || key.startsWith('foot')) continue;
-        const a = g(seg.joints[0]), b = g(seg.joints[1]);
-        segCOMs[key] = {{ x:(a.x+b.x)/2, y:(a.y+b.y)/2, z:(a.z+b.z)/2 }};
-    }}
-    const aL = g(15), aR = g(16), kL = g(13), kR = g(14);
-    function footFwd(ankle, knee) {{ const dx=ankle.x-knee.x, dz=ankle.z-knee.z, l=Math.sqrt(dx*dx+dz*dz)||1; return {{x:dx/l,z:dz/l}}; }}
-    const fL = footFwd(aL, kL), fR = footFwd(aR, kR);
-    const _fl = footLen || REF.foot_len;
-    segCOMs.foot_l = {{ x:aL.x+fL.x*_fl*0.5, y:aL.y, z:aL.z+fL.z*_fl*0.5 }};
-    segCOMs.foot_r = {{ x:aR.x+fR.x*_fl*0.5, y:aR.y, z:aR.z+fR.z*_fl*0.5 }};
-    let totalFrac = 0;
-    const bodyFracs = {{}};
-    for (const [key, seg] of Object.entries(SEGMENT_MASS)) {{
-        if (segCOMs[key]) {{ bodyFracs[key] = seg.frac; totalFrac += seg.frac; }}
-    }}
-    for (const k of Object.keys(bodyFracs)) bodyFracs[k] /= totalFrac;
+    const segCOMs = buildSegmentCOMs(kpts, footLen);
+    const bodyFracs = getNormalizedBodyFracs();
     const barFrac = bw > 0 ? bw / (bodyMass + bw) : 0;
     const bodyF = 1 - barFrac;
-    let cx=0, cy=0, cz=0;
+    let cx = 0, cy = 0, cz = 0;
     for (const [key, frac] of Object.entries(bodyFracs)) {{
-        const c = segCOMs[key]; if (!c) continue;
-        cx += c.x * frac * bodyF; cy += c.y * frac * bodyF; cz += c.z * frac * bodyF;
+        const segmentCom = segCOMs[key];
+        if (!segmentCom) continue;
+        cx += segmentCom.x * frac * bodyF;
+        cy += segmentCom.y * frac * bodyF;
+        cz += segmentCom.z * frac * bodyF;
     }}
-    if (bw > 0 && _barbellPos) {{ cx += _barbellPos.x * barFrac; cy += _barbellPos.y * barFrac; cz += _barbellPos.z * barFrac; }}
-    return {{ x:cx, y:cy, z:cz, groundX:cx, groundZ:cz }};
+    if (bw > 0 && _barbellPos) {{
+        cx += _barbellPos.x * barFrac;
+        cy += _barbellPos.y * barFrac;
+        cz += _barbellPos.z * barFrac;
+    }}
+    return {{ x: cx, y: cy, z: cz, groundX: cx, groundZ: cz }};
 }}
 
 function computeBOS(kpts, toeOutRad, footLen) {{
     function g(i) {{ return {{ x: kpts[i*3], y: kpts[i*3+1], z: kpts[i*3+2] }}; }}
     const aL = g(15), aR = g(16), kL = g(13), kR = g(14);
-    const halfW = 0.05, heelOff = 0.06, toeOff = footLen - heelOff;
+    const halfW = 0.05, heelOff = HEEL_OFFSET, toeOff = footLen - heelOff;
     function footRect(ankle, knee) {{
-        const dx=ankle.x-knee.x, dz=ankle.z-knee.z, l=Math.sqrt(dx*dx+dz*dz)||1;
+        const dx=knee.x-ankle.x, dz=knee.z-ankle.z, l=Math.sqrt(dx*dx+dz*dz)||1;
         const fx=dx/l, fz=dz/l, lx=-fz, lz=fx;
         return [
             {{ x:ankle.x-fx*heelOff-lx*halfW, z:ankle.z-fz*heelOff-lz*halfW }},
@@ -1604,6 +2057,7 @@ function convexHull2D(points) {{
         if (points[i].x < points[start].x || (points[i].x === points[start].x && points[i].z < points[start].z)) start = i;
     }}
     const hull = []; let cur = start;
+    let guard = 0;
     do {{
         hull.push(points[cur]); let next = (cur+1) % points.length;
         for (let i = 0; i < points.length; i++) {{
@@ -1612,8 +2066,9 @@ function convexHull2D(points) {{
             if (cross < 0) next = i;
         }}
         cur = next;
-    }} while (cur !== start && hull.length < points.length + 1);
-    return hull;
+        guard++;
+    }} while (cur !== start && hull.length < points.length + 1 && guard <= points.length + 2);
+    return hull.length >= 3 ? hull : points;
 }}
 function isBalanced(com, bos) {{
     const px=com.groundX, pz=com.groundZ; let inside=false; const n=bos.length;
@@ -1667,134 +2122,19 @@ function updateCOMVisuals(com, bos, bal) {{
     comDisc.material.color.setHex(bal.inside ? 0x22ff22 : 0xff2222);
     bosLineMat.color.setHex(bal.inside ? 0x44ff88 : 0xff6644);
 }}
-function updateGhostTorso(pose, optLean) {{
-    if (optLean === null || optLean === undefined) {{ ghostTorsoLine.visible = false; return; }}
-    const testP = AP ? {{ ...AP, forwardLean: optLean }} : {{ forwardLean: optLean }};
-    const fd = reps[curRep] && reps[curRep][curFrame];
-    const ph = fd && fd.phase !== undefined ? fd.phase : 0;
-    const gp = computeSquatPose(ph, testP);
-    const gPos = new Float32Array([gp.hipMidX, gp.hipMidY, 0, gp.shoulderMidX, gp.shoulderMidY, 0]);
-    ghostTorsoGeo.setAttribute('position', new THREE.Float32BufferAttribute(gPos, 3));
-    ghostTorsoLine.computeLineDistances(); ghostTorsoLine.visible = true;
-}}
-
-let _cachedOptimal = null, _lastOptKey = '';
-function getOptimalCached(params) {{
-    const key = JSON.stringify([params.maxKneeFlex, params.stanceWidth, params.toeOut, params.dorsiRatio,
-                                params.bodyScale, params.torsoRatio, params.thighRatio, params.shinRatio,
-                                params.barbellWeight, params.bodyMass]);
-    if (key !== _lastOptKey) {{
-        _lastOptKey = key;
-        _cachedOptimal = null;
-        const bw = params.barbellWeight || 0, bm = params.bodyMass || 75;
-        for (let d = 0; d <= 60; d += 0.5) {{
-            const tp = {{ ...params, forwardLean: d }};
-            const pose = computeSquatPose(0.5, tp); // peak = phase 0.5 on sin profile? No - peak = 1.0 since phase = depth
-            const scaledFl = REF.foot_len * (params.bodyScale || 1.0) * (params.footRatio || 1.0);
-            const bos = computeBOS(pose.kpts, pose.toeOutRad, scaledFl);
-            const com = computeCOM(pose.kpts, bw, bm, scaledFl);
-            const bal = isBalanced(com, bos);
-            if (bal.inside && bal.marginRatio >= 0.20) {{ _cachedOptimal = d; break; }}
-        }}
-    }}
-    return _cachedOptimal;
-}}
-
-// ======== THRESHOLD BARS ========
-function renderThresholdBars() {{
-    const leanBar = document.getElementById('sb-lean-threshold-bar');
-    const valgusBar = document.getElementById('sb-valgus-threshold-bar');
-    if (!leanBar || !valgusBar) return;
-    const lMax = 60;
-    leanBar.innerHTML = `<div class="band" style="width:${{LEAN_T.mild/lMax*100}}%; background:#2ecc71"></div>` +
-        `<div class="band" style="width:${{(LEAN_T.moderate-LEAN_T.mild)/lMax*100}}%; background:#f1c40f"></div>` +
-        `<div class="band" style="width:${{(LEAN_T.severe-LEAN_T.moderate)/lMax*100}}%; background:#e67e22"></div>` +
-        `<div class="band" style="width:${{Math.max(0,(lMax-LEAN_T.severe))/lMax*100}}%; background:#e74c3c"></div>`;
-    const vMax = 25;
-    valgusBar.innerHTML = `<div class="band" style="width:${{VALG_T.mild/vMax*100}}%; background:#2ecc71"></div>` +
-        `<div class="band" style="width:${{(VALG_T.moderate-VALG_T.mild)/vMax*100}}%; background:#f1c40f"></div>` +
-        `<div class="band" style="width:${{(VALG_T.severe-VALG_T.moderate)/vMax*100}}%; background:#e67e22"></div>` +
-        `<div class="band" style="width:${{Math.max(0,(vMax-VALG_T.severe))/vMax*100}}%; background:#e74c3c"></div>`;
-}}
-renderThresholdBars();
-
-// ======== SANDBOX PARAM READER ========
-function getSbSolverMode() {{
-    const checked = document.querySelector('input[name="sb-solver-mode"]:checked');
-    return checked ? checked.value : 'independent';
-}}
-document.querySelectorAll('input[name="sb-solver-mode"]').forEach(radio => {{
-    radio.addEventListener('change', () => {{
-        document.getElementById('sb-compensated-controls').style.display = getSbSolverMode() === 'compensated' ? '' : 'none';
-    }});
-}});
-// Ankle override slider binding
-(function() {{
-    const sl = document.getElementById('sb-ankle-override');
-    const vl = document.getElementById('sb-ankle-override-val');
-    if (sl && vl) sl.addEventListener('input', () => {{ vl.textContent = parseFloat(sl.value).toFixed(1) + '°'; }});
-}})();
 
 function _sv(id) {{ const el = document.getElementById(id); return el ? parseFloat(el.value) : 0; }}
-
-function getSandboxBodyParams() {{
-    return {{
-        bodyScale: _sv('sb-body-scale'),
-        torsoRatio: _sv('sb-torso-ratio'),
-        thighRatio: _sv('sb-thigh-ratio'),
-        shinRatio: _sv('sb-shin-ratio'),
-        shoulderWidthRatio: _sv('sb-shoulder-width-ratio'),
-        footRatio: _sv('sb-foot-ratio'),
-        stanceWidth: _sv('sb-stance-width'),
-        toeOut: _sv('sb-toe-out'),
-    }};
-}}
-
-function getSandboxDeltas() {{
-    return {{
-        kneeFlex: _sv('sb-d-knee-flex'),
-        dorsi: _sv('sb-d-dorsi'),
-        dorsiL: _sv('sb-d-dorsi-l'),
-        dorsiR: _sv('sb-d-dorsi-r'),
-        forwardLean: _sv('sb-d-forward-lean'),
-        valgus: _sv('sb-d-valgus'),
-        valgusL: _sv('sb-d-valgus-l'),
-        valgusR: _sv('sb-d-valgus-r'),
-    }};
-}}
 
 // ======== SANDBOX UPDATE ========
 
 function updateSandbox(fd) {{
     if (!fd || !fd.kpts) return;
-    const k = fd.kpts;
-    const a = fd.angles;
-    const deltas = getSandboxDeltas();
-    const bodyParams = getSandboxBodyParams();
 
-    let kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg;
-    let dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg;
-
-    if (!_slidersModified) {{
-        // No sliders touched: use captured data directly (exact 1:1 match)
-        kpts = new Float64Array(19 * 3);
-        for (let i = 0; i < 19; i++) {{ if (!k[i]) continue; kpts[i*3]=k[i][0]; kpts[i*3+1]=k[i][1]; kpts[i*3+2]=k[i][2]; }}
-        trunkAngleDeg = a.trunk_flexion;
-        avgKneeDeg = a.knee_flex;
-        dorsiDeg = (a.dorsi_l + a.dorsi_r) / 2;
-        totalTrunkLeanDeg = 180 - a.trunk_flexion;
-        dorsiLDeg = a.dorsi_l; dorsiRDeg = a.dorsi_r;
-        kfLDeg = a.knee_flex_l || a.knee_flex; kfRDeg = a.knee_flex_r || a.knee_flex;
-        valLDeg = a.knee_valgus_l; valRDeg = a.knee_valgus_r;
-    }} else {{
-        // Sliders modified: per-side delta FK from captured angles
-        // Locked shoulder from captured data (shoulder midpoint of this frame)
-        const lockedShoulder = (k[5] && k[6]) ?
-            {{ x: (k[5][0]+k[6][0])/2, y: (k[5][1]+k[6][1])/2 }} : null;
-        const pose = computePerSidePose(fd, deltas, bodyParams, lockedShoulder);
-        ({{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg,
-            dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg }} = pose);
-    }}
+    const pose = buildSandboxKpts(fd);
+    if (!pose) return;
+    const {{ kpts, trunkAngleDeg, avgKneeDeg, dorsiDeg, totalTrunkLeanDeg,
+        dorsiLDeg, dorsiRDeg, kfLDeg, kfRDeg, valLDeg, valRDeg,
+        hipFlexL, hipFlexR }} = pose;
 
     // Fault classification from effective per-side valgus
     const faultValgus = Math.max(Math.abs(valLDeg), Math.abs(valRDeg));
@@ -1823,14 +2163,39 @@ function updateSandbox(fd) {{
 
     hideSandboxVisuals();
 
-    // COM / BOS
-    const sbFootLen = AP ? (AP.foot_avg_m || REF.foot_len) : REF.foot_len;
-    const sbCom = computeCOM(kpts, 0, 75, sbFootLen);
-    const sbBos = computeBOS(kpts, 0, sbFootLen);
+    const sbBodyMass = _sv('sb-body-mass') || 75;
+    const sbBarWeight = _sv('sb-barbell-weight') || 0;
+    const sbCom = computeCOM(kpts, sbBarWeight, sbBodyMass, FOOT_LEN_M);
+    const sbBos = computeBOS(kpts, 0, FOOT_LEN_M);
     const sbBal = isBalanced(sbCom, sbBos);
     updateCOMVisuals(sbCom, sbBos, sbBal);
+    updateBalanceTargetVisual(kpts, FOOT_LEN_M);
+
+    if (_balanceLocked) {{
+        const trunkLeanOffset = 180 - trunkAngleDeg;
+        const leanSeverity = classifyLean(trunkAngleDeg);
+        const leanClass = leanSeverity === 'none' ? 'balance-ok' : 'balance-bad';
+        const trunkLeanEl = document.getElementById('sb-trunk-lean-status');
+        if (trunkLeanEl) {{
+            trunkLeanEl.innerHTML = `<span class="${{leanClass}}">Trunk lean: ${{trunkLeanOffset.toFixed(1)}}°</span> ${{leanSeverity !== 'none' ? sb(leanSeverity) : '✓'}}`;
+        }}
+    }}
+
+    // Barbell visual
+    if (sbBarWeight > 0 && _barbellPos) {{
+        barbellGroup.visible = true;
+        const barY = pose.shoulderMidY || 0;
+        const barX = pose.shoulderMidX || 0;
+        barbellGroup.position.set(barX - 0.05 * Math.cos(pose.totalTrunkLean || 0),
+                                   barY + 0.04 * Math.sin(pose.totalTrunkLean || 0), 0);
+        _barbellPos = {{ x: barbellGroup.position.x, y: barbellGroup.position.y, z: 0 }};
+    }} else {{
+        barbellGroup.visible = false;
+    }}
 
     const leanOff = (180 - trunkAngleDeg).toFixed(1);
+    const balPct = (sbBal.marginRatio * 100).toFixed(1);
+    const balCls = sbBal.inside && sbBal.marginRatio >= BALANCE_MARGIN_MIN ? 'balance-ok' : 'balance-bad';
     document.getElementById('sb-angles-info').innerHTML = `
         <span class="lbl">Knee Flex L/R:</span> <span class="val">${{kfLDeg.toFixed(1)}}° / ${{kfRDeg.toFixed(1)}}°</span>
         <span class="val" style="opacity:0.5">(avg ${{avgKneeDeg.toFixed(1)}}°)</span><br>
@@ -1840,9 +2205,11 @@ function updateSandbox(fd) {{
         <span class="val" style="opacity:0.5">(avg ${{dorsiDeg.toFixed(1)}}°)</span><br>
         <span class="lbl">Valgus L/R:</span> <span class="val">${{valLDeg.toFixed(1)}}° / ${{valRDeg.toFixed(1)}}°</span>
         ${{valgusSev !== 'none' ? sb(valgusSev) : ''}}<br>
-        <span class="lbl">Hip Flex L/R:</span> <span class="val">${{a.hip_flex_l.toFixed(1)}}° / ${{a.hip_flex_r.toFixed(1)}}°</span><br>
-        <span class="lbl">Phase:</span> <span class="val">${{(fd.phase || 0).toFixed(3)}}</span>
-        ${{_slidersModified ? '<span style="color:#4ecdc4; margin-left:8px">&Delta; active</span>' : ''}}`;
+        <span class="lbl">Hip Flex L/R:</span> <span class="val">${{hipFlexL.toFixed(1)}}° / ${{hipFlexR.toFixed(1)}}°</span><br>
+        <span class="lbl">Phase:</span> <span class="val">${{(fd.phase || 0).toFixed(3)}}</span><br>
+        <span class="lbl">Balance:</span> <span class="${{balCls}}">${{sbBal.inside ? 'OK' : 'UNSTABLE'}}</span>
+        <span class="val" style="opacity:0.5"> (margin ${{balPct}}%)</span>
+        ${{_balanceLocked ? '<span style="color:#f0a040; margin-left:8px">COM locked</span>' : ''}}`;
 
     document.getElementById('info-overlay').innerHTML = `
         <span style="color:#4ecdc4">SANDBOX</span>
@@ -1907,20 +2274,64 @@ def main():
                         help="Output video path (default: recordings/squat_YYYYMMDD_HHMMSS.mp4)")
     parser.add_argument("--camera", "-c", type=int, default=0, help="Camera device ID")
     parser.add_argument("--no-open", action="store_true", help="Don't auto-open HTML in browser")
+    parser.add_argument(
+        "--refit",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="SESSION",
+        help="Regenerate HTML from last session (or a .session.json path); skips webcam capture",
+    )
+    parser.add_argument(
+        "--shoe-size-eur",
+        type=float,
+        default=46,
+        help="EU shoe size for foot length in sandbox balance (default: 46 ≈ 29.3 cm)",
+    )
     args = parser.parse_args()
 
     recordings_dir = Path(__file__).parent.parent / "recordings"
     recordings_dir.mkdir(exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if args.refit is not None:
+        if args.refit:
+            session_path = Path(args.refit)
+        else:
+            session_path = resolve_last_session_path(recordings_dir)
+            if session_path is None:
+                print(
+                    "ERROR: No saved session found. Run a full capture first "
+                    "(creates recordings/*.session.json)."
+                )
+                sys.exit(1)
+
+        if args.output:
+            html_path = Path(args.output)
+            if html_path.suffix.lower() != ".html":
+                html_path = html_path.with_suffix(".html")
+        else:
+            html_path = recordings_dir / f"squat_refit_{timestamp}.html"
+
+        run_refit(
+            session_path,
+            html_path,
+            open_browser=not args.no_open,
+            shoe_size_eur=args.shoe_size_eur,
+        )
+        return
+
     video_path = Path(args.output) if args.output else recordings_dir / f"squat_{timestamp}.mp4"
     html_path = video_path.with_suffix(".html")
+    session_path = video_path.with_suffix(".session.json")
 
     print("=" * 50)
     print("  SQUAT CAPTURE & 3D REPLAY")
     print("=" * 50)
-    print(f"  Video → {video_path}")
-    print(f"  HTML  → {html_path}")
+    print(f"  Video   → {video_path}")
+    print(f"  HTML    → {html_path}")
+    print(f"  Session → {session_path}")
     print(f"  Reps to capture: {TARGET_REPS}")
     print("=" * 50)
 
@@ -1933,33 +2344,43 @@ def main():
     print(f"\nProcessing {len(reps)} reps...")
     print(f"  Using rep 1 as baseline, replaying reps 2-{len(reps)}")
 
-    rep_frame_slices = []
-    for start, end in rep_boundaries:
-        rep_slice = [f for f in frames_data[start:end + 1] if f is not None]
-        rep_frame_slices.append(rep_slice)
-
-    for s in rep_frame_slices:
-        ground_and_center(s)
-        add_phase_to_rep(s)
-
-    baseline = compute_baseline(rep_frame_slices[0])
+    baseline, replay_reps, athlete_params = process_captured_reps(
+        frames_data, rep_boundaries, bone_cstr,
+    )
     print(f"  Baseline trunk offset: {baseline['peakTrunkOffset']}°")
     print(f"  Lean thresholds: {baseline['leanThresholds']}")
     print(f"  Valgus thresholds: {baseline['valgusThresholds']}")
 
-    athlete_params = compute_athlete_params(frames_data, rep_boundaries, bone_cstr)
     if athlete_params:
-        print(f"  Athlete params:")
-        print(f"    Stance width: {athlete_params['stanceWidth']}x  Toe-out: {athlete_params['toeOut']}°")
-        print(f"    Dorsi ratio: {athlete_params['dorsiRatio']}  Body scale: {athlete_params['bodyScale']}")
-        print(f"    Proportions: torso={athlete_params['torsoRatio']} thigh={athlete_params['thighRatio']} shin={athlete_params['shinRatio']}")
+        print("  Athlete params:")
+        print(f"    Stance width: {athlete_params['stanceWidth']}x  "
+              f"Toe-out: {athlete_params['toeOut']}°")
+        print(f"    Dorsi ratio: {athlete_params['dorsiRatio']}  "
+              f"Body scale: {athlete_params['bodyScale']}")
+        print(f"    Proportions: torso={athlete_params['torsoRatio']} "
+              f"thigh={athlete_params['thighRatio']} shin={athlete_params['shinRatio']}")
 
-    replay_reps = rep_frame_slices[1:]
+    save_session(
+        session_path,
+        source_video=video_path,
+        fps=fps,
+        baseline=baseline,
+        athlete_params=athlete_params,
+        replay_reps=replay_reps,
+        rep_count=len(reps),
+    )
+    print(f"  Session saved: {session_path}")
 
-    html = build_html(baseline, replay_reps, fps, athlete_params)
+    foot_length_m = eur_size_to_foot_length_m(args.shoe_size_eur)
+    print(f"  Shoe size: EU {args.shoe_size_eur} → foot length {foot_length_m * 100:.1f} cm")
+
+    html = build_html(
+        baseline, replay_reps, fps, athlete_params, foot_length_m=foot_length_m,
+    )
     html_path.write_text(html)
     print(f"\nVideo saved: {video_path}")
     print(f"HTML saved:  {html_path}")
+    print(f"Next refit:  python scripts/visualize_video_squats.py --refit")
 
     if not args.no_open:
         webbrowser.open(f"file://{html_path.resolve()}")
