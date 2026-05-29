@@ -70,8 +70,6 @@ class PredictiveStateEstimator:
             hip_flexion_r=_extrapolate(
                 angles.hip_flexion_r, derivatives.hip_velocity_r
             ),
-            # Hip adduction/rotation: no velocity tracked yet,
-            # so use current values (no extrapolation)
             hip_adduction_l=angles.hip_adduction_l,
             hip_adduction_r=angles.hip_adduction_r,
             hip_rotation_l=angles.hip_rotation_l,
@@ -83,18 +81,29 @@ class PredictiveStateEstimator:
             knee_flexion_r=_extrapolate(
                 angles.knee_flexion_r, derivatives.knee_velocity_r
             ),
-            # Ankle: no velocity tracked, use current
             ankle_dorsiflexion_l=angles.ankle_dorsiflexion_l,
             ankle_dorsiflexion_r=angles.ankle_dorsiflexion_r,
-            # Trunk: no velocity tracked, use current
+            # Pass through fields with no velocity tracking
+            knee_valgus_l=angles.knee_valgus_l,
+            knee_valgus_r=angles.knee_valgus_r,
+            foot_confidence_l=angles.foot_confidence_l,
+            foot_confidence_r=angles.foot_confidence_r,
+            shoulder_flexion_l=angles.shoulder_flexion_l,
+            shoulder_flexion_r=angles.shoulder_flexion_r,
+            shoulder_abduction_l=angles.shoulder_abduction_l,
+            shoulder_abduction_r=angles.shoulder_abduction_r,
+            elbow_flexion_l=angles.elbow_flexion_l,
+            elbow_flexion_r=angles.elbow_flexion_r,
+            wrist_y_l=angles.wrist_y_l,
+            wrist_y_r=angles.wrist_y_r,
+            wrist_x_l=angles.wrist_x_l,
+            wrist_x_r=angles.wrist_x_r,
             trunk_flexion=angles.trunk_flexion,
             trunk_lateral_flexion=angles.trunk_lateral_flexion,
             trunk_rotation=angles.trunk_rotation,
-            # Pelvis: no velocity tracked, use current
             pelvis_tilt=angles.pelvis_tilt,
             pelvis_list=angles.pelvis_list,
             pelvis_rotation=angles.pelvis_rotation,
-            # Metadata
             timestamp=angles.timestamp,
             frame_index=angles.frame_index,
         )

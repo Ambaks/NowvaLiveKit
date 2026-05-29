@@ -5,8 +5,6 @@ Optimized for e2-micro instance
 IMPORTANT: This config uses only 2 workers instead of 4 to fit in 1GB RAM.
 For e2-small (2GB RAM), you can increase workers to 4.
 """
-import multiprocessing
-
 # Server socket
 bind = "127.0.0.1:8000"
 backlog = 512  # Reduced from 2048 for low-memory server
@@ -44,7 +42,6 @@ preload_app = True
 
 # Worker lifecycle
 graceful_timeout = 30  # Time to wait for workers to finish during graceful shutdown
-max_requests_jitter = 25  # Randomize max_requests to avoid all workers restarting at once
 
 # Memory optimization
 # Worker recycling helps prevent memory leaks

@@ -5,7 +5,7 @@ Handles creation and status tracking of program generation jobs
 from sqlalchemy.orm import Session
 from db.models import ProgramGenerationJob
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -138,11 +138,11 @@ def update_job_status(
 
     # Set started_at when status changes to in_progress
     if status == "in_progress" and not job.started_at:
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now(timezone.utc)
 
     # Set completed_at when job finishes (success or failure)
     if status in ["completed", "failed"] and not job.completed_at:
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
 
     if program_id:
         job.program_id = program_id

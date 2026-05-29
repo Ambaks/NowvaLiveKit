@@ -1,6 +1,7 @@
 """
 LiveKit router for generating room tokens and managing voice agent connections
 """
+import json
 import os
 import logging
 from typing import Optional
@@ -81,7 +82,7 @@ async def create_room_token(
                     can_publish_data=True,
                 )
             )
-            .with_metadata(f'{{"email": "{email}"}}')
+            .with_metadata(json.dumps({"email": email}))
         )
 
         # Generate the JWT token

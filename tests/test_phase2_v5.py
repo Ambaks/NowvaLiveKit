@@ -5,7 +5,8 @@ Tests scoring, prescription, and prompt formatting.
 """
 
 import sys
-sys.path.insert(0, 'src')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from program_generator_v5.scoring import compute_exercise_score
 from program_generator_v5.utils import prescribe_exercise, get_pattern_fill_priority

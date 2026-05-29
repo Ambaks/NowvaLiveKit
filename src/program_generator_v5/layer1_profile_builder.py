@@ -143,7 +143,7 @@ def build_profile_from_structured(data: dict) -> AthleteProfile:
     # V6: In-season auto-adjustments
     if training_season == TrainingSeason.IN_SEASON:
         # Cap training days: max(2, days - games)
-        training_days_per_week = max(2, min(training_days_per_week, training_days_per_week - games_per_week))
+        training_days_per_week = max(2, training_days_per_week - games_per_week)
 
     # ── Compute Derived Fields ──────────────────────────────────────────────
 

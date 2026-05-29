@@ -5,8 +5,6 @@ MainMenuAgent - Primary interaction hub with schedule management, workout start,
 import logging
 import os
 import re
-from typing import Optional
-
 from livekit.agents import RunContext
 from livekit.agents.llm import function_tool
 
@@ -14,7 +12,6 @@ from agents.prompts import get_main_menu_prompt
 from agents.shared.base_agent import BaseNovaAgent
 from agents.shared.helpers import normalize_exercise_name, check_calibration, start_calibration_mode
 from db.database import SessionLocal
-from db.program_utils import has_any_programs
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +82,6 @@ class MainMenuAgent(BaseNovaAgent):
 
             # Check calibration for the first exercise
             calibration_profile = await check_calibration(user_id, exercise_name)
-            needs_calibration = calibration_profile is None
 
             if calibration_profile:
                 self.state.set("workout.calibration_profile", calibration_profile)
@@ -188,7 +184,6 @@ class MainMenuAgent(BaseNovaAgent):
 
         # Check calibration
         calibration_profile = await check_calibration(self.user_id, exercise_name)
-        needs_calibration = calibration_profile is None
 
         if calibration_profile:
             self.state.set("workout.calibration_profile", calibration_profile)
@@ -359,7 +354,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         return extracted
 
-    async def _enter_program_creation_mode(self, db, user_id: str, name: str, extracted_params: dict, user_request: str = "") -> str:
+    async def _enter_program_creation_mode(self, db, user_id: str, extracted_params: dict, user_request: str = "") -> str:
         """Shared logic for entering program creation mode."""
         from db.models import User
 
@@ -426,7 +421,7 @@ class MainMenuAgent(BaseNovaAgent):
         db = SessionLocal()
         try:
             # Enter program creation mode (caches user data, stores params, switches mode)
-            await self._enter_program_creation_mode(db, user_id, name, extracted_params, user_request)
+            await self._enter_program_creation_mode(db, user_id, extracted_params, user_request)
 
             # Handoff to ProgramCreationAgent
             await self._suppress_turn_detection()

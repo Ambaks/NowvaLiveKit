@@ -112,15 +112,16 @@ def build_program(
         # Between mesocycles: reset primary compound tracking
         # (so new mesocycle gets fresh compounds)
         # But keep general recently_used to avoid too-quick repeats
-        if week_profile.week_in_mesocycle == 4:  # End of mesocycle (deload week)
+        if week_profile.is_deload:
             # Clear "was_primary" flags but keep the exercise usage history
             for ex_id in recently_used:
                 recently_used[ex_id] = [
                     (week_num, False) for week_num, _ in recently_used[ex_id]
                 ]
 
-    # Calculate program totals
-    total_sets = sum(w.weekly_volume_actual.get(m.value, 0) for w in built_weeks for m in MuscleGroup)
+    total_sets = sum(
+        ex.num_sets for week in built_weeks for workout in week.workouts for ex in workout.exercises
+    )
     total_workouts = sum(len(w.workouts) for w in built_weeks)
     unique_exercises = len(set(
         ex.exercise_id
@@ -552,7 +553,7 @@ def _build_session(
                     MovementPattern.HORIZONTAL_PUSH, MovementPattern.HORIZONTAL_PULL,
                 ]
                 if is_bodyweight:
-                    bonus -= 30 if is_foundation else -10
+                    bonus -= 30 if is_foundation else 10
 
                 # BUG 4 FIX: Extra bonus for foundation movement patterns
                 # These are the "big 4" movements that should anchor any serious program

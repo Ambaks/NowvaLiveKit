@@ -4,7 +4,8 @@ View Program Script
 Fetches a generated workout program from the database and displays it in a formatted markdown file.
 """
 import sys
-sys.path.insert(0, 'src')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from db.database import SessionLocal
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set

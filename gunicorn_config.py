@@ -1,7 +1,6 @@
 """
 Gunicorn Configuration for Production
 """
-import multiprocessing
 import os
 
 # Server socket

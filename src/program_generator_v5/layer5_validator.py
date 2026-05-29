@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 from typing import Optional
-from copy import deepcopy
 
 from .schemas import (
     AthleteProfile,
@@ -36,7 +35,6 @@ from .schemas import (
     MovementPattern,
     MuscleGroup,
     MutationResult,
-    TrainingSeason,
 )
 from .volume_tables import get_volume_targets, VOLUME_TABLES
 from .exercise_library import EXERCISE_LIBRARY
@@ -708,21 +706,21 @@ def _check_correct_periodization(
     """PER_003: Correct periodization model for goal."""
     issues = []
 
-    expected = {
-        "hypertrophy": "volume_ramp",
-        "strength": "linear_intensity",
-        "power": "concurrent",
+    valid_models_for_goal = {
+        "hypertrophy": {"volume_ramp", "dup", "block"},
+        "strength": {"linear_intensity", "dup", "block"},
+        "power": {"concurrent", "block"},
     }
 
-    expected_model = expected.get(profile.training_goal)
-    if expected_model and strategy.periodization_model != expected_model:
+    allowed = valid_models_for_goal.get(profile.training_goal)
+    if allowed and strategy.periodization_model not in allowed and strategy.periodization_model != "maintenance":
         issues.append(_issue(
             rule_id="PER_003",
             severity="warning",
-            message=f"Goal '{profile.training_goal}' typically uses '{expected_model}', got '{strategy.periodization_model}'",
+            message=f"Goal '{profile.training_goal}' typically uses one of {sorted(allowed)}, got '{strategy.periodization_model}'",
             details={
                 "goal": profile.training_goal,
-                "expected_model": expected_model,
+                "allowed_models": sorted(allowed),
                 "actual_model": strategy.periodization_model,
             },
         ))

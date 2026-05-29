@@ -12,13 +12,7 @@ Key Features:
 from db.database import SessionLocal
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set
 from .job_manager import update_job_status
-from ..schemas.program_schemas import (
-    ProgramBatchSchema,
-    WeekSchema,
-    SetSchema,
-    ExerciseSchema,
-    WorkoutSchema
-)
+from ..schemas.program_schemas import ProgramBatchSchema
 import asyncio
 from openai import AsyncOpenAI
 import os

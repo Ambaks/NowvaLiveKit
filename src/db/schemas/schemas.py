@@ -1,6 +1,7 @@
 from datetime import datetime, date
 from typing import List, Optional
-from pydantic import BaseModel
+from uuid import UUID
+from pydantic import BaseModel, ConfigDict
 
 
 # -------------------------
@@ -18,11 +19,10 @@ class UserCreate(UserBase):
 
 
 class UserRead(UserBase):
-    id: int
+    id: UUID
     created_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -40,8 +40,7 @@ class ProgramTemplateRead(ProgramTemplateBase):
     id: int
     created_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -58,8 +57,7 @@ class SetBase(BaseModel):
 class SetRead(SetBase):
     id: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -75,8 +73,7 @@ class ExerciseBase(BaseModel):
 class ExerciseRead(ExerciseBase):
     id: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -92,8 +89,7 @@ class WorkoutExerciseRead(WorkoutExerciseBase):
     exercise: ExerciseRead
     sets: List[SetRead] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -109,8 +105,7 @@ class WorkoutRead(WorkoutBase):
     id: int
     workout_exercises: List[WorkoutExerciseRead] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -127,8 +122,7 @@ class UserGeneratedProgramRead(UserGeneratedProgramBase):
     id: int
     workouts: List[WorkoutRead] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -146,8 +140,7 @@ class PartnerProgramRead(PartnerProgramBase):
     id: int
     workouts: List[WorkoutRead] = []
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -163,8 +156,7 @@ class ProgressLogRead(ProgressLogBase):
     id: int
     completed_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -------------------------
@@ -178,5 +170,4 @@ class ScheduleBase(BaseModel):
 class ScheduleRead(ScheduleBase):
     id: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)

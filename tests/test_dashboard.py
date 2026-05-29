@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from biomechanics.analysis.rep_segmenter import segment_set
 from biomechanics.viz.html_dashboard import generate_set_dashboard, generate_session_dashboard

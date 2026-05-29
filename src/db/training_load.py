@@ -11,7 +11,7 @@ from sqlalchemy import and_, func, desc
 
 from .models import (
     TrainingLoadMetrics, DeloadHistory, ProgressLog,
-    Schedule, Set, WorkoutExercise, User
+    Schedule, Set, Workout, WorkoutExercise, User
 )
 from .schedule_utils import apply_deload_week
 
@@ -79,7 +79,7 @@ def calculate_weekly_training_load(
 
     for schedule in completed_schedules:
         # Get progress logs for this workout
-        logs = db.query(ProgressLog).join(Set).join(WorkoutExercise).join(Schedule).filter(
+        logs = db.query(ProgressLog).join(Set).join(WorkoutExercise).join(Workout).join(Schedule).filter(
             Schedule.id == schedule.id
         ).all()
 

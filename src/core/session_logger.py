@@ -249,8 +249,8 @@ class SessionLogger:
         """Flush final events and generate summary report"""
         self.log_system_event("session_end")
 
-        # Final flush
-        self._flush_to_csv()
+        with self._lock:
+            self._flush_to_csv()
 
         # Generate summary
         summary = self._generate_summary()

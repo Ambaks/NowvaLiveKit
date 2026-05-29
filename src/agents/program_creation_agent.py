@@ -464,6 +464,9 @@ class ProgramCreationAgent(BaseNovaAgent):
                 if age < 13 or age > 100:
                     return None, f"That age seems unusual. Say: 'Hmm, that age doesn't seem right. How old are you?' Keep it friendly."
 
+                if sex is None:
+                    return None, "I got your age but I still need your sex. Say: 'Are you male or female?' Keep it simple."
+
                 sex_normalized = sex.lower().strip()
                 if sex_normalized in ["m", "male", "man", "boy"]:
                     sex_normalized = "male"

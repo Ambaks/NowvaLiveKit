@@ -85,7 +85,7 @@ async def check_program_eligibility(
         200 OK with eligibility info if allowed
         429 Too Many Requests if rate limited
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     email = request.get("email")
     if not email:
@@ -102,7 +102,7 @@ async def check_program_eligibility(
         }
 
     # Check if user has generated a program in the last 20 minutes
-    cooldown_cutoff = datetime.utcnow() - timedelta(minutes=20)
+    cooldown_cutoff = datetime.now(timezone.utc) - timedelta(minutes=20)
     recent_program = db.query(UserGeneratedProgram).filter(
         UserGeneratedProgram.user_id == user.id,
         UserGeneratedProgram.created_at >= cooldown_cutoff
@@ -111,7 +111,7 @@ async def check_program_eligibility(
     if recent_program:
         # Calculate when they can generate next
         next_allowed = recent_program.created_at + timedelta(minutes=20)
-        time_remaining = next_allowed - datetime.utcnow()
+        time_remaining = next_allowed - datetime.now(timezone.utc)
         minutes_remaining = max(1, (time_remaining.seconds + 59) // 60)
 
         raise HTTPException(

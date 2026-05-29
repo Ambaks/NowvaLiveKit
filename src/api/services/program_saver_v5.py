@@ -20,7 +20,7 @@ import traceback
 
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set, Schedule
 from db.schedule_utils import create_schedule_for_program, get_next_monday
-from .v5_adapter import convert_v5_output_to_html_format, get_user_data_from_request
+from .v5_adapter import convert_v5_output_to_html_format
 
 
 def save_program_to_db_v5(

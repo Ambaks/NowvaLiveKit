@@ -18,12 +18,6 @@ OPENAI_PRICING = {
         "output": 0.600 / 1_000_000,     # $0.60 per 1M tokens
         "cached_input": 0.075 / 1_000_000
     },
-    # Cascade pipeline LLM (OpenAI GPT-4o-mini)
-    "gpt-4o-mini": {
-        "input": 0.15 / 1_000_000,           # $0.15 per 1M tokens
-        "output": 0.60 / 1_000_000,          # $0.60 per 1M tokens
-        "cached_input": 0.075 / 1_000_000,   # 50% discount
-    },
     # GPT-5 Models (preview/internal - using estimated pricing)
     "gpt-5.2": {
         "input": 3.00 / 1_000_000,       # Estimated: slightly higher than gpt-4o
@@ -190,7 +184,6 @@ def calculate_rag_retrieval_cost(
     # Voyage AI embedding cost
     embedding_cost = query_tokens * VOYAGE_PRICING["voyage-3"]["input"]
 
-    # Cohere reranking cost (per search, not per document)
-    reranking_cost = COHERE_PRICING["rerank-v3.5"] / 1000
+    reranking_cost = COHERE_PRICING["rerank-v3.5"]
 
     return embedding_cost + reranking_cost

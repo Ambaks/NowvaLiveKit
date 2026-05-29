@@ -159,7 +159,7 @@ if __name__ == "__main__":
     async def test():
         result = await run_console_voice_onboarding()
         if result:
-            username, email = result
+            username, email, process = result
             print(f"\n✓ Onboarding successful!")
             print(f"  Username: {username}")
             print(f"  Email: {email}")

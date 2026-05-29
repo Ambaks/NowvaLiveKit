@@ -26,7 +26,7 @@ from .layer2_strategy_engine import build_strategy
 from .layer3_volume_engine import calculate_volume
 from .layer4_program_builder import build_program, review_and_refine_program
 from .layer5_validator import validate_and_fix, llm_full_program_review, get_validation_summary
-from .layer6_serializer import serialize_to_v3, serialize_summary
+from .layer6_serializer import serialize_to_v3
 
 
 logger = logging.getLogger(__name__)

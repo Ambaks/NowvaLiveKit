@@ -66,7 +66,7 @@ class CoachingService:
         if self._started:
             return
 
-        self._event_loop = asyncio.get_event_loop()
+        self._event_loop = asyncio.get_running_loop()
         self._init_orchestrator()
         asyncio.create_task(self._start_ipc_listener())
 
