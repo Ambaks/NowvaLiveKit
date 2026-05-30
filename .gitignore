@@ -154,8 +154,8 @@ nowva_pitch.pptx
 # Graphify files
 graphify-out/*
 
-# Claude
-claude.md
+# Claude (local settings stay out of repo)
+.claude/settings.local.json
 
 # Deprecated files (if any)
 deprecated/*
