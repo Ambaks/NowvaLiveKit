@@ -208,6 +208,8 @@ class HypothesisEngine:
             for key, value in hypothesis.parameter_delta.items():
                 if key == "__foot_target_delta":
                     foot_target_deltas.append(value)
+                elif isinstance(value, str):
+                    combined[key] = value
                 else:
                     combined[key] = combined.get(key, 0.0) + value
 

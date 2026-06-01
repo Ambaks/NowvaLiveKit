@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 
 from ..types import RepKinematicSummary
+from .parameter_deltas import dorsi_driven_targets
 
 
 def expected_trunk_lean_geometric(anthro: dict) -> float:
@@ -45,15 +46,27 @@ def test_femur_torso_ratio(
 def test_narrow_stance(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> float:
-    hip_width = anthro.get("hip_width", 0.30)
-    shoulder_width = anthro.get("shoulder_width", 0.40)
-    ideal_ratio = 0.9 + (hip_width / max(shoulder_width, 0.01) - 0.7) * 0.5
-    ideal_ratio = max(0.8, min(1.3, ideal_ratio))
+    depth_signal = 0.0
+    if features.depth_class_int < 3:
+        depth_signal = (3 - features.depth_class_int) / 3.0
+
+    lean_signal = 0.0
+    if features.trunk_pitch_at_bottom > 40.0:
+        lean_signal = _clamp((features.trunk_pitch_at_bottom - 40.0) / 20.0)
+
+    symptom_severity = max(depth_signal, lean_signal)
+    if symptom_severity <= 0.0:
+        return 0.0
+
+    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    ideal_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
 
     current_ratio = features.stance_width_ratio
     if current_ratio >= ideal_ratio:
         return 0.0
-    return _clamp((ideal_ratio - current_ratio) / 0.3)
+
+    gap_factor = _clamp((ideal_ratio - current_ratio) / 0.5)
+    return symptom_severity * gap_factor
 
 
 def test_narrow_foot_angle(
@@ -62,10 +75,12 @@ def test_narrow_foot_angle(
     avg_foot_angle = (
         features.foot_direction_angle_l + features.foot_direction_angle_r
     ) / 2.0
-    ideal_minimum = 15.0
+    dorsiflexion_capacity = rom.get("dorsiflexion_drop", 35.0)
+    _, target_toe_out = dorsi_driven_targets(dorsiflexion_capacity, anthro)
+    ideal_minimum = max(15.0, target_toe_out)
     if avg_foot_angle >= ideal_minimum:
         return 0.0
-    return _clamp((ideal_minimum - avg_foot_angle) / 15.0)
+    return _clamp((ideal_minimum - avg_foot_angle) / ideal_minimum)
 
 
 def test_bracing_failure(
@@ -84,7 +99,10 @@ def test_bracing_failure(
 
     if ankle_is_limited:
         return _clamp(excess_lean / 20.0) * 0.3
-    return _clamp(excess_lean / 15.0)
+
+    stance_narrow = test_narrow_stance(features, anthro, rom)
+    lean_discount = stance_narrow * 0.6
+    return _clamp(excess_lean / 15.0) * (1.0 - lean_discount)
 
 
 def test_knee_track_cue(
@@ -129,10 +147,16 @@ def test_depth_unfamiliarity(
     hip_ok = hip_rom > 100.0
 
     if ankle_ok and hip_ok:
-        return 0.8
-    if ankle_ok or hip_ok:
-        return 0.4
-    return 0.1
+        base = 0.8
+    elif ankle_ok or hip_ok:
+        base = 0.4
+    else:
+        base = 0.1
+
+    stance_narrow = test_narrow_stance(features, anthro, rom)
+    foot_narrow = test_narrow_foot_angle(features, anthro, rom)
+    mechanical_explanation = max(stance_narrow, foot_narrow)
+    return base * (1.0 - mechanical_explanation * 0.8)
 
 
 def test_progressive_degradation(

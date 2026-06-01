@@ -51,7 +51,7 @@ depth_cue_unfamiliar:
   tier: 1
   evidence_test_fn: test_depth_unfamiliarity
   parameter_delta_fn: delta_increase_depth
-  explanation_template: "You have the mobility for deeper squats — practice paused reps at parallel to build confidence."
+  explanation_template: "You have the mobility for deeper squats — the ghost shows your target depth. Practice paused reps at parallel to build confidence."
 
 weight_too_heavy:
   description: "Load exceeds the athlete's ability to maintain form across the set"

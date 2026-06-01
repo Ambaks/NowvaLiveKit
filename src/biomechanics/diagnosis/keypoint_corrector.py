@@ -1,8 +1,8 @@
 """Geometric keypoint corrections for diagnosed squat faults.
 
-Applies tier-1 (cue-correctable) fixes directly in 19-keypoint space,
-replicating the same math as the viewer's bottomUpBuild, solveKnee,
-and applyCounterbalance JS functions.
+Applies tier-1 (cue-correctable) fixes using the same delta-FK approach
+as the viewer's bottomUpBuild / deformLowerBody JS functions. Stance width
+and toe-out changes propagate identically to the sandbox sliders.
 
 Joint indices (COCO 19-keypoint):
     0=nose, 1=L_eye, 2=R_eye, 3=L_ear, 4=R_ear,
@@ -34,12 +34,7 @@ def solve_knee(
     shin_length: float,
     ref_knee: np.ndarray,
 ) -> np.ndarray:
-    """2-link IK: find knee position satisfying bone length constraints.
-
-    Python port of the viewer's solveKnee JS function. Given fixed hip
-    and ankle, returns the knee position where |hip-knee| == thigh_length
-    and |knee-ankle| == shin_length. ref_knee disambiguates the bend plane.
-    """
+    """2-link IK: place knee so |hip-knee|==thigh and |knee-ankle|==shin."""
     ha_vec = ankle - hip
     distance = np.linalg.norm(ha_vec)
     if distance < 1e-9:
@@ -84,6 +79,122 @@ def rotate_y(vec: np.ndarray, angle_rad: float) -> np.ndarray:
     ])
 
 
+def rotate_about_axis(vec: np.ndarray, axis: np.ndarray, angle_rad: float) -> np.ndarray:
+    """Rodrigues rotation of vec about an arbitrary axis."""
+    axis_len = np.linalg.norm(axis)
+    if axis_len < 1e-9:
+        return vec.copy()
+    k = axis / axis_len
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    cross = np.cross(k, vec)
+    dot = np.dot(k, vec)
+    return vec * cos_a + cross * sin_a + k * dot * (1.0 - cos_a)
+
+
+def bottom_up_build(
+    captured: np.ndarray,
+    stance_width: float,
+    baseline_stance_width: float,
+    toe_out_delta_rad: float,
+    dorsi_delta_rad: float,
+    knee_flex_delta_rad: float,
+) -> np.ndarray | None:
+    """Python port of the viewer's bottomUpBuild JS function.
+
+    Rebuilds lower body (11-18) bottom-up from grounded feet using captured
+    bone vectors, overriding stance / toe-out / dorsiflexion. Hips fall out
+    of leg geometry (rigid pelvis reconciled by averaging).
+
+    Returns (19, 3) array or None if degenerate.
+    """
+    for idx in [HIP_L, HIP_R, KNEE_L, KNEE_R, ANKLE_L, ANKLE_R]:
+        if np.all(captured[idx] == 0):
+            return None
+
+    out = captured.copy()
+
+    hip_l = captured[HIP_L]
+    hip_r = captured[HIP_R]
+    lat_vec = np.array([hip_r[0] - hip_l[0], 0.0, hip_r[2] - hip_l[2]])
+    lat_len = np.linalg.norm(lat_vec)
+    if lat_len < 1e-9:
+        lat_len = 1e-9
+    lat_u = lat_vec / lat_len
+
+    ank_l = captured[ANKLE_L]
+    ank_r = captured[ANKLE_R]
+    ank_mid = np.array([(ank_l[0] + ank_r[0]) / 2.0, 0.0, (ank_l[2] + ank_r[2]) / 2.0])
+    span_vec = np.array([ank_r[0] - ank_l[0], 0.0, ank_r[2] - ank_l[2]])
+    span_len = np.linalg.norm(span_vec)
+    if span_len < 1e-9:
+        span_len = 1e-9
+    span_u = span_vec / span_len
+
+    span_scale = stance_width / max(baseline_stance_width, 1e-9)
+
+    sides = [
+        {"a_idx": ANKLE_L, "k_idx": KNEE_L, "h_idx": HIP_L, "t_idx": FOOT_L, "sign": -1.0},
+        {"a_idx": ANKLE_R, "k_idx": KNEE_R, "h_idx": HIP_R, "t_idx": FOOT_R, "sign": 1.0},
+    ]
+
+    hip_estimates = []
+    for side in sides:
+        a_idx = side["a_idx"]
+        k_idx = side["k_idx"]
+        h_idx = side["h_idx"]
+        t_idx = side["t_idx"]
+        sign = side["sign"]
+
+        a0 = captured[a_idx]
+        k0 = captured[k_idx]
+        h0 = captured[h_idx]
+
+        # 1. New grounded ankle: scale lateral span about ankle midpoint
+        half_dist = (span_len / 2.0) * span_scale * sign
+        new_ankle = np.array([
+            ank_mid[0] + span_u[0] * half_dist,
+            a0[1],
+            ank_mid[2] + span_u[2] * half_dist,
+        ])
+
+        # 2-3. Shin = captured (knee-ankle), yawed by toe-out, tilted by dorsi
+        shin = k0 - a0
+        shin = rotate_y(shin, sign * toe_out_delta_rad)
+        shin = rotate_about_axis(shin, lat_u, dorsi_delta_rad)
+        new_knee = new_ankle + shin
+
+        # 4. Thigh = captured (hip-knee), yawed with the leg
+        thigh = h0 - k0
+        thigh = rotate_y(thigh, sign * toe_out_delta_rad)
+        if abs(knee_flex_delta_rad) > 1e-9:
+            thigh = rotate_about_axis(thigh, lat_u, knee_flex_delta_rad)
+        hip_estimates.append(new_knee + thigh)
+
+        out[a_idx] = new_ankle
+        out[k_idx] = new_knee
+
+        # Foot vector yawed with the leg
+        t0 = captured[t_idx]
+        foot_vec = t0 - a0
+        foot_vec = rotate_y(foot_vec, sign * toe_out_delta_rad)
+        out[t_idx] = new_ankle + foot_vec
+
+    # 5. Rigid pelvis reconciliation: hip-mid = avg estimate, keep captured half-vector
+    hip_mid = (hip_estimates[0] + hip_estimates[1]) / 2.0
+    half_vec = (hip_r - hip_l) / 2.0
+    out[HIP_L] = hip_mid - half_vec
+    out[HIP_R] = hip_mid + half_vec
+
+    # 6. Re-ground guard
+    min_ankle_y = min(out[ANKLE_L][1], out[ANKLE_R][1])
+    if min_ankle_y < 0:
+        for idx in range(HIP_L, FOOT_R + 1):
+            out[idx][1] -= min_ankle_y
+
+    return out
+
+
 class KeypointCorrector:
     """Applies geometric corrections to 19 keypoints based on diagnosis."""
 
@@ -91,6 +202,8 @@ class KeypointCorrector:
         self,
         observed_kpts: list[list[float]],
         diagnosis: DiagnosisResult,
+        anthro: dict | None = None,
+        rom: dict | None = None,
     ) -> list[list[float]] | None:
         """Apply tier-1 corrections. Returns corrected kpts or None if no fixes needed."""
         tier1_causes = {
@@ -108,11 +221,18 @@ class KeypointCorrector:
         original_thigh_r = np.linalg.norm(kpts[KNEE_R] - kpts[HIP_R])
         original_shin_r = np.linalg.norm(kpts[ANKLE_R] - kpts[KNEE_R])
 
-        if "narrow_stance" in tier1_causes:
-            self._widen_stance(kpts, tier1_causes["narrow_stance"])
+        # Stance width + toe-out via delta-FK (same as sandbox sliders)
+        has_stance = "narrow_stance" in tier1_causes
+        has_toe_out = "narrow_foot_angle" in tier1_causes
+        if has_stance or has_toe_out:
+            self._apply_stance_toe_out_delta_fk(kpts, tier1_causes)
 
-        if "narrow_foot_angle" in tier1_causes:
-            self._increase_toe_out(kpts, tier1_causes["narrow_foot_angle"])
+        if "depth_cue_unfamiliar" in tier1_causes:
+            self._lower_to_depth(
+                kpts, tier1_causes["depth_cue_unfamiliar"],
+                original_thigh_l, original_shin_l,
+                original_thigh_r, original_shin_r,
+            )
 
         if "knee_track_cue" in tier1_causes:
             self._push_knees_out(kpts, tier1_causes["knee_track_cue"])
@@ -127,40 +247,83 @@ class KeypointCorrector:
             kpts, original_thigh_l, original_shin_l,
             original_thigh_r, original_shin_r,
         )
+
+        max_dorsi_deg = rom.get("dorsiflexion_drop") if rom else None
+        if max_dorsi_deg is not None:
+            self._enforce_dorsi_cap(
+                kpts, max_dorsi_deg,
+                original_thigh_l, original_shin_l,
+                original_thigh_r, original_shin_r,
+            )
+
         self._reground(kpts)
 
         return kpts.tolist()
 
-    def _widen_stance(self, kpts: np.ndarray, cause) -> None:
-        """Scale ankle distance about ankle midpoint."""
-        delta = cause.parameter_delta or {}
-        foot_delta = delta.get("__foot_target_delta")
-        if not foot_delta:
+    def _apply_stance_toe_out_delta_fk(
+        self, kpts: np.ndarray, tier1_causes: dict
+    ) -> None:
+        """Apply stance width + toe-out via delta-FK matching sandbox sliders."""
+        captured = kpts.copy()
+
+        # Compute baseline stance width from captured ankle span
+        ank_l = captured[ANKLE_L]
+        ank_r = captured[ANKLE_R]
+        span_dx = ank_r[0] - ank_l[0]
+        span_dz = ank_r[2] - ank_l[2]
+        baseline_stance = math.sqrt(span_dx**2 + span_dz**2)
+        if baseline_stance < 1e-6:
+            baseline_stance = 1e-6
+
+        # Target stance width from foot_target_delta
+        stance_delta = 0.0
+        if "narrow_stance" in tier1_causes:
+            delta = tier1_causes["narrow_stance"].parameter_delta or {}
+            foot_delta = delta.get("__foot_target_delta")
+            if foot_delta:
+                # Z shifts: left goes negative, right goes positive
+                stance_delta = foot_delta[5] - foot_delta[2]
+        target_stance = baseline_stance + stance_delta
+
+        # Toe-out delta from narrow_foot_angle
+        toe_out_delta_rad = 0.0
+        if "narrow_foot_angle" in tier1_causes:
+            delta = tier1_causes["narrow_foot_angle"].parameter_delta or {}
+            # L_ankle.ry is positive (external rotation left), use it as the per-side delta
+            toe_out_delta_rad = delta.get("L_ankle.ry", 0.0)
+
+        # Delta-FK: build base (identity) and mod (with corrections)
+        base = bottom_up_build(captured, baseline_stance, baseline_stance, 0.0, 0.0, 0.0)
+        mod = bottom_up_build(captured, target_stance, baseline_stance, toe_out_delta_rad, 0.0, 0.0)
+
+        if base is None or mod is None:
             return
 
-        ankle_mid = (kpts[ANKLE_L] + kpts[ANKLE_R]) / 2.0
+        # Apply delta to lower body (indices 11-18)
+        for idx in range(HIP_L, FOOT_R + 1):
+            delta_vec = mod[idx] - base[idx]
+            kpts[idx] += delta_vec
 
-        shift_l = np.array([foot_delta[0], foot_delta[1], foot_delta[2]])
-        shift_r = np.array([foot_delta[3], foot_delta[4], foot_delta[5]])
+        # Re-solve knees to preserve captured bone lengths
+        thigh_l = np.linalg.norm(captured[KNEE_L] - captured[HIP_L])
+        shin_l = np.linalg.norm(captured[ANKLE_L] - captured[KNEE_L])
+        thigh_r = np.linalg.norm(captured[KNEE_R] - captured[HIP_R])
+        shin_r = np.linalg.norm(captured[ANKLE_R] - captured[KNEE_R])
 
-        kpts[ANKLE_L] += shift_l
-        kpts[ANKLE_R] += shift_r
-        kpts[FOOT_L] += shift_l
-        kpts[FOOT_R] += shift_r
+        kpts[KNEE_L] = solve_knee(
+            kpts[HIP_L], kpts[ANKLE_L], thigh_l, shin_l, kpts[KNEE_L],
+        )
+        kpts[KNEE_R] = solve_knee(
+            kpts[HIP_R], kpts[ANKLE_R], thigh_r, shin_r, kpts[KNEE_R],
+        )
 
-    def _increase_toe_out(self, kpts: np.ndarray, cause) -> None:
-        """Rotate foot vectors about ankle Y-axis."""
-        delta = cause.parameter_delta or {}
-        delta_l_rad = delta.get("L_ankle.ry", 0.0)
-        delta_r_rad = delta.get("R_ankle.ry", 0.0)
+        # Upper body rides rigidly with the pelvis shift
+        cap_hip_mid = (captured[HIP_L] + captured[HIP_R]) / 2.0
+        new_hip_mid = (kpts[HIP_L] + kpts[HIP_R]) / 2.0
+        pelvis_shift = new_hip_mid - cap_hip_mid
 
-        if abs(delta_l_rad) > 1e-6:
-            foot_vec = kpts[FOOT_L] - kpts[ANKLE_L]
-            kpts[FOOT_L] = kpts[ANKLE_L] + rotate_y(foot_vec, delta_l_rad)
-
-        if abs(delta_r_rad) > 1e-6:
-            foot_vec = kpts[FOOT_R] - kpts[ANKLE_R]
-            kpts[FOOT_R] = kpts[ANKLE_R] + rotate_y(foot_vec, delta_r_rad)
+        for idx in UPPER_BODY_INDICES:
+            kpts[idx] += pelvis_shift
 
     def _push_knees_out(self, kpts: np.ndarray, cause) -> None:
         """Nudge knees laterally along the hip-lateral axis."""
@@ -196,10 +359,7 @@ class KeypointCorrector:
             kpts[idx] += shift_vec
 
     def _reduce_trunk_lean(self, kpts: np.ndarray, cause) -> None:
-        """Rotate upper body about hip midpoint in the sagittal plane.
-
-        Same math as applyCounterbalance in the viewer JS.
-        """
+        """Rotate upper body about hip midpoint in the sagittal plane."""
         delta = cause.parameter_delta or {}
         lean_delta_rad = delta.get("trunk.rx", 0.0)
         if abs(lean_delta_rad) < 1e-6:
@@ -226,6 +386,94 @@ class KeypointCorrector:
         for idx in UPPER_BODY_INDICES:
             kpts[idx][0] += offset_x
             kpts[idx][1] += offset_y
+
+    def _lower_to_depth(
+        self,
+        kpts: np.ndarray,
+        cause,
+        thigh_length_l: float,
+        shin_length_l: float,
+        thigh_length_r: float,
+        shin_length_r: float,
+    ) -> None:
+        """Lower hips to parallel (hip_y <= knee_y)."""
+        delta = cause.parameter_delta or {}
+        if delta.get("depth_target") != "parallel":
+            return
+
+        for _iteration in range(5):
+            hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
+            knee_mid_y = (kpts[KNEE_L][1] + kpts[KNEE_R][1]) / 2.0
+
+            if hip_mid_y <= knee_mid_y:
+                break
+
+            drop = hip_mid_y - knee_mid_y + 0.01
+
+            for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
+                kpts[idx][1] -= drop
+
+            kpts[KNEE_L] = solve_knee(
+                kpts[HIP_L], kpts[ANKLE_L],
+                thigh_length_l, shin_length_l, kpts[KNEE_L],
+            )
+            kpts[KNEE_R] = solve_knee(
+                kpts[HIP_R], kpts[ANKLE_R],
+                thigh_length_r, shin_length_r, kpts[KNEE_R],
+            )
+
+        min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
+        hip_floor = min_ankle_y + 0.05
+        for hip_idx in [HIP_L, HIP_R]:
+            if kpts[hip_idx][1] < hip_floor:
+                overshoot = hip_floor - kpts[hip_idx][1]
+                for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
+                    kpts[idx][1] += overshoot
+                break
+
+    @staticmethod
+    def _compute_dorsiflexion(knee: np.ndarray, ankle: np.ndarray) -> float:
+        """Shin angle from vertical in radians. 0 = perfectly vertical."""
+        shin_vec = ankle - knee
+        shin_vertical = -shin_vec[1]
+        shin_horizontal = math.sqrt(shin_vec[0] ** 2 + shin_vec[2] ** 2)
+        return math.atan2(shin_horizontal, max(shin_vertical, 1e-9))
+
+    def _enforce_dorsi_cap(
+        self,
+        kpts: np.ndarray,
+        max_dorsi_deg: float,
+        thigh_l: float,
+        shin_l: float,
+        thigh_r: float,
+        shin_r: float,
+    ) -> None:
+        """Raise hips if corrected dorsiflexion exceeds athlete's calibrated max."""
+        max_dorsi_rad = math.radians(max_dorsi_deg)
+        for _iteration in range(5):
+            max_excess = 0.0
+            for knee_idx, ankle_idx in [
+                (KNEE_L, ANKLE_L),
+                (KNEE_R, ANKLE_R),
+            ]:
+                dorsi_rad = self._compute_dorsiflexion(kpts[knee_idx], kpts[ankle_idx])
+                excess = dorsi_rad - max_dorsi_rad
+                if excess > max_excess:
+                    max_excess = excess
+
+            if max_excess < 0.001:
+                break
+
+            raise_amount = max_excess * 0.3
+            for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
+                kpts[idx][1] += raise_amount
+
+            kpts[KNEE_L] = solve_knee(
+                kpts[HIP_L], kpts[ANKLE_L], thigh_l, shin_l, kpts[KNEE_L],
+            )
+            kpts[KNEE_R] = solve_knee(
+                kpts[HIP_R], kpts[ANKLE_R], thigh_r, shin_r, kpts[KNEE_R],
+            )
 
     def _enforce_bone_lengths(
         self,
@@ -256,11 +504,7 @@ def build_morph_frames(
     corrected_kpts: list[list[float]],
     num_frames: int = 60,
 ) -> list[list[list[float]]]:
-    """Generate morph frames using Gaussian-tapered interpolation.
-
-    Frame 0 ≈ observed, midpoint ≈ corrected, frame N-1 ≈ observed.
-    Creates a smooth breathing/pulsing animation.
-    """
+    """Generate morph frames using Gaussian-tapered interpolation."""
     observed = np.array(observed_kpts)
     corrected = np.array(corrected_kpts)
 

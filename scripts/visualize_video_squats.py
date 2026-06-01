@@ -3118,8 +3118,11 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
         single_rep_features = build_set_features([rep_frames], athlete_params, baseline)
         rep_diagnosis = engine.diagnose(single_rep_features)
 
-        # Correction uses set-level diagnosis (tier-1 causes are set-scoped)
-        corrected_kpts = corrector.correct(observed_kpts, set_diagnosis)
+        corrected_kpts = corrector.correct(
+            observed_kpts, rep_diagnosis,
+            anthro=set_features.anthropometry,
+            rom=set_features.rom,
+        )
         has_correction = corrected_kpts is not None
         morph_frames = None
         if has_correction:

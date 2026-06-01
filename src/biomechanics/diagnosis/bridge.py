@@ -64,6 +64,18 @@ def classify_depth(knee_flex_degrees: float) -> int:
         return 4
 
 
+def compute_stance_width_ratio(kpts: list[list[float]], shoulder_width: float) -> float:
+    """Compute stance width as ankle XZ distance normalized by shoulder width."""
+    l_ankle = kpts[15]
+    r_ankle = kpts[16]
+    dx = l_ankle[0] - r_ankle[0]
+    dz = l_ankle[2] - r_ankle[2]
+    ankle_xz_dist = math.sqrt(dx * dx + dz * dz)
+    if shoulder_width < 1e-6:
+        return 1.0
+    return ankle_xz_dist / shoulder_width
+
+
 def build_rep_kinematic_summary(
     frame: dict,
     athlete_params: dict,
@@ -81,6 +93,9 @@ def build_rep_kinematic_summary(
     knee_flex = angles.get("knee_flex", 0.0)
     depth_class = classify_depth(knee_flex)
 
+    shoulder_width = athlete_params.get("shoulder_width_m", 0.40)
+    stance_ratio = compute_stance_width_ratio(kpts, shoulder_width)
+
     return RepKinematicSummary(
         rep_number=rep_number,
         trunk_pitch_at_bottom=trunk_pitch,
@@ -92,7 +107,7 @@ def build_rep_kinematic_summary(
         hip_y_r_at_bottom=kpts[12][1] * 100.0,
         knee_y_l_at_bottom=kpts[13][1] * 100.0,
         knee_y_r_at_bottom=kpts[14][1] * 100.0,
-        stance_width_ratio=athlete_params.get("stanceWidth", 1.0),
+        stance_width_ratio=stance_ratio,
         foot_direction_angle_l=foot_angle_l,
         foot_direction_angle_r=foot_angle_r,
         depth_class_int=depth_class,
@@ -110,6 +125,7 @@ def build_anthro_dict(athlete_params: dict) -> dict[str, float]:
         "femur_length_avg": femur_avg,
         "tibia_length_avg": athlete_params.get("tibia_avg_m", 0.43),
         "torso_length": torso_avg,
+        "foot_length": athlete_params.get("foot_avg_m", 0.26),
     }
 
 

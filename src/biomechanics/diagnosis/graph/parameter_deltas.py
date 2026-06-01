@@ -12,19 +12,62 @@ import math
 from ..types import RepKinematicSummary
 
 
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
+def dorsi_driven_targets(
+    dorsiflexion_capacity: float, anthro: dict
+) -> tuple[float, float]:
+    """Compute target stance ratio and toe-out from dorsiflexion + femur proportions.
+
+    Returns (target_stance_ratio_x_shoulder_width, target_toe_out_degrees).
+    """
+    femur_torso_ratio = anthro.get("femur_torso_ratio", 1.0)
+    dorsi_clamped = max(10.0, min(45.0, dorsiflexion_capacity))
+
+    dorsi_factor = _clamp((45.0 - dorsi_clamped) / 25.0)
+    femur_factor = _clamp((femur_torso_ratio - 0.70) / 0.30)
+
+    target_stance = (
+        1.1
+        + femur_factor * 0.5
+        + dorsi_factor * 0.5
+        + femur_factor * dorsi_factor * 0.3
+    )
+    target_stance = min(target_stance, 2.0)
+
+    target_toe_out = (
+        15.0
+        + femur_factor * 10.0
+        + dorsi_factor * 8.0
+        + femur_factor * dorsi_factor * 5.0
+    )
+
+    return (max(1.1, target_stance), max(15.0, min(40.0, target_toe_out)))
+
+
 def delta_widen_stance(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> dict[str, float]:
     current_ratio = features.stance_width_ratio
     shoulder_width = anthro.get("shoulder_width", 0.40)
-    target_ratio = max(1.0, current_ratio + 0.15)
+
+    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    dorsi_target_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
+
+    fixed_target = current_ratio + 0.15
+    target_ratio = max(dorsi_target_ratio, fixed_target)
+    target_ratio = max(1.0, target_ratio)
+
     width_increase_per_side = (target_ratio - current_ratio) * shoulder_width / 2.0
-    width_increase_per_side = min(width_increase_per_side, 0.05)
+    max_increase = max(0.0, 2.5 * shoulder_width / 2.0 - current_ratio * shoulder_width / 2.0)
+    width_increase_per_side = max(0.0, min(width_increase_per_side, max_increase))
 
     return {
         "__foot_target_delta": [
-            -width_increase_per_side, 0.0, 0.0,
-            width_increase_per_side, 0.0, 0.0,
+            0.0, 0.0, -width_increase_per_side,
+            0.0, 0.0, width_increase_per_side,
         ]
     }
 
@@ -35,8 +78,12 @@ def delta_widen_foot_angle(
     avg_current = (
         features.foot_direction_angle_l + features.foot_direction_angle_r
     ) / 2.0
-    target_angle = 22.0
-    delta_degrees = max(0.0, min(target_angle - avg_current, 12.0))
+
+    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    _, dorsi_target_angle = dorsi_driven_targets(dorsi_capacity, anthro)
+
+    target_angle = max(22.0, dorsi_target_angle)
+    delta_degrees = max(0.0, min(target_angle - avg_current, 50.0))
     delta_radians = math.radians(delta_degrees)
 
     return {
@@ -86,15 +133,7 @@ def delta_center_weight(
 
 def delta_increase_depth(
     features: RepKinematicSummary, anthro: dict, rom: dict
-) -> dict[str, float]:
-    depth_deficit = features.depth_class_int
-    extra_degrees = min((3 - depth_deficit) * 5.0 + 5.0, 15.0)
-    extra_degrees = max(extra_degrees, 8.0)
-    extra_radians = math.radians(extra_degrees)
-
+) -> dict:
     return {
-        "L_hip.rx": extra_radians,
-        "R_hip.rx": extra_radians,
-        "L_knee.rx": extra_radians,
-        "R_knee.rx": extra_radians,
+        "depth_target": "parallel",
     }
