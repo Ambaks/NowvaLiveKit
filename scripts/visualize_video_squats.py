@@ -1076,6 +1076,10 @@ h1 {{ font-size: 18px; font-weight: 600; color: #a0a0ff; margin-bottom: 4px; }}
                 <div id="diag-rep-score"></div>
             </div>
             <div id="diag-rep-tiers"></div>
+            <div class="section diagnosis" id="diag-voice-cues-section" style="display:none">
+                <div class="section-title"><span class="dot"></span> Voice Cues (LLM Input)</div>
+                <pre id="diag-voice-cues" class="mono" style="font-size:11px; color:#e0e0e0; background:#1a1a2e; padding:10px; border-radius:6px; white-space:pre-wrap; max-height:300px; overflow-y:auto;"></pre>
+            </div>
             <div class="section diagnosis" id="diag-morph-section" style="display:none">
                 <div class="section-title"><span class="dot"></span> Correction Preview</div>
                 <div class="diag-morph-controls">
@@ -2208,6 +2212,16 @@ function switchToDiagRepView(repIdx) {{
     // Tiers
     buildTierCards(document.getElementById('diag-rep-tiers'), repData.tiers, true);
 
+    // Voice cues
+    const vcSection = document.getElementById('diag-voice-cues-section');
+    const vcPre = document.getElementById('diag-voice-cues');
+    if (repData.voice_cues && Object.keys(repData.voice_cues).length > 0) {{
+        vcSection.style.display = '';
+        vcPre.textContent = JSON.stringify(repData.voice_cues, null, 2);
+    }} else {{
+        vcSection.style.display = 'none';
+    }}
+
     // Morph section
     const morphSection = document.getElementById('diag-morph-section');
     if (repData.has_correction && repData.morph_frames) {{
@@ -3041,6 +3055,81 @@ requestAnimationFrame(animate);
 </html>"""
 
 
+def _build_voice_cues(diagnosis, rep_summary, anthro, rom):
+    """Build the exact dict the edge LLM receives to produce a voice cue.
+
+    Keys are fault names, values are compact structured corrections with
+    observed/target numbers — no prose. This is what we verify in the
+    visualizer and what ships to the voice agent.
+    """
+    import math as _math
+    from biomechanics.diagnosis.graph.parameter_deltas import dorsi_driven_targets
+
+    cues = {}
+    for cause in diagnosis.immediate_causes:
+        cid = cause.cause_id
+        delta = cause.parameter_delta
+
+        if cid == "narrow_stance" and delta:
+            foot_delta = delta.get("__foot_target_delta", [0] * 6)
+            widen_per_side_cm = round(abs(foot_delta[2]) * 100, 1)
+            current = round(rep_summary.stance_width_ratio, 2)
+            dorsi_cap = rom.get("dorsiflexion_drop", 35.0)
+            target_ratio, _ = dorsi_driven_targets(dorsi_cap, anthro)
+            target = round(max(target_ratio, current + 0.15), 2)
+            cues[cid] = {
+                "fix": "widen stance",
+                "current_ratio": current,
+                "target_ratio": target,
+                "widen_per_side_cm": widen_per_side_cm,
+                "unit": "x shoulder width",
+            }
+
+        elif cid == "narrow_foot_angle" and delta:
+            delta_deg = round(_math.degrees(abs(delta.get("L_ankle.ry", 0.0))), 1)
+            current = round((rep_summary.foot_direction_angle_l + rep_summary.foot_direction_angle_r) / 2.0, 1)
+            target = round(current + delta_deg, 1)
+            cues[cid] = {
+                "fix": "turn feet out",
+                "current_deg": current,
+                "target_deg": target,
+                "increase_deg": delta_deg,
+            }
+
+        elif cid == "bracing_failure" and delta:
+            correction_deg = round(_math.degrees(abs(delta.get("trunk.rx", 0.0))), 1)
+            cues[cid] = {
+                "fix": "brace core harder",
+                "trunk_correction_deg": correction_deg,
+            }
+
+        elif cid == "knee_track_cue" and delta:
+            push_out_deg = round(_math.degrees(abs(delta.get("L_hip.ry", 0.0))), 1)
+            valgus = round(max(rep_summary.knee_valgus_l, rep_summary.knee_valgus_r), 1)
+            cues[cid] = {
+                "fix": "push knees out",
+                "current_valgus_deg": valgus,
+                "correction_deg": push_out_deg,
+            }
+
+        elif cid == "weight_shift_cue" and delta:
+            shift_cm = round(abs(delta.get("pelvis.tx", 0.0)) * 100, 1)
+            side = "left" if rep_summary.hip_y_l_at_bottom < rep_summary.hip_y_r_at_bottom else "right"
+            cues[cid] = {
+                "fix": "center weight",
+                "shift_toward": side,
+                "shift_cm": shift_cm,
+            }
+
+        elif cid == "depth_cue_unfamiliar":
+            cues[cid] = {
+                "fix": "squat deeper",
+                "target": "parallel (hip crease at knee level)",
+            }
+
+    return cues
+
+
 def _diagnosis_to_tiers(diagnosis):
     """Convert a DiagnosisResult's causes into tier dict for the viewer."""
     tier_labels = {1: "Cue-correctable", 2: "Session-level", 3: "Long-term", 0: "Contextual"}
@@ -3128,8 +3217,17 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
         if has_correction:
             morph_frames = build_morph_frames(observed_kpts, corrected_kpts, num_frames=60)
 
-        # Kinematic metrics for sparkline comparison
+        # Voice cues — the exact dict the edge LLM would receive
         rep_summary = build_rep_kinematic_summary(bottom_frame, athlete_params, rep_number)
+        voice_cues = _build_voice_cues(
+            rep_diagnosis, rep_summary,
+            set_features.anthropometry, set_features.rom,
+        )
+        if voice_cues:
+            import json as _json
+            print(f"  Rep {rep_number} voice cues: {_json.dumps(voice_cues, indent=2)}")
+
+        # Kinematic metrics for sparkline comparison
         metrics = {
             "trunk_lean": round(rep_summary.trunk_pitch_at_bottom, 1),
             "knee_valgus": round(max(rep_summary.knee_valgus_l, rep_summary.knee_valgus_r), 1),
@@ -3156,6 +3254,7 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
                 "symmetry": rep_score.symmetry_score,
                 "ankle_utilization": rep_score.ankle_utilization_score,
             },
+            "voice_cues": voice_cues,
         })
 
     return {
