@@ -1,35 +1,61 @@
-# CoachingAgent Implementation Plan
+# Diagnosis Pipeline → Voice Agent Integration Plan
 
-A reusable agent that guides users through iterative form improvement. Receives real-time biomechanics data per-rep, runs the diagnosis engine + rep scoring, and coaches the user via LLM until form is acceptable or max iterations reached.
+Wire the diagnosis engine (HypothesisEngine + rep scoring) into the live pipeline so that structured form analysis results are sent to the voice agent at the end of each set. The diagnosis runs on the pipeline side — where the keypoints and angles already live — and the voice agent receives a single structured summary per set, no raw data.
 
-## Parts (work on independently, in order)
+## Architecture
 
-1. **[Part 1: Pipeline Enrichment](part1-pipeline-enrichment.md)** — Buffer bottom-of-rep frame data in the pipeline and send it via IPC with `rep_complete`. No agent code yet.
+```
+Pipeline side (pose_estimation_process)              Voice agent side
+─────────────────────────────────────────            ──────────────────────
+Rep completes                                        
+  → bottom_kpts + bottom_angles captured             
+  → build_frame_from_live_pipeline()                 
+  → build_rep_kinematic_summary()                    
+  → buffer RepKinematicSummary                       
+  → (existing: send rep_complete IPC) ──────────────→ orchestrator plays rep cue
+                                                     
+Set ends (timeout / target reps / early stop)        
+  → build SetFeatures from buffer                    
+  → HypothesisEngine.diagnose()                      
+  → score_set()                                      
+  → (existing: send set_complete IPC) ──────────────→ orchestrator queues set recap
+  → send diagnosis_complete IPC ────────────────────→ orchestrator enriches recap
+                                                       with diagnosis data
+                                                     → LLM speaks data-driven recap
+```
 
-2. **[Part 2: Service Wiring](part2-service-wiring.md)** — Add callback routing on CoachingService and coaching mode on CoachingOrchestrator so an agent can receive rep events and control orchestrator behavior.
+## Parts (work in order)
 
-3. **[Part 3: Diagnosis Bridge](part3-diagnosis-bridge.md)** — Add `build_frame_from_ipc()` to `diagnosis/bridge.py` that maps live pipeline data to the format the diagnosis engine expects.
+1. **[Part 1: Pipeline Enrichment](part1-pipeline-enrichment.md)** — Buffer bottom-of-rep frame data in the pipeline and send it via IPC with `rep_complete`. *(done)*
 
-4. **[Part 4: CoachingAgent](part4-coaching-agent.md)** — The agent itself. Inherits BaseNovaAgent, runs the per-rep diagnosis loop, generates LLM coaching cues, handles set summary and handoff.
+2. **[Part 2: Live Pipeline Diagnosis Bridge](part2-service-wiring.md)** — Add key-mapping function in `bridge.py` to convert live pipeline data format (`JointAngles.as_dict()` + `Skeleton3D`) to the frame format the diagnosis engine expects.
 
-5. **[Part 5: Integration](part5-integration.md)** — Wire CoachingAgent into WorkoutAgent (function tool), test end-to-end flow, handle edge cases.
+3. **[Part 3: SessionTracker Diagnosis Integration](part3-diagnosis-bridge.md)** — Buffer `RepKinematicSummary` per rep in `SessionTracker`, run diagnosis engine + scoring at set end, send `diagnosis_complete` IPC message via new `IPCBridge` method.
+
+4. **[Part 4: Voice Agent Diagnosis Handler](part4-coaching-agent.md)** — Handle `diagnosis_complete` in `CoachingService`, store on orchestrator, enrich the existing set recap LLM prompt with tiered causes, scores, and specific adjustments.
+
+5. **[Part 5: Integration](part5-integration.md)** — Wire athlete params from calibration to `SessionTracker`, end-to-end testing, edge cases.
+
+## Key design decisions
+
+- **Diagnosis runs on the pipeline side**, not the voice agent. Keeps keypoints and heavy computation where the data already lives.
+- **No new agent type.** The existing orchestrator + LLM set recap flow is enriched with diagnosis data, not replaced.
+- **One message per set.** The voice agent receives `diagnosis_complete` once at set end — no per-rep diagnosis messages.
+- **Graceful degradation.** If calibration hasn't happened (no athlete params), diagnosis is skipped and the existing basic set recap continues working.
+- **Backward compatible.** All existing IPC messages (`rep_complete`, `set_complete`, `fault`, etc.) continue unchanged.
 
 ## Key Files Reference
 
 | Component | Path |
 |---|---|
-| Base agent class | `src/agents/shared/base_agent.py` |
-| Existing agent example | `src/agents/teaching_agent.py` |
-| WorkoutAgent (caller) | `src/agents/workout_agent.py` |
-| CoachingService | `src/services/coaching_service.py` |
-| CoachingOrchestrator | `src/services/coaching_orchestrator.py` |
-| IPC Bridge | `src/biomechanics/coaching/ipc_bridge.py` |
-| Pipeline | `src/biomechanics/pipeline.py` |
-| Pose process (IPC caller) | `src/pose/pose_estimation_process.py` |
+| Pipeline main loop | `src/pose/pose_estimation_process.py` |
+| Biomechanics pipeline | `src/biomechanics/pipeline.py` |
+| Session tracker | `src/biomechanics/coaching/session_tracker.py` |
+| IPC bridge | `src/biomechanics/coaching/ipc_bridge.py` |
 | Diagnosis engine | `src/biomechanics/diagnosis/engine.py` |
 | Diagnosis bridge | `src/biomechanics/diagnosis/bridge.py` |
 | Rep scoring | `src/biomechanics/diagnosis/rep_scoring.py` |
 | Diagnosis types | `src/biomechanics/diagnosis/types.py` |
+| CoachingService | `src/services/coaching_service.py` |
+| CoachingOrchestrator | `src/services/coaching_orchestrator.py` |
 | Calibration | `src/biomechanics/calibration.py` |
-| UserData | `src/agents/shared/userdata.py` |
-| Visualizer (gold standard) | `scripts/visualize_video_squats.py` |
