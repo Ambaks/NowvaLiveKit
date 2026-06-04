@@ -28,7 +28,7 @@ Set ends (timeout / target reps / early stop)
 
 1. **[Part 1: Pipeline Enrichment](part1-pipeline-enrichment.md)** — Buffer bottom-of-rep frame data in the pipeline and send it via IPC with `rep_complete`. *(done)*
 
-2. **[Part 2: Live Pipeline Diagnosis Bridge](part2-service-wiring.md)** — Add key-mapping function in `bridge.py` to convert live pipeline data format (`JointAngles.as_dict()` + `Skeleton3D`) to the frame format the diagnosis engine expects.
+2. **[Part 2: Live Pipeline Diagnosis Bridge](part2-service-wiring.md)** — Add key-mapping function in `bridge.py` to convert live pipeline data format (`JointAngles.as_dict()` + `Skeleton3D`) to the frame format the diagnosis engine expects. *(done)*
 
 3. **[Part 3: SessionTracker Diagnosis Integration](part3-diagnosis-bridge.md)** — Buffer `RepKinematicSummary` per rep in `SessionTracker`, run diagnosis engine + scoring at set end, send `diagnosis_complete` IPC message via new `IPCBridge` method.
 

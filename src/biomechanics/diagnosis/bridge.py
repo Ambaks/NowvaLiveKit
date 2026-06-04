@@ -1,7 +1,8 @@
-"""Bridge between the visualizer's frame data format and the diagnosis engine.
+"""Bridge between frame data formats and the diagnosis engine.
 
-Maps frame_data dicts (from visualize_video_squats.py) + athlete_params
-into the RepKinematicSummary / SetFeatures that HypothesisEngine expects.
+Maps frame_data dicts (from visualize_video_squats.py or the live pipeline)
++ athlete_params into the RepKinematicSummary / SetFeatures that
+HypothesisEngine expects.
 """
 
 from __future__ import annotations
@@ -11,6 +12,37 @@ import math
 import numpy as np
 
 from .types import RepKinematicSummary, SetFeatures
+
+
+def _mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
+    """Transform MediaPipe world coords → visualizer coords.
+
+    MediaPipe: X=subject's left, Y=down, Z=toward camera.
+    Visualizer: vis_x=mp_z, vis_y=-mp_y, vis_z=-mp_x.
+    """
+    return [[pt[2], -pt[1], -pt[0]] for pt in kpts]
+
+
+def build_frame_from_live_pipeline(
+    bottom_kpts: list[list[float]],
+    bottom_angles: dict[str, float],
+) -> dict:
+    """Convert live pipeline data to the frame dict build_rep_kinematic_summary expects."""
+    kpts_vis = _mediapipe_to_viewer_coords(bottom_kpts)
+
+    angles = {
+        "trunk_flexion": bottom_angles["trunk_flexion"],
+        "knee_valgus_l": bottom_angles["knee_valgus_l"],
+        "knee_valgus_r": bottom_angles["knee_valgus_r"],
+        "dorsi_l": bottom_angles["ankle_dorsiflexion_l"],
+        "dorsi_r": bottom_angles["ankle_dorsiflexion_r"],
+        "knee_flex": max(
+            bottom_angles["knee_flexion_l"],
+            bottom_angles["knee_flexion_r"],
+        ),
+    }
+
+    return {"angles": angles, "kpts": kpts_vis}
 
 
 def find_bottom_frame(rep_frames: list[dict]) -> dict:

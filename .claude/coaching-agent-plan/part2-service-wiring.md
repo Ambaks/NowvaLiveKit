@@ -1,4 +1,4 @@
-# Part 2: Live Pipeline Diagnosis Bridge
+# Part 2: Live Pipeline Diagnosis Bridge ✅ DONE
 
 ## Goal
 Make the diagnosis engine callable from live pipeline data by adding a key-mapping layer in `bridge.py`. Right now `build_rep_kinematic_summary()` expects the visualizer's frame format — the live pipeline's `JointAngles.as_dict()` and `Skeleton3D.to_numpy()` use different keys and structure. This part bridges that gap.
