@@ -3272,6 +3272,99 @@ def run_diagnosis(replay_reps, athlete_params, baseline):
     }
 
 
+def _plot_ground_plane_valgus(per_rep_data: list, output_path) -> None:
+    """Generate a bird's-eye view plot of knee valgus vectors for each rep."""
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+    except ImportError:
+        print("  WARNING: matplotlib not installed, skipping valgus plot")
+        return
+
+    n_reps = len(per_rep_data)
+    if n_reps == 0:
+        return
+
+    fig, axes = plt.subplots(1, n_reps, figsize=(5 * n_reps, 5), squeeze=False)
+
+    HIP_L, HIP_R = 11, 12
+    KNEE_L, KNEE_R = 13, 14
+    FOOT_L, FOOT_R = 17, 18
+
+    side_cfg = [
+        ("Left", HIP_L, KNEE_L, FOOT_L, "#2563eb", "#93c5fd"),
+        ("Right", HIP_R, KNEE_R, FOOT_R, "#dc2626", "#fca5a5"),
+    ]
+
+    for rep_idx, rep in enumerate(per_rep_data):
+        ax = axes[0][rep_idx]
+        kpts = np.array(rep["observed_kpts"])
+
+        for side_name, hip_i, knee_i, foot_i, dark_color, light_color in side_cfg:
+            hip_vis = kpts[hip_i]
+            knee_vis = kpts[knee_i]
+            foot_vis = kpts[foot_i]
+
+            hip_gp = np.array([-hip_vis[2], hip_vis[0]])
+            knee_gp = np.array([-knee_vis[2], knee_vis[0]])
+            foot_gp = np.array([-foot_vis[2], foot_vis[0]])
+
+            ref_vec = foot_gp - hip_gp
+            knee_vec = knee_gp - hip_gp
+            ref_mag = np.linalg.norm(ref_vec)
+            knee_mag = np.linalg.norm(knee_vec)
+
+            ax.scatter(*hip_gp, color=dark_color, s=60, zorder=5)
+            ax.scatter(*knee_gp, color=dark_color, s=60, zorder=5, marker="D")
+            ax.scatter(*foot_gp, color=light_color, s=60, zorder=5, marker="^")
+
+            if ref_mag > 1e-6:
+                ax.annotate(
+                    "", xy=foot_gp, xytext=hip_gp,
+                    arrowprops=dict(arrowstyle="-|>", color=dark_color, lw=2),
+                )
+                mid_ref = hip_gp + ref_vec * 0.5
+                ax.text(
+                    mid_ref[0], mid_ref[1],
+                    f"  ref {ref_mag:.3f}",
+                    fontsize=7, color=dark_color, ha="left",
+                )
+
+            if knee_mag > 1e-6:
+                ax.annotate(
+                    "", xy=knee_gp, xytext=hip_gp,
+                    arrowprops=dict(
+                        arrowstyle="-|>", color=dark_color,
+                        lw=2, linestyle="dashed",
+                    ),
+                )
+                mid_knee = hip_gp + knee_vec * 0.5
+                ax.text(
+                    mid_knee[0], mid_knee[1],
+                    f"  knee {knee_mag:.3f}",
+                    fontsize=7, color=dark_color, ha="left", style="italic",
+                )
+
+        valgus_val = rep["metrics"]["knee_valgus"]
+        ax.set_title(f"Rep {rep['rep_number']}  |  valgus {valgus_val:+.1f}°", fontsize=10)
+        ax.set_xlabel("X (subject's left →)")
+        ax.set_ylabel("Z (forward →)")
+        ax.set_aspect("equal")
+        ax.grid(True, alpha=0.3)
+
+    left_patch = mpatches.Patch(color="#2563eb", label="Left leg")
+    right_patch = mpatches.Patch(color="#dc2626", label="Right leg")
+    fig.legend(
+        handles=[left_patch, right_patch],
+        loc="upper center", ncol=2, fontsize=9, frameon=False,
+    )
+    fig.suptitle("Ground-Plane Knee Tracking (bird's-eye view)", fontsize=12, y=1.02)
+    fig.tight_layout()
+    fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Valgus plot: {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Capture squats and visualize in 3D")
     parser.add_argument("--output", "-o", default=None,
@@ -3337,6 +3430,9 @@ def main():
 
         print("\n  Running diagnosis engine...")
         diagnosis_data = run_diagnosis(replay_reps, athlete_params, baseline)
+
+        valgus_plot_path = recordings_dir / f"squat_diagnosis_{timestamp}_valgus.png"
+        _plot_ground_plane_valgus(diagnosis_data["per_rep"], valgus_plot_path)
 
         if args.output:
             html_path = Path(args.output)

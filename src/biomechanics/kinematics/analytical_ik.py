@@ -249,8 +249,12 @@ class AnalyticalIKSolver(IKSolver):
 
     def _compute_knee_valgus_from_toe(self, kpts: dict, side: str) -> tuple:
         """
-        Compute knee valgus as the frontal-plane deviation of the knee
+        Compute knee valgus as the ground-plane deviation of the knee
         from the hip-to-big-toe reference line.
+
+        Projects hip, knee, and foot_index onto the XZ ground plane
+        (bird's-eye view, discarding Y/height) so that knee flexion
+        depth does not conflate with medial/lateral collapse.
 
         Returns:
             (valgus_angle_degrees, foot_confidence)
@@ -267,19 +271,19 @@ class AnalyticalIKSolver(IKSolver):
         if hip is None or knee is None or foot is None:
             return 0.0, foot_conf
 
-        # Project onto frontal plane (XY in MediaPipe coords, removing Z/depth)
-        hip_frontal = np.array([hip[0], hip[1]])
-        knee_frontal = np.array([knee[0], knee[1]])
-        foot_frontal = np.array([foot[0], foot[1]])
+        # Project onto ground plane (XZ, removing Y/height) for bird's-eye view
+        hip_ground = np.array([hip[0], hip[2]])
+        knee_ground = np.array([knee[0], knee[2]])
+        foot_ground = np.array([foot[0], foot[2]])
 
         # Reference line: hip to foot_index
-        ref_vec = foot_frontal - hip_frontal
+        ref_vec = foot_ground - hip_ground
         ref_len = np.linalg.norm(ref_vec)
         if ref_len < 1e-6:
             return 0.0, foot_conf
 
         # Knee vector: hip to knee
-        knee_vec = knee_frontal - hip_frontal
+        knee_vec = knee_ground - hip_ground
 
         # Angle magnitude via 3D helper (pad to 3D for angle_between_vectors)
         angle = angle_between_vectors(
@@ -287,7 +291,7 @@ class AnalyticalIKSolver(IKSolver):
             np.array([knee_vec[0], knee_vec[1], 0.0]),
         )
 
-        # Sign via 2D cross product: positive cross = knee is to the left of ref line
+        # Sign via 2D cross product in XZ ground plane
         cross_2d = ref_vec[0] * knee_vec[1] - ref_vec[1] * knee_vec[0]
 
         if side == "left":

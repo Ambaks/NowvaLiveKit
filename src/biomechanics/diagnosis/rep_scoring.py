@@ -10,11 +10,11 @@ from __future__ import annotations
 from .graph.evidence_tests import _clamp, expected_trunk_lean_geometric
 from .types import RepKinematicSummary, RepScore, SetScoreSummary
 
-WEIGHT_DEPTH = 0.30
-WEIGHT_TRUNK = 0.25
-WEIGHT_KNEES = 0.20
-WEIGHT_SYMMETRY = 0.15
-WEIGHT_ANKLES = 0.10
+WEIGHT_DEPTH = 0.45
+WEIGHT_TRUNK = 0.21
+WEIGHT_KNEES = 0.17
+WEIGHT_SYMMETRY = 0.10
+WEIGHT_ANKLES = 0.07
 
 DEPTH_CLASS_SCORES = {0: 0.1, 1: 0.25, 2: 0.5, 3: 0.85, 4: 1.0}
 
