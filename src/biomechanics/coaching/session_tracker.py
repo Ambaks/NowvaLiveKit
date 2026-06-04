@@ -12,6 +12,15 @@ from typing import Any, Dict, List, Optional
 
 from biomechanics.coaching.ipc_bridge import IPCBridge
 from biomechanics.config import CoachingConfig
+from biomechanics.diagnosis.bridge import (
+    build_anthro_dict,
+    build_frame_from_live_pipeline,
+    build_rep_kinematic_summary,
+    build_rom_dict,
+)
+from biomechanics.diagnosis.engine import HypothesisEngine
+from biomechanics.diagnosis.rep_scoring import score_set
+from biomechanics.diagnosis.types import RepKinematicSummary, SetFeatures
 from biomechanics.utils.types import RepData
 
 
@@ -47,6 +56,15 @@ class SessionTracker:
         # Last completed set summary (populated in _end_current_set)
         self.last_set_summary: Optional[Dict[str, Any]] = None
 
+        # Diagnosis integration (populated via set_athlete_params)
+        self._rep_kinematic_buffer: list[RepKinematicSummary] = []
+        self._athlete_params: dict | None = None
+        self._baseline: dict | None = None
+
+    def set_athlete_params(self, athlete_params: dict, baseline: dict) -> None:
+        self._athlete_params = athlete_params
+        self._baseline = baseline
+
     # ------------------------------------------------------------------
     # Rep handling
     # ------------------------------------------------------------------
@@ -77,6 +95,11 @@ class SessionTracker:
         self.ipc_bridge.send_rep_complete(
             rep, bottom_kpts=bottom_kpts, bottom_angles=bottom_angles,
         )
+
+        if self._athlete_params is not None and bottom_kpts is not None and bottom_angles is not None:
+            frame = build_frame_from_live_pipeline(bottom_kpts, bottom_angles)
+            summary = build_rep_kinematic_summary(frame, self._athlete_params, rep.rep_number)
+            self._rep_kinematic_buffer.append(summary)
 
         self.last_rep_time = now
         self.total_reps += 1
@@ -116,6 +139,25 @@ class SessionTracker:
                 self.current_set_number, self.current_set_reps
             )
             self.total_sets += 1
+
+        if self._rep_kinematic_buffer and self._athlete_params is not None:
+            anthro = build_anthro_dict(self._athlete_params)
+            rom = build_rom_dict(self._athlete_params, self._baseline or {})
+            set_features = SetFeatures(
+                user_id=0,
+                set_id="live",
+                rep_count=len(self._rep_kinematic_buffer),
+                per_rep_kinematics=list(self._rep_kinematic_buffer),
+                anthropometry=anthro,
+                rom=rom,
+            )
+            diagnosis_result = HypothesisEngine().diagnose(set_features)
+            score_summary = score_set(self._rep_kinematic_buffer, anthro, rom)
+            self.ipc_bridge.send_diagnosis_complete(
+                self.current_set_number, diagnosis_result, score_summary,
+            )
+
+        self._rep_kinematic_buffer = []
         self.current_set_reps = []
         self.set_active = False
 
@@ -182,3 +224,4 @@ class SessionTracker:
         self.total_reps = 0
         self.total_sets = 0
         self.all_reps = []
+        self._rep_kinematic_buffer = []

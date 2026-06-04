@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from biomechanics.coaching.cue_cache import CueCache
 from biomechanics.config import CoachingConfig, IPCConfig
+from biomechanics.diagnosis.types import DiagnosisResult, SetScoreSummary
 from biomechanics.utils.types import FaultEvent, PipelineFrame, RepData, depth_category
 
 
@@ -137,6 +138,44 @@ class IPCBridge:
         self.ipc_client.send_message({
             "type": "rep_count",
             "value": rep.rep_number,
+        })
+
+    # ------------------------------------------------------------------
+    # Set completion
+    # ------------------------------------------------------------------
+
+    def send_diagnosis_complete(
+        self,
+        set_number: int,
+        diagnosis_result: DiagnosisResult,
+        score_summary: SetScoreSummary,
+    ) -> None:
+        """Send structured diagnosis and scoring results for a completed set."""
+        self.ipc_client.send_message({
+            "type": "diagnosis_complete",
+            "set_number": set_number,
+            "diagnosis": {
+                "confidence": diagnosis_result.confidence,
+                "detected_symptoms": [
+                    {"symptom_id": s.symptom_id, "severity": s.severity, "contributing_reps": s.contributing_reps}
+                    for s in diagnosis_result.detected_symptoms
+                ],
+                "immediate_causes": [
+                    {"cause_id": c.cause_id, "score": c.score, "explanation": c.explanation, "parameter_delta": c.parameter_delta}
+                    for c in diagnosis_result.immediate_causes
+                ],
+                "session_causes": [
+                    {"cause_id": c.cause_id, "score": c.score, "explanation": c.explanation}
+                    for c in diagnosis_result.session_causes
+                ],
+                "combined_perturbation": diagnosis_result.combined_perturbation,
+            },
+            "scoring": {
+                "mean_score": score_summary.mean_score,
+                "best_rep": score_summary.best_rep_number,
+                "worst_rep": score_summary.worst_rep_number,
+                "trend_slope": score_summary.trend_slope,
+            },
         })
 
     # ------------------------------------------------------------------

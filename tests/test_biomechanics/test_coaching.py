@@ -426,3 +426,173 @@ class TestSessionTracker:
         assert len(set_msgs) == 2
         assert set_msgs[0]["total_reps"] == 3
         assert set_msgs[1]["total_reps"] == 2
+
+
+# =============================================================================
+# TEST DIAGNOSIS INTEGRATION
+# =============================================================================
+
+
+def _squat_bottom_kpts_mediapipe() -> list[list[float]]:
+    return [
+        [0.00, -0.25, 0.20],   # 0  nose
+        [0.02, -0.27, 0.19],   # 1  left_eye
+        [-0.02, -0.27, 0.19],  # 2  right_eye
+        [0.05, -0.25, 0.16],   # 3  left_ear
+        [-0.05, -0.25, 0.16],  # 4  right_ear
+        [0.18, -0.15, 0.12],   # 5  left_shoulder
+        [-0.18, -0.15, 0.12],  # 6  right_shoulder
+        [0.22, 0.05, 0.18],    # 7  left_elbow
+        [-0.22, 0.05, 0.18],   # 8  right_elbow
+        [0.20, 0.10, 0.22],    # 9  left_wrist
+        [-0.20, 0.10, 0.22],   # 10 right_wrist
+        [0.12, 0.00, 0.00],    # 11 left_hip
+        [-0.12, 0.00, 0.00],   # 12 right_hip
+        [0.12, 0.02, 0.30],    # 13 left_knee
+        [-0.12, 0.02, 0.30],   # 14 right_knee
+        [0.14, 0.38, 0.10],    # 15 left_ankle
+        [-0.14, 0.38, 0.10],   # 16 right_ankle
+        [0.12, 0.40, 0.16],    # 17 left_foot_index
+        [-0.12, 0.40, 0.16],   # 18 right_foot_index
+    ]
+
+
+def _squat_bottom_angles() -> dict[str, float]:
+    return {
+        "hip_flexion_l": 95.0,
+        "hip_flexion_r": 93.0,
+        "hip_adduction_l": 2.0,
+        "hip_adduction_r": 1.5,
+        "hip_rotation_l": 5.0,
+        "hip_rotation_r": 4.0,
+        "knee_flexion_l": 110.0,
+        "knee_flexion_r": 108.0,
+        "ankle_dorsiflexion_l": 28.0,
+        "ankle_dorsiflexion_r": 26.0,
+        "knee_valgus_l": 3.5,
+        "knee_valgus_r": 2.0,
+        "foot_confidence_l": 0.8,
+        "foot_confidence_r": 0.7,
+        "shoulder_flexion_l": 40.0,
+        "shoulder_flexion_r": 38.0,
+        "shoulder_abduction_l": 15.0,
+        "shoulder_abduction_r": 14.0,
+        "elbow_flexion_l": 90.0,
+        "elbow_flexion_r": 88.0,
+        "wrist_y_l": -10.0,
+        "wrist_y_r": -10.0,
+        "wrist_x_l": 5.0,
+        "wrist_x_r": 5.0,
+        "trunk_flexion": 145.0,
+        "trunk_lateral_flexion": 1.0,
+        "trunk_rotation": 2.0,
+        "pelvis_tilt": 12.0,
+        "pelvis_list": 0.5,
+        "pelvis_rotation": 1.0,
+    }
+
+
+def _default_athlete_params() -> dict:
+    return {
+        "shoulder_width_m": 0.40,
+        "hip_width_m": 0.30,
+        "femur_avg_m": 0.42,
+        "torso_avg_m": 0.45,
+        "tibia_avg_m": 0.43,
+        "foot_avg_m": 0.26,
+    }
+
+
+class TestDiagnosisIntegration:
+
+    def test_diagnosis_skipped_without_athlete_params(self, session_tracker, mock_ipc_client):
+        """No set_athlete_params → no diagnosis_complete, but set_complete still fires."""
+        session_tracker.on_rep_complete(
+            make_rep(1, start_time=0.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        session_tracker.force_end_set()
+
+        types = [m["type"] for m in mock_ipc_client.messages]
+        assert "set_complete" in types
+        assert "diagnosis_complete" not in types
+
+    def test_diagnosis_runs_on_set_end(self, session_tracker, mock_ipc_client):
+        """With athlete params, completing a set should send diagnosis_complete."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        for i in range(1, 4):
+            session_tracker.on_rep_complete(
+                make_rep(i, start_time=(i - 1) * 3.0),
+                bottom_kpts=_squat_bottom_kpts_mediapipe(),
+                bottom_angles=_squat_bottom_angles(),
+            )
+        session_tracker.force_end_set()
+
+        diag_msgs = [m for m in mock_ipc_client.messages if m["type"] == "diagnosis_complete"]
+        assert len(diag_msgs) == 1
+
+        msg = diag_msgs[0]
+        assert msg["set_number"] == 1
+        assert "diagnosis" in msg
+        assert "scoring" in msg
+        assert "confidence" in msg["diagnosis"]
+        assert "detected_symptoms" in msg["diagnosis"]
+        assert "immediate_causes" in msg["diagnosis"]
+        assert "session_causes" in msg["diagnosis"]
+        assert "combined_perturbation" in msg["diagnosis"]
+        assert "mean_score" in msg["scoring"]
+        assert "best_rep" in msg["scoring"]
+        assert "worst_rep" in msg["scoring"]
+        assert "trend_slope" in msg["scoring"]
+
+    def test_rep_kinematic_buffer_cleared_between_sets(self, session_tracker, mock_ipc_client):
+        """Second set's diagnosis should only include reps from the second set."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        # Set 1: 2 reps
+        session_tracker.on_rep_complete(
+            make_rep(1, start_time=0.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        session_tracker.on_rep_complete(
+            make_rep(2, start_time=3.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        session_tracker.force_end_set()
+
+        # Set 2: 3 reps
+        for i in range(3, 6):
+            session_tracker.on_rep_complete(
+                make_rep(i, start_time=20.0 + (i - 3) * 3.0),
+                bottom_kpts=_squat_bottom_kpts_mediapipe(),
+                bottom_angles=_squat_bottom_angles(),
+            )
+        session_tracker.force_end_set()
+
+        diag_msgs = [m for m in mock_ipc_client.messages if m["type"] == "diagnosis_complete"]
+        assert len(diag_msgs) == 2
+
+        # First diagnosis should have had 2 reps, second should have had 3
+        # We can verify via the scoring — best_rep/worst_rep should be from the correct set
+        second_diag = diag_msgs[1]
+        assert second_diag["set_number"] == 2
+        assert second_diag["scoring"]["best_rep"] in [3, 4, 5]
+        assert second_diag["scoring"]["worst_rep"] in [3, 4, 5]
+
+    def test_reset_clears_kinematic_buffer(self, session_tracker, mock_ipc_client):
+        """reset() should clear the kinematic buffer."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        session_tracker.on_rep_complete(
+            make_rep(1, start_time=0.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        assert len(session_tracker._rep_kinematic_buffer) == 1
+
+        session_tracker.reset()
+        assert len(session_tracker._rep_kinematic_buffer) == 0
