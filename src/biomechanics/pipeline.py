@@ -223,6 +223,12 @@ class BiomechanicsPipeline:
         # happens before the BiLSTM fires — so we stash them here.
         self._pending_bilstm_faults: List[FaultEvent] = []
 
+        # Bottom-of-rep buffer for diagnosis engine.
+        # Tracks the frame with max avg_knee_flexion during each rep.
+        self._bottom_max_knee_flex: float = 0.0
+        self._bottom_kpts: Optional[List[List[float]]] = None
+        self._bottom_angles: Optional[dict] = None
+
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
 
@@ -246,6 +252,22 @@ class BiomechanicsPipeline:
         self._bilstm_max_knee_flex = 0.0
         self._bilstm_min_knee_flex = 180.0
         self._pending_bilstm_faults.clear()
+        self._bottom_max_knee_flex = 0.0
+        self._bottom_kpts = None
+        self._bottom_angles = None
+
+    def consume_bottom_frame(self) -> tuple[Optional[List[List[float]]], Optional[dict]]:
+        """Return and reset the bottom-of-rep keypoints and angles.
+
+        Returns (bottom_kpts, bottom_angles) captured at max knee flexion
+        during the most recent rep, then clears the buffer for the next rep.
+        """
+        kpts = self._bottom_kpts
+        angles = self._bottom_angles
+        self._bottom_max_knee_flex = 0.0
+        self._bottom_kpts = None
+        self._bottom_angles = None
+        return kpts, angles
 
     def _capture_loop(self) -> None:
         """Continuously read frames from the camera in a background thread."""
@@ -387,6 +409,14 @@ class BiomechanicsPipeline:
 
         # --- Compute rep signal (exercise-specific, from profile) ---
         rep_signal = self._profile.get_rep_signal(skeleton_3d, angles)
+
+        # --- Buffer bottom-of-rep frame for diagnosis engine ---
+        if self._rep_counter.in_rep:
+            knee_flex = angles.avg_knee_flexion
+            if knee_flex > self._bottom_max_knee_flex:
+                self._bottom_max_knee_flex = knee_flex
+                self._bottom_kpts = skeleton_3d.to_numpy().tolist()
+                self._bottom_angles = angles.as_dict()
 
         # --- Fault detection + rep counting ---
         t0 = time.perf_counter()

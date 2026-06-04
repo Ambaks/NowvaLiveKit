@@ -492,7 +492,12 @@ def run_biomechanics_pipeline(
                     set_collector.record_fault(fault)
 
                 if result.rep_data:
-                    session_tracker.on_rep_complete(result.rep_data)
+                    bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
+                    session_tracker.on_rep_complete(
+                        result.rep_data,
+                        bottom_kpts=bottom_kpts,
+                        bottom_angles=bottom_angles,
+                    )
 
                 if session_tracker.check_set_timeout(time.time()):
                     pipeline.reset_readiness_gate()

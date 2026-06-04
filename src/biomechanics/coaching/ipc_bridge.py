@@ -106,14 +106,19 @@ class IPCBridge:
     # Rep completion
     # ------------------------------------------------------------------
 
-    def send_rep_complete(self, rep: RepData) -> None:
+    def send_rep_complete(
+        self,
+        rep: RepData,
+        bottom_kpts: Optional[List] = None,
+        bottom_angles: Optional[Dict[str, float]] = None,
+    ) -> None:
         """Send rep data and legacy rep_count.
 
         Note: rep count and positive reinforcement cues are now dispatched
         by the CoachingOrchestrator on the voice agent side based on the
         rep_complete message data (no more play_cue messages from here).
         """
-        self.ipc_client.send_message({
+        msg: Dict[str, Any] = {
             "type": "rep_complete",
             "rep_number": rep.rep_number,
             "max_depth_angle": round(rep.max_depth_angle, 1),
@@ -121,7 +126,12 @@ class IPCBridge:
             "faults_in_rep": [f.fault_type for f in rep.faults],
             "rep_duration_ms": round(rep.duration * 1000),
             "is_clean": rep.is_clean,
-        })
+        }
+        if bottom_kpts is not None:
+            msg["bottom_kpts"] = bottom_kpts
+        if bottom_angles is not None:
+            msg["bottom_angles"] = bottom_angles
+        self.ipc_client.send_message(msg)
 
         # Backward compatibility
         self.ipc_client.send_message({

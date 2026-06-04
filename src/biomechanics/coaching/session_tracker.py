@@ -51,7 +51,12 @@ class SessionTracker:
     # Rep handling
     # ------------------------------------------------------------------
 
-    def on_rep_complete(self, rep: RepData) -> None:
+    def on_rep_complete(
+        self,
+        rep: RepData,
+        bottom_kpts: Optional[List] = None,
+        bottom_angles: Optional[Dict[str, float]] = None,
+    ) -> None:
         """
         Process a completed rep. Detects set boundaries and forwards
         the rep to the IPCBridge.
@@ -69,7 +74,9 @@ class SessionTracker:
             self.set_active = True
 
         self.current_set_reps.append(rep)
-        self.ipc_bridge.send_rep_complete(rep)
+        self.ipc_bridge.send_rep_complete(
+            rep, bottom_kpts=bottom_kpts, bottom_angles=bottom_angles,
+        )
 
         self.last_rep_time = now
         self.total_reps += 1
