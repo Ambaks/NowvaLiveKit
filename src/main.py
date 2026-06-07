@@ -16,12 +16,12 @@ from pathlib import Path
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.session_manager import SessionManager
-from core.ipc_communication import IPCServer
-from core.session_logger import SessionLogger
+from agent.core.session_manager import SessionManager
+from agent.core.ipc_communication import IPCServer
+from agent.core.session_logger import SessionLogger
 from db import init_db, get_db
 from db.models import User
-from agents.console_launcher import run_console_voice_onboarding, terminate_process_group
+from agent.agents.console_launcher import run_console_voice_onboarding, terminate_process_group
 from auth.user_management import create_user_account
 from dotenv import load_dotenv
 
@@ -174,7 +174,7 @@ class NowvaApp:
         print("\nStarting pose estimation process...")
 
         # Start pose estimation as subprocess
-        pose_script = Path(__file__).parent / 'pose' / 'pose_estimation_process.py'
+        pose_script = Path(__file__).parent / 'biomechanics' / 'pipeline_process.py'
 
         cmd = [sys.executable, str(pose_script), str(cam0_id), str(cam1_id), exercise_name]
         if calibration_file:
@@ -292,7 +292,7 @@ class NowvaApp:
             print("\nStarting voice agent in main menu mode...\n")
 
             # Load existing user's state
-            from core.agent_state import AgentState
+            from agent.core.agent_state import AgentState
             self.state = AgentState(user_id=self.current_user['user_id'])
 
             # ALWAYS reset to main_menu mode on startup for safety
@@ -309,7 +309,7 @@ class NowvaApp:
             await asyncio.sleep(0.5)
 
             # Start voice agent for returning user
-            from agents.console_launcher import run_console_voice_agent
+            from agent.agents.console_launcher import run_console_voice_agent
             voice_agent_process = await run_console_voice_agent(user_id=self.current_user['user_id'])
 
         else:
@@ -321,7 +321,7 @@ class NowvaApp:
                 return
 
             # Load state for new user
-            from core.agent_state import AgentState
+            from agent.core.agent_state import AgentState
             self.state = AgentState(user_id=self.current_user['user_id'])
 
         if not voice_agent_process:

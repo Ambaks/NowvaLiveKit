@@ -1,329 +1,242 @@
-# Core Biomechanics Implementation - 8 Week Roadmap
+# Biomechanics Diagnosis Engine
 
-Real-time muscle force and joint kinematics estimation from stereo camera input.
+The core IP of Nowva. This module analyzes squat form in real time: it captures
+video, estimates pose, computes joint angles, detects form faults, counts reps,
+and produces structured diagnoses that the voice agent relays as coaching cues.
 
-## Overview
+Everything here must eventually run on a Jetson-class edge device (~40 TOPS).
+No cloud API calls in the inference path.
 
-This implementation provides a complete pipeline for biomechanical analysis:
-
-1. **2D Pose Estimation** (RTMPose) - Extract keypoints from webcam
-2. **3D Reconstruction** (Stereo Triangulation) - Reconstruct 3D skeleton
-3. **Inverse Kinematics** - Compute joint angles from 3D points
-4. **Muscle Force Prediction** - Neural network predicts forces from kinematics
-
-**Performance Goals:**
-- ✅ 20+ FPS on M2 MacBook
-- ✅ < 5° joint angle error (validated against OpenCap)
-- ✅ Real-time muscle force estimates
-
----
-
-## Quick Start
-
-### 1. Installation
-
-```bash
-# Create conda environment
-conda create -n biomech python=3.10
-conda activate biomech
-
-# Install core dependencies
-pip install -r requirements.txt
-
-# Install MMPose for pose estimation
-pip install openmim
-mim install mmengine "mmcv>=2.0.0" "mmdet>=3.0.0" "mmpose>=1.0.0"
-
-# Test installation
-python -c "import torch; print(f'MPS Available: {torch.backends.mps.is_available()}')"
-```
-
-### 2. Week 1: Pose Estimation Demo
-
-```bash
-cd src/biomechanics/week1_pose
-python minimal_pose_demo.py
-
-# Controls:
-# q - quit
-# s - save frame
-```
-
-**Expected Result:** See skeleton overlay on webcam at 20+ FPS
-
-### 3. Week 2: Stereo Calibration
-
-You'll need:
-- 2x USB cameras (Logitech C920 recommended, $50 each)
-- Printed checkerboard pattern (9x6, 25mm squares)
-
-```bash
-cd src/biomechanics/week2_stereo
-
-# Calibrate cameras
-python calibrate_cameras.py 0 1
-
-# Test 3D reconstruction
-python stereo_triangulation.py 0 1
-```
-
-**Expected Result:** 3D coordinates printed to console, reprojection error < 1 pixel
-
-### 4. Week 3: Validate with OpenCap
-
-```bash
-cd src/biomechanics/week3_validation
-
-# Download OpenCap data (follow instructions)
-python validate_opencap.py
-```
-
-**Expected Result:** RMSE < 5° for major joints
-
-### 5. Week 4-5: Inverse Kinematics
-
-```bash
-cd src/biomechanics/week4_ik
-
-# Run IK demo
-python ik_pytorch_simple.py
-```
-
-**Expected Result:** Joint angles displayed in real-time
-
-### 6. Week 6-7: Generate Training Data (AWS)
-
-**Option A: AWS (Recommended for large datasets)**
-
-```bash
-# See week6_moco/generate_moco_dataset.py for AWS setup
-python generate_moco_dataset.py --aws_setup
-
-# On AWS:
-python generate_moco_dataset.py --n_trials 500 --n_processes 16
-
-# Download results
-scp -i key.pem ubuntu@<ip>:moco_training_data.npz .
-```
-
-**Option B: Local (if OpenSim installed)**
-
-```bash
-cd src/biomechanics/week6_moco
-python generate_moco_dataset.py --n_trials 50 --n_processes 4
-```
-
-**Cost:** ~$42 for 500 trials on AWS g5.xlarge
-
-### 7. Week 8: Train Muscle Predictor
-
-```bash
-cd src/biomechanics/week8_ml
-
-# Train model
-python train_muscle_predictor.py \
-  --data moco_training_data.npz \
-  --epochs 100 \
-  --device mps
-
-# Test trained model
-python train_muscle_predictor.py --test muscle_predictor_best.pt
-```
-
-**Expected Result:** Validation loss converges, model saved
-
-### 8. Run Complete Pipeline
-
-```bash
-cd src/biomechanics
-
-# Run full pipeline
-python complete_pipeline.py --cam0 0 --cam1 1
-
-# Controls:
-# q - quit
-# s - save current data
-# a - toggle angle display
-# f - toggle force display
-```
-
-**Expected Result:** Real-time joint angles and muscle forces displayed
-
----
-
-## Project Structure
+## Data Flow
 
 ```
-src/biomechanics/
-├── week1_pose/
-│   └── minimal_pose_demo.py          # RTMPose real-time demo
-├── week2_stereo/
-│   ├── calibrate_cameras.py          # Camera calibration
-│   └── stereo_triangulation.py       # 3D reconstruction
-├── week3_validation/
-│   └── validate_opencap.py           # Validation against ground truth
-├── week4_ik/
-│   └── ik_pytorch_simple.py          # Inverse kinematics
-├── week6_moco/
-│   └── generate_moco_dataset.py      # Training data generation
-├── week8_ml/
-│   └── train_muscle_predictor.py     # Neural network training
-├── complete_pipeline.py              # Full integration
-├── README.md                         # This file
-└── requirements.txt                  # Dependencies
+Camera frame
+  |
+  v
+Pose Estimation (MediaPipe or RTMPose) --> Skeleton2D + Skeleton3D
+  |
+  v
+Standing Gate (validates user is in frame, upright)
+  |
+  v
+Pre-IK Filters (confidence blend, velocity clamp, bone constraints, position smoothing)
+  |
+  v
+Inverse Kinematics (AnalyticalIKSolver) --> JointAngles
+  |
+  v
+Fault Detection (RuleEngine + per-exercise FaultRules) --> list[FaultEvent]
+  |
+  v
+Rep Counting (HipPositionRepCounter or BiLSTM) --> RepData
+  |
+  v
+Diagnosis Engine (HypothesisEngine) --> DiagnosisResult (set-level, after reps complete)
+  |
+  v
+Coaching Layer (IPCBridge + SessionTracker) --> IPC messages to voice agent
 ```
 
----
+The pipeline runs frame-by-frame. Each call to `BiomechanicsPipeline.process_frame()`
+executes one full iteration and returns a `PipelineFrame` with all results and
+per-layer latency measurements.
 
-## Hardware Requirements
+## Directory Map
 
-### Minimum
-- M2 MacBook (or equivalent with GPU)
-- 1x Webcam (for Week 1-3)
-- 16GB RAM
+### `analysis/`
+Post-hoc set analysis. `RepSegmenter` finds precise rep boundaries from smoothed
+hip position time series using scipy peak detection. `SetDataCollector` in
+`set_finalizer.py` accumulates per-frame data during a set and generates plots
+and JSON reports when the set ends.
 
-### Recommended
-- M2/M3 MacBook Pro
-- 2x Logitech C920 webcams
-- 32GB RAM
-- AWS account (for Moco data generation)
+### `barbell_tracking/`
+Real-time barbell detection and tracking. `BarbellDetector` wraps a YOLO11n-pose
+model that outputs two keypoints (left/right bar endpoints) plus a bounding box.
+`BarPathTracker` smooths those detections through per-endpoint constant-velocity
+Kalman filters, computes bar tilt and velocity, and maintains a rolling center-path
+history. Feeds the `BarTiltAsymmetryRule` fault detector.
 
----
+### `coaching/`
+Connects the diagnosis pipeline to the live voice agent over IPC.
 
-## Dependencies
+- `IPCBridge` -- translates pipeline events (faults, reps, frames) into throttled,
+  deduplicated JSON messages. Handles cue caching and fault cooldown.
+- `SessionTracker` -- detects set boundaries from rep timing gaps, accumulates
+  per-set statistics, runs the diagnosis engine at set end, and sends set summaries.
+- `CueCache` -- pre-caches exercise-specific audio cue identifiers so the voice
+  agent can pre-generate TTS. Rate-limits cue delivery to avoid overwhelming the lifter.
 
-Core packages:
-- `torch` - PyTorch with MPS support
-- `opencv-python` - Camera capture and visualization
-- `numpy`, `scipy` - Numerical computing
-- `mmpose` - Pose estimation (RTMPose)
-- `matplotlib` - Visualization
+### `diagnosis/`
+Set-level causal diagnosis engine. This is the layer that goes beyond "you had
+knee valgus" to explain *why* -- e.g., limited ankle dorsiflexion forces
+compensatory knee cave.
 
-Optional:
-- `opensim-org` - For Moco optimization (Week 6-7)
+- `engine.py` -- `HypothesisEngine.diagnose(SetFeatures) -> DiagnosisResult`.
+  Detects symptoms from aggregated rep kinematics, maps them to candidate causes
+  via a knowledge graph (`graph/symptoms.yaml`, `graph/causes.yaml`), scores each
+  cause using evidence tests, and returns tiered hypotheses (immediate / session /
+  long-term / contextual).
+- `rep_scoring.py` -- scores each rep on 5 dimensions (depth, trunk control,
+  knee tracking, symmetry, ankle utilization) to produce a 0-1 composite score.
+- `bridge.py` -- maps raw pipeline data (bottom-of-rep keypoints + angles) into
+  the `RepKinematicSummary` and `SetFeatures` types the engine expects.
+- `keypoint_corrector.py` -- applies geometric corrections to keypoints based on
+  diagnosed faults (delta-FK approach matching the visualizer's deformLowerBody).
+- `types.py` -- Pydantic models: `RepKinematicSummary`, `SetFeatures`,
+  `DiagnosisResult`, `HypothesizedCause`, `DetectedSymptom`, `RepScore`.
 
-See [requirements.txt](requirements.txt) for complete list.
+### `faults/`
+Frame-level fault detection.
 
----
+- `fault_types.py` -- `FaultRule` ABC that all rules inherit from, plus `FaultType`
+  enum and default threshold tables.
+- `rule_engine.py` -- `RuleEngine` orchestrates all active rules per frame. Maintains
+  a rolling 90-frame angle history, deduplicates consecutive same-fault detections,
+  and handles per-rep calibration.
+- `rules/` -- one file per fault rule: `depth`, `forward_lean`, `knee_valgus`,
+  `symmetry`, `heel_rise`, `back_rounding`, `tempo`, `bar_path`,
+  `bar_tilt_asymmetry`, `lockout`, `elbow_flare`, `shoulder_stability`,
+  `trunk_stability`, `range_of_motion`.
+- `hip_position_counter.py` -- 4-state FSM rep counter driven by hip vertical
+  position (STANDING -> DESCENDING -> BOTTOM -> ASCENDING).
 
-## Validation & Testing
+### `kinematics/`
+Joint angle computation from 3D keypoints.
 
-### Week 1 Success Criteria
-- [x] Skeleton overlay on webcam feed
-- [x] 20+ FPS on M2 MacBook
-- [x] Smooth keypoint tracking
+- `base.py` -- `IKSolver` abstract interface.
+- `analytical_ik.py` -- `AnalyticalIKSolver` computes all joint angles
+  (knee flexion, hip flexion/adduction, trunk flexion, ankle dorsiflexion,
+  bilateral asymmetry) using vector geometry on MediaPipe world coordinates.
+  No external musculoskeletal model needed.
 
-### Week 2 Success Criteria
-- [x] 3D coordinates from stereo cameras
-- [x] Reprojection error < 1 pixel
-- [x] Hip position tracked in 3D
+### `ml/`
+Machine learning models for rep counting.
 
-### Week 3 Success Criteria
-- [x] RMSE < 5° vs OpenCap ground truth
-- [x] Visual comparison matches
-- [x] Pipeline runs without crashes
+- `bilstm_model.py` -- `BiLSTMRepModel`, a 2-layer bidirectional LSTM that outputs
+  per-frame squat depth class logits (5 classes: standing, quarter, half, parallel,
+  deep).
+- `inference.py` -- `BiLSTMInference` wraps the model for real-time use with a
+  sliding sequence buffer.
+- `feature_extractor.py` / `feature_extractor_base.py` -- extract normalized
+  features from `Skeleton3D` for model input.
+- `sequence_buffer.py` -- fixed-length sliding window buffer for streaming inference.
 
-### Week 4-5 Success Criteria
-- [x] Joint angles computed for all frames
-- [x] Reasonable ranges (hip: 0-120°, knee: 0-140°)
-- [x] Smooth tracking (no jitter)
+### `pose/`
+2D and 3D pose estimation backends.
 
-### Week 6-7 Success Criteria
-- [x] 500+ successful Moco trials
-- [x] Diverse movement parameters
-- [x] Dataset size ~500MB
+- `base.py` -- `PoseEstimator` ABC defining `estimate()`, `estimate_3d()`, and
+  `estimate_both()`. Uses COCO 17-keypoint format (extended to 19 with foot indices).
+- `mediapipe_fallback.py` -- `MediaPipePoseEstimator`, the default backend.
+  Returns both 2D pixel coordinates and 3D world coordinates from a single frame.
+- `rtmpose.py` -- `RTMPoseEstimator`, an ONNX-based alternative for edge deployment.
 
-### Week 8 Success Criteria
-- [x] Training converges
-- [x] Validation loss < 10% of mean force
-- [x] Model file < 50MB
+### `profiles/`
+Exercise profile system. Each profile bundles the fault rules, rep counting signal,
+coaching cues, and depth categorization for one exercise type.
 
----
+- `base.py` -- `ExerciseProfile` base class with squat defaults.
+- `squat.py` -- `SquatProfile` registered under aliases like `squat`,
+  `barbell_back_squat`, `barbell_front_squat`. Creates the 5 core squat fault rules
+  and uses hip Y-position as the rep counting signal.
+- `registry.py` -- `@register_profile` decorator and `get_profile()` lookup.
+- Other profiles (`deadlift`, `lunge`, `overhead_press`, etc.) exist as stubs
+  for future exercises. Squats are the only fully implemented exercise.
 
-## Troubleshooting
+### `triangulation/`
+Multi-camera 3D reconstruction.
 
-### MMPose Installation Issues
+- `triangulator.py` -- `DLTTriangulator` performs Direct Linear Transform
+  triangulation from 2+ calibrated camera views into 3D world coordinates.
+  For 2 views uses `cv2.triangulatePoints`; for 3+ builds the DLT system and
+  solves via SVD.
+- `calibration.py` -- camera calibration data structures and loading.
+- `multi_capture.py` -- synchronized frame capture from multiple cameras.
 
-```bash
-# If mim install fails, try:
-pip install mmpose==1.3.0 --no-deps
-pip install mmcv==2.0.0 mmengine==0.10.0
+### `utils/`
+Shared types, filters, and geometry helpers used across all layers.
+
+- `types.py` -- core Pydantic data types: `Skeleton2D`, `Skeleton3D`,
+  `JointAngles`, `FaultEvent`, `FaultSeverity`, `RepData`, `PipelineFrame`,
+  `CocoKeypoints`, `BarbellDetection`, `BarTrackState`.
+- `geometry.py` -- vector math: `angle_between_vectors`, `joint_angle_3_points`,
+  `flexion_angle`, `project_to_plane`, `normalize_vector`.
+- `standing_gate.py` -- `StandingPoseGate` validates the user is standing in frame
+  before calibration begins (checks keypoint visibility, knee extension, torso
+  uprightness over N consecutive frames).
+- `filters.py` -- `JointAngleFilter` applies One Euro filtering for temporal
+  smoothing.
+- `derivatives.py` -- `DerivativeTracker` computes angular velocity and acceleration.
+- `confidence_blend.py` -- blends current and previous keypoints weighted by
+  confidence.
+- `velocity_clamp.py` -- caps per-frame keypoint displacement to reject
+  teleportation noise.
+- `bone_constraints.py` -- `BoneLengthConstraints` calibrates expected bone lengths
+  during standing, then enforces them to stabilize skeleton proportions. Also
+  extracts `BodyProportions` used for fault threshold scaling.
+- `position_filter.py` -- One Euro filter applied directly to 3D keypoint positions.
+- `predictive_state.py` -- `PredictiveStateEstimator` extrapolates joint angles
+  forward in time for predictive fault pre-cueing.
+
+### `viz/`
+Visualization and debugging.
+
+- `overlay_2d.py` -- `draw_skeleton()`, `draw_fps()`, `FPSCounter` for OpenCV
+  overlays.
+- `dashboard.py` -- `DebugDashboard` for real-time angle/fault display.
+- `set_plots.py` -- matplotlib plots for hip position and velocity traces.
+- `html_dashboard.py` -- generates self-contained HTML session dashboards with
+  per-set charts and segmented rep data.
+
+## Key Entry Points
+
+**`pipeline.py`** -- `BiomechanicsPipeline`. The main frame-by-frame pipeline class.
+Instantiates all layers (capture, pose, pre-IK filters, IK, faults, rep counting,
+optional BiLSTM and barbell tracking). Call `process_frame()` in a loop; returns
+a `PipelineFrame` with all outputs and per-layer timing.
+
+**`pipeline_process.py`** -- `run_biomechanics_pipeline()`. Subprocess entry point
+launched by `main.py` when a workout starts. Runs the assessment phase (2 bodyweight
+reps with diagnosis), calibration phase (5 reps to personalize thresholds), then
+the main workout loop. Communicates with the voice agent via `IPCBridge`.
+
+**`complete_pipeline.py`** -- `CompleteBiomechanicsPipeline`. Earlier prototype
+integrating stereo triangulation and muscle force prediction. Not used in the
+current production path but retained for reference.
+
+**`calibration.py`** -- `CalibrationTracker` collects peak angle values during
+calibration reps. `build_calibration_profile()` converts peaks into personalized
+fault thresholds. `apply_calibration_to_rule_engine()` writes those thresholds
+directly into the rule engine's rules.
+
+**`config.py`** -- `BiomechanicsConfig` (Pydantic BaseModel) aggregating all
+sub-configurations. `load_pipeline_config()` reads from YAML and returns a typed
+config instance.
+
+## Configuration
+
+All settings live in `config/biomechanics.yaml` at the project root. The file maps
+directly to the `BiomechanicsConfig` Pydantic model in `config.py`, which nests
+sub-configs for each subsystem: `PoseConfig`, `FaultsConfig`, `BarbellTrackingConfig`,
+`HipPositionCounterConfig`, `StandingGateConfig`, `BiLSTMConfig`, etc.
+
+To load config:
+```python
+from biomechanics.config import load_pipeline_config
+config = load_pipeline_config()  # uses default path
+config = load_pipeline_config("path/to/custom.yaml")
 ```
 
-### Camera Access Issues
+Defaults are baked into the Pydantic models so the system runs without a YAML file.
 
-```bash
-# List available cameras
-python -c "import cv2; [print(f'Camera {i}') for i in range(10) if cv2.VideoCapture(i).isOpened()]"
+## Edge Constraint
 
-# macOS camera permission
-# System Preferences > Security & Privacy > Camera > Terminal/VSCode
-```
+The target deployment hardware is a Jetson Orin Nano Super (~40 TOPS). Design
+constraints that follow from this:
 
-### MPS (Apple Silicon) Issues
-
-```bash
-# Force CPU if MPS unavailable
-export PYTORCH_ENABLE_MPS_FALLBACK=1
-
-# Or use --device cpu flag
-python complete_pipeline.py --device cpu
-```
-
-### OpenSim Installation (macOS)
-
-OpenSim is primarily supported on Linux/Windows. For macOS:
-
-1. Use Docker:
-```bash
-docker pull opensim/opensim-core
-```
-
-2. Or use AWS for Moco data generation (recommended)
-
----
-
-## Next Steps
-
-After completing the 8-week roadmap:
-
-1. **Temporal Smoothing** - Add Kalman filtering
-2. **Subject Calibration** - Personalize anthropometric parameters
-3. **Expand Joints** - Add upper body tracking
-4. **3D Visualization** - Add real-time skeleton rendering
-5. **Export** - Save sessions for analysis
-
----
-
-## Citation
-
-If you use this code, please cite:
-
-- **RTMPose**: [MMPose](https://github.com/open-mmlab/mmpose)
-- **OpenCap**: [OpenCap Project](https://www.opencap.ai/)
-- **OpenSim**: [OpenSim Documentation](https://opensim.stanford.edu/)
-
----
-
-## License
-
-MIT License - See individual component licenses for details.
-
----
-
-## Contact & Support
-
-For issues or questions:
-1. Check [Troubleshooting](#troubleshooting) section
-2. Review week-specific README files
-3. Open an issue with error logs and system info
-
----
-
-## Acknowledgments
-
-Based on the research and tools from:
-- Stanford Neuromuscular Biomechanics Lab
-- OpenCap Team
-- MMPose (OpenMMLab)
-- OpenSim Community
+- Pose estimation must use lightweight models (RTMPose ONNX or MediaPipe).
+- The analytical IK solver uses pure NumPy vector math, no OpenSim dependency.
+- The BiLSTM rep counter is a small 2-layer model (~500K parameters).
+- The YOLO barbell detector uses the nano variant (YOLO11n-pose).
+- The diagnosis engine is pure Python with no ML inference -- just rule evaluation
+  and graph traversal.
+- All processing fits within a single `process_frame()` call targeting 30 FPS.

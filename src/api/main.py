@@ -59,7 +59,7 @@ async def startup_event():
     print("="*80)
 
     # Initialize session logger for pricing tracking
-    from core.session_logger import SessionLogger
+    from agent.core.session_logger import SessionLogger
     session_logger = SessionLogger.get_instance()
     session_logger.start_session()
     print("📊 Session logging enabled - pricing will be tracked")
@@ -103,7 +103,7 @@ async def shutdown_event():
     print("="*80)
 
     # Save session logs and print summary
-    from core.session_logger import SessionLogger
+    from agent.core.session_logger import SessionLogger
     session_logger = SessionLogger.get_instance()
     summary = session_logger.end_session()
     print(summary)

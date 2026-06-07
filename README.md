@@ -924,7 +924,7 @@ Height-adaptive cues: for athletes ≥185cm, suggests wider stance option.
 
 ## Program Generator V5
 
-**Location:** `src/program_generator_v5/`
+**Location:** `src/program_generator/`
 
 6-layer agentic LLM pipeline for generating personalized workout programs. Reduced generation time from ~10 minutes to **~1 second** using Cache Augmented Generation (CAG).
 
@@ -1165,163 +1165,49 @@ PostgreSQL with SQLAlchemy 2.0 ORM. Migrations managed by Alembic (`src/db/migra
 ```
 NowvaLiveKit/
 ├── src/
-│   ├── main.py                           # Application orchestrator — subprocess lifecycle, IPC, state
-│   ├── agents/                           # Voice agents
-│   │   ├── voice_agent.py                # Console agent — mode-aware routing, cascade pipeline
-│   │   ├── website_voice_agent.py        # Website agent — 5-step conversational flow
-│   │   ├── onboarding_agent.py           # New user welcome + data collection
-│   │   ├── main_menu_agent.py            # Menu navigation + intent detection
-│   │   ├── workout_agent.py              # Live workout coaching with biomechanics
-│   │   ├── program_creation_agent.py     # Conversational program generation
-│   │   ├── schedule_agent.py             # Schedule management + deload logic
-│   │   ├── teaching_agent.py             # First-set form teaching (phase machine)
-│   │   ├── console_launcher.py           # Voice agent subprocess launcher
-│   │   ├── prompts/                      # System prompts per mode
-│   │   │   ├── main_menu_prompt.py
-│   │   │   ├── workout_prompt.py
-│   │   │   ├── onboarding_prompt.py
-│   │   │   ├── program_creation_prompt.py
-│   │   │   ├── website_step_prompts.py   # 5-step website flow prompts
-│   │   │   └── website_agent_prompt.py
-│   │   ├── shared/                       # Base agent class, userdata, helpers
-│   │   └── mixins/                       # Modular agent behaviors
-│   ├── biomechanics/                     # 6-layer real-time processing pipeline
-│   │   ├── pipeline.py                   # Pipeline orchestrator — process_frame() entry point
-│   │   ├── config.py                     # 17 Pydantic sub-configs loaded from YAML
-│   │   ├── pose/                         # Pose estimation backends
-│   │   │   ├── mediapipe_fallback.py     # MediaPipe (33 landmarks → COCO-17)
-│   │   │   └── rtmpose.py               # RTMPose-m via ONNX Runtime (SimCC decoding)
-│   │   ├── kinematics/
-│   │   │   └── analytical_ik.py          # 16+ joint angles from vector geometry (~1-2ms)
-│   │   ├── faults/
-│   │   │   ├── rule_engine.py            # Rule orchestrator with adaptive calibration
-│   │   │   ├── rep_counter.py            # 4-state FSM rep counter
-│   │   │   ├── fault_types.py            # FaultRule base class, FaultEvent, severity levels
-│   │   │   └── rules/                    # Individual fault rules
-│   │   │       ├── depth.py              # Squat depth classification
-│   │   │       ├── knee_valgus.py        # Knee valgus via frontal plane projection
-│   │   │       ├── forward_lean.py       # Trunk flexion fault
-│   │   │       ├── heel_rise.py          # Ankle height deviation
-│   │   │       ├── symmetry.py           # Bilateral L/R asymmetry
-│   │   │       ├── back_rounding.py      # Spinal flexion heuristic
-│   │   │       ├── elbow_flare.py        # Elbow abduction fault
-│   │   │       ├── bar_tilt_asymmetry.py # Barbell tilt via YOLO
-│   │   │       └── bar_path.py           # Bar path deviation
-│   │   ├── ml/
-│   │   │   ├── bilstm_model.py           # 2-layer BiLSTM (hidden=128, 5-class depth)
-│   │   │   ├── inference.py              # Sliding window inference pipeline
-│   │   │   └── feature_extractor.py      # 14-dim feature extraction
-│   │   ├── barbell_tracking/
-│   │   │   ├── detector.py               # YOLO11n-pose barbell detection
-│   │   │   ├── kalman.py                 # Constant-velocity Kalman filter (2D)
-│   │   │   └── tracker.py               # Bar path tracking + VBT velocity
-│   │   ├── triangulation/
-│   │   │   ├── calibration.py            # T-pose camera calibration (solvePnP)
-│   │   │   ├── triangulator.py           # SVD-based DLT triangulation
-│   │   │   └── multi_capture.py          # Synchronized multi-camera capture
-│   │   ├── utils/
-│   │   │   ├── filters.py                # Phase-aware One Euro filter
-│   │   │   ├── derivatives.py            # Angular velocity + acceleration tracking
-│   │   │   ├── confidence_blend.py       # Low-confidence keypoint suppression
-│   │   │   ├── velocity_clamp.py         # Physical velocity limit (2.5 m/s)
-│   │   │   ├── bone_constraints.py       # Calibrated bone length enforcement
-│   │   │   ├── predictive_state.py       # 0.2s lookahead extrapolation
-│   │   │   ├── standing_gate.py          # Upright posture validation gate
-│   │   │   ├── position_filter.py        # Keypoint position smoothing
-│   │   │   ├── geometry.py               # Vector math (angle_between, signed_angle)
-│   │   │   └── types.py                  # Skeleton2D/3D, JointAngles, CocoKeypoints, BodyProportions
-│   │   ├── coaching/
-│   │   │   ├── session_tracker.py        # Per-session fault/rep aggregation
-│   │   │   └── ipc_bridge.py             # Pipeline → coaching IPC bridge
-│   │   ├── viz/
-│   │   │   ├── skeleton_overlay.py       # 2D skeleton rendering on video frames
-│   │   │   └── post_session_plots.py     # Matplotlib plots after workout
-│   │   ├── profiles/                     # Exercise-specific fault rule configs
-│   │   │   ├── base.py                   # Base exercise profile
-│   │   │   ├── registry.py               # Profile registry
-│   │   │   ├── squat.py                  # Squat profile (5 rules)
-│   │   │   ├── deadlift.py
-│   │   │   ├── barbell_row.py
-│   │   │   ├── overhead_press.py
-│   │   │   ├── barbell_curl.py
-│   │   │   ├── romanian_deadlift.py
-│   │   │   ├── bulgarian_split_squat.py
-│   │   │   ├── lunge.py
-│   │   │   ├── overhead_tricep_extension.py
-│   │   │   └── skull_crusher.py
-│   │   └── analysis/                     # Post-session analysis
-│   ├── services/
-│   │   ├── coaching_orchestrator.py      # Priority queue, audio ducking, dispatch
-│   │   ├── audio_cue_service.py          # TTS cue pre-generation + caching (30-min TTL)
-│   │   ├── coaching_service.py           # High-level coaching coordination
-│   │   ├── compaction_service.py         # Context summarization (gpt-4.1-mini)
-│   │   ├── context_viewer.py             # Debug dashboard (localhost:8899)
-│   │   ├── set_report.py                 # Post-set analysis and feedback
-│   │   ├── email_service.py              # Email delivery (Resend)
-│   │   └── teaching_cues.py              # Form feedback cue definitions
-│   ├── core/
-│   │   ├── ipc_communication.py          # UNIX socket IPC (4-byte length-prefix, JSON)
-│   │   ├── agent_state.py                # Persistent state serialization
-│   │   ├── session_manager.py            # User session lifecycle
-│   │   ├── session_logger.py             # Usage/pricing tracking
-│   │   ├── latency_tracker.py            # Performance monitoring
-│   │   └── token_estimator.py            # Token counting for cost tracking
-│   ├── api/
-│   │   ├── main.py                       # FastAPI app (CORS, static serving, routers)
-│   │   ├── routers/
-│   │   │   ├── programs.py               # Program generation + status endpoints
-│   │   │   ├── workouts.py               # Workout CRUD
-│   │   │   ├── auth.py                   # JWT authentication
-│   │   │   ├── livekit.py                # LiveKit token generation
-│   │   │   └── health.py                 # Health check
-│   │   ├── services/                     # Job management, program updates
-│   │   └── models/                       # Pydantic request/response schemas
-│   ├── db/
-│   │   ├── models.py                     # SQLAlchemy 2.0 ORM (15 models)
-│   │   ├── database.py                   # Connection setup (PostgreSQL)
-│   │   ├── migrations/                   # Alembic migrations (21 scripts)
-│   │   ├── program_utils.py
-│   │   ├── progress_utils.py
-│   │   ├── schedule_utils.py
-│   │   ├── training_load.py
-│   │   ├── recovery_analysis.py
-│   │   └── calibration_utils.py
-│   ├── program_generator_v5/             # 6-layer agentic LLM program generation
-│   ├── knowledge/                        # Training knowledge base (periodization, exercises)
+│   ├── main.py                           # Application orchestrator — subprocess lifecycle, IPC
+│   ├── agent/                            # Voice agent stack (merged from agents/ + core/ + services/)
+│   │   ├── agents/                       # Voice agents (onboarding, workout, teaching, etc.)
+│   │   ├── core/                         # Infrastructure (IPC, state machine, session mgmt)
+│   │   └── services/                     # Coaching orchestrator, audio cues, reports
+│   ├── biomechanics/                     # Core IP — real-time squat diagnosis engine
+│   │   ├── pipeline.py                   # Frame-by-frame processing pipeline
+│   │   ├── pipeline_process.py           # Subprocess entry point (launched by main.py)
+│   │   ├── pose/                         # Pose estimation backends (MediaPipe, RTMPose)
+│   │   ├── kinematics/                   # Analytical IK solver (~1-2ms per frame)
+│   │   ├── faults/                       # Fault detection rules + rule engine
+│   │   ├── diagnosis/                    # Causal diagnosis graph engine
+│   │   ├── ml/                           # BiLSTM rep counter
+│   │   ├── barbell_tracking/             # YOLO barbell detection + Kalman tracking
+│   │   ├── triangulation/                # Multi-camera 3D reconstruction (DLT)
+│   │   ├── coaching/                     # IPC bridge + session tracking
+│   │   ├── profiles/                     # Exercise-specific configurations
+│   │   ├── utils/                        # Types, geometry, filters
+│   │   └── viz/                          # Visualization and dashboards
+│   ├── program_generator/                # 6-layer agentic workout program generator
+│   ├── api/                              # FastAPI REST backend
+│   ├── db/                               # SQLAlchemy models and migrations
 │   ├── auth/                             # User management + JWT security
-│   ├── pose/                             # Pose estimation subprocess entry point
-│   └── templates/                        # Jinja2 templates
+│   ├── assets/                           # Pre-cached audio cue WAVs
+│   ├── templates/                        # HTML/CSS templates for program export
+│   └── utils/                            # Shared utilities
 ├── frontend_demo/                        # React 19 + TypeScript website
-│   ├── src/
-│   │   ├── App.tsx
-│   │   ├── components/
-│   │   │   ├── sections/                 # Landing page sections
-│   │   │   ├── generator/                # Program generation UX
-│   │   │   │   ├── VoiceInterface.tsx    # LiveKit WebRTC voice agent
-│   │   │   │   ├── FormInterface.tsx     # Structured form alternative
-│   │   │   │   ├── ModeSelector.tsx
-│   │   │   │   ├── ProgramGenerationStatus.tsx
-│   │   │   │   └── onboarding/           # Multi-step form
-│   │   │   └── ui/                       # Reusable UI components
-│   │   ├── api/                          # API client (fetch wrapper + auth)
-│   │   ├── hooks/                        # Custom React hooks
-│   │   ├── types/                        # TypeScript type definitions
-│   │   └── utils/                        # Utility functions
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tailwind.config.js
-│   └── tsconfig.json
-├── config/
-│   └── biomechanics.yaml                 # Pipeline configuration (FPS, thresholds, BiLSTM)
+├── config/                               # Gunicorn, Nginx, biomechanics YAML
 ├── scripts/
-│   ├── visualize_video_squats.py         # Live-capture squat visualizer + 3D HTML replay
-│   └── generate_opensim_data.py          # Synthetic BiLSTM training data generation
+│   ├── deploy/                           # Production deployment + server startup
+│   ├── demos/                            # Visual pipeline demonstrations
+│   ├── benchmarks/                       # Pipeline and TTFT benchmarks
+│   ├── tests/                            # Live hardware validation scripts
+│   └── tools/                            # Utilities (model download, audio gen, training)
 ├── calibrated_test_visualizer/           # Multi-camera triangulation test harness
-├── tests/                                # Pytest test suite (18 test files)
+├── tests/                                # Pytest test suite
+├── docs/
+│   ├── deployment/                       # Production deployment guides
+│   ├── architecture/                     # System design and implementation docs
+│   └── screenshots/                      # Debug and demo screenshots
 ├── models/                               # Pre-trained ML models (BiLSTM, YOLO)
-├── docs/                                 # Technical documentation (20+ documents)
-├── shell/                                # Deployment scripts
-├── requirements.txt                      # Python dependencies (133 packages)
+├── data/                                 # Training data (gitignored)
+├── requirements.txt
 └── .env                                  # Environment variables (not committed)
 ```
 

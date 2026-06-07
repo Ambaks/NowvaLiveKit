@@ -99,7 +99,7 @@ Determine the minimal scope needed to implement this change. Return JSON only.""
         print(f"[SCOPE] LLM detected: {result['scope']} - {result['reason']}")
 
         # Log to session
-        from core.session_logger import SessionLogger
+        from agent.core.session_logger import SessionLogger
         session_logger = SessionLogger.get_instance()
 
         usage = response.usage
@@ -624,7 +624,7 @@ Return JSON validation result."""
             print(f"[VALIDATION] ✅ Safe change, proceeding")
 
         # Log to session
-        from core.session_logger import SessionLogger
+        from agent.core.session_logger import SessionLogger
         session_logger = SessionLogger.get_instance()
 
         usage = response.usage
@@ -780,7 +780,7 @@ Return the complete updated week in this JSON structure:
     print(f"[WEEK REGEN {job_id}] ✅ Week {week_number} regenerated")
 
     # Log to session
-    from core.session_logger import SessionLogger
+    from agent.core.session_logger import SessionLogger
     session_logger = SessionLogger.get_instance()
 
     usage = response.usage
@@ -888,7 +888,7 @@ Return the complete updated workout:
     print(f"[WORKOUT REGEN {job_id}] ✅ Week {week_number}, Day {day_number} regenerated")
 
     # Log to session
-    from core.session_logger import SessionLogger
+    from agent.core.session_logger import SessionLogger
     session_logger = SessionLogger.get_instance()
 
     usage = response.usage
@@ -1129,7 +1129,7 @@ Return the complete updated program in JSON format with this structure:
     print(f"[UPDATE JOB {job_id}] ✅ LLM returned updated program")
 
     # Log to session
-    from core.session_logger import SessionLogger
+    from agent.core.session_logger import SessionLogger
     session_logger = SessionLogger.get_instance()
 
     usage = response.usage

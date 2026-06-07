@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import logging
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
-from src.program_generator_v5.main import generate_program_v5_sync
-from src.program_generator_v5.schemas import SetType, EccentricStress
+from src.program_generator.main import generate_program_v5_sync
+from src.program_generator.schemas import SetType, EccentricStress
 
 PASS = "PASS"
 FAIL = "FAIL"

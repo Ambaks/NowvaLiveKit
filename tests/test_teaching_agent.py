@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from agents.teaching_agent import TeachingAgent, _TALL_THRESHOLD_CM
-from agents.teaching_phases import TeachingPhase
+from agent.agents.teaching_agent import TeachingAgent, _TALL_THRESHOLD_CM
+from agent.agents.teaching_phases import TeachingPhase
 from biomechanics.utils.types import RepPhase
-from services.teaching_cues import CLEAN_REP_CUE_KEYS
+from agent.services.teaching_cues import CLEAN_REP_CUE_KEYS
 
 
 # =============================================================================

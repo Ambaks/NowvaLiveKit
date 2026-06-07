@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from services.coaching_orchestrator import (
+from agent.services.coaching_orchestrator import (
     CoachingEvent,
     CoachingOrchestrator,
     CuePriority,

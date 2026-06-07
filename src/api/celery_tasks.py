@@ -57,8 +57,8 @@ def generate_program_v5_task(self, job_id: str, user_id: str, params: dict):
     from .services.v5_adapter import convert_request_to_v5_input, get_user_data_from_request
     from .services.program_saver_v5 import save_and_publish_v5_program
     from .models.requests import ProgramGenerationRequest
-    from program_generator_v5 import generate_program_v5
-    from services.email_service import send_program_email
+    from program_generator import generate_program_v5
+    from agent.services.email_service import send_program_email
 
     print(f"[CELERY TASK V5 {self.request.id}] Starting job {job_id}")
 

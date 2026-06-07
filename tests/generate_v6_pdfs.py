@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import logging
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
-from src.program_generator_v5.main import generate_program_v5_sync
+from src.program_generator.main import generate_program_v5_sync
 from src.api.services.v5_adapter import convert_v5_output_to_html_format, get_user_data_from_request
 from src.api.services.html_generator import generate_html
 

@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "program_generator_v5"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "program_generator"))
 
 from dotenv import load_dotenv
 load_dotenv()

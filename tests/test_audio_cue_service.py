@@ -11,7 +11,7 @@ import pytest
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from services.audio_cue_service import (
+from agent.services.audio_cue_service import (
     CACHE_TTL_SECONDS,
     CUE_TEXT_MAP,
     AudioCueService,

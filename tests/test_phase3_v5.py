@@ -13,8 +13,8 @@ import sys
 import os
 from pathlib import Path
 
-# Add the program_generator_v5 directory to sys.path so bare imports work
-sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "program_generator_v5"))
+# Add the program_generator directory to sys.path so bare imports work
+sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "program_generator"))
 
 # Now use bare imports like the rest of the codebase
 from schemas import (

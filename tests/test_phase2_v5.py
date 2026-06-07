@@ -8,11 +8,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from program_generator_v5.scoring import compute_exercise_score
-from program_generator_v5.utils import prescribe_exercise, get_pattern_fill_priority
-from program_generator_v5.prompts import format_profile_extraction_prompt, format_week_review_prompt
-from program_generator_v5.exercise_library import EXERCISE_BY_ID
-from program_generator_v5.schemas import WeekProfile
+from program_generator.scoring import compute_exercise_score
+from program_generator.utils import prescribe_exercise, get_pattern_fill_priority
+from program_generator.prompts import format_profile_extraction_prompt, format_week_review_prompt
+from program_generator.exercise_library import EXERCISE_BY_ID
+from program_generator.schemas import WeekProfile
 
 
 def test_1_scoring():
@@ -222,9 +222,9 @@ def print_summary(test_results):
     # Count lines in files
     import os
     files = {
-        "scoring.py": "src/program_generator_v5/scoring.py",
-        "utils.py": "src/program_generator_v5/utils.py",
-        "prompts.py": "src/program_generator_v5/prompts.py",
+        "scoring.py": "src/program_generator/scoring.py",
+        "utils.py": "src/program_generator/utils.py",
+        "prompts.py": "src/program_generator/prompts.py",
     }
 
     file_lines = {}

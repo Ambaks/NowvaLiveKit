@@ -146,6 +146,16 @@ downloads/
 # Generated program files
 src/programs/*.md
 programs/*.md
+programs/*.pdf
+
+# Build archives
+*.tar.gz
+
+# Redis dumps
+dump.rdb
+
+# Generated HTML artifacts
+fault_visualizer.html
 
 # Generated audio cues
 src/assets/cues/

@@ -14,11 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from dotenv import load_dotenv
 load_dotenv()
 
-from program_generator_v5 import generate_program_v5
+from program_generator import generate_program_v5
 from api.services.v5_adapter import convert_v5_output_to_html_format
 from api.services.html_generator import generate_html
 from api.services.pdf_generator import generate_pdf_from_html
-from services.email_service import send_program_email
+from agent.services.email_service import send_program_email
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
