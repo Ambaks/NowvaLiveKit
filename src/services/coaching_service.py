@@ -236,6 +236,18 @@ class CoachingService:
                     self._coaching_orchestrator.record_angle_sample(
                         message.get("joint_angles", {})
                     )
+            elif msg_type == "diagnosis_complete":
+                diagnosis = message.get("diagnosis", {})
+                scoring = message.get("scoring", {})
+                logger.info(
+                    f"[COACHING SERVICE] DIAGNOSIS COMPLETE: "
+                    f"confidence={diagnosis.get('confidence', 0):.2f} "
+                    f"score={scoring.get('mean_score', 0):.3f}"
+                )
+                if self._coaching_orchestrator:
+                    self._coaching_orchestrator.set_diagnosis_data(diagnosis, scoring)
+                else:
+                    logger.warning("[COACHING SERVICE] No orchestrator — diagnosis_complete dropped")
             elif msg_type == "set_complete":
                 logger.info("[COACHING SERVICE] set_complete from pipeline (ignored — orchestrator handles via rep count)")
             elif msg_type == "rest_complete":

@@ -649,3 +649,201 @@ class TestRelativeRepCounting:
             assert len(motivation) == 1
 
         asyncio.run(_run())
+
+
+# =============================================================================
+# TEST DIAGNOSIS INTEGRATION
+# =============================================================================
+
+
+def _mock_diagnosis() -> dict:
+    """Diagnosis dict matching the IPC message format."""
+    return {
+        "confidence": 0.82,
+        "detected_symptoms": [
+            {"symptom_id": "knee_valgus", "severity": 0.6, "contributing_reps": [1, 3]},
+        ],
+        "immediate_causes": [
+            {
+                "cause_id": "stance_narrow",
+                "score": 0.75,
+                "explanation": "Stance width is ~15% narrower than optimal for your proportions",
+                "parameter_delta": {"stance_width_ratio": 0.15},
+            },
+        ],
+        "session_causes": [
+            {
+                "cause_id": "ankle_mobility",
+                "score": 0.6,
+                "explanation": "Limited ankle dorsiflexion is forcing compensatory knee cave",
+            },
+        ],
+        "combined_perturbation": {"stance_width_ratio": 0.15},
+    }
+
+
+def _mock_scoring() -> dict:
+    """Scoring dict matching the IPC message format."""
+    return {
+        "mean_score": 0.72,
+        "per_dimension": {
+            "depth": 0.85,
+            "trunk_control": 0.60,
+            "knee_tracking": 0.75,
+            "symmetry": 0.90,
+            "ankle": 0.50,
+        },
+        "best_rep": 2,
+        "worst_rep": 1,
+        "trend_slope": 0.02,
+    }
+
+
+class TestDiagnosisData:
+    """Test diagnosis data storage and consumption."""
+
+    def test_set_diagnosis_data_stores(self, orchestrator):
+        diagnosis = _mock_diagnosis()
+        scoring = _mock_scoring()
+        orchestrator.set_diagnosis_data(diagnosis, scoring)
+        assert orchestrator._pending_diagnosis is diagnosis
+        assert orchestrator._pending_scoring is scoring
+        assert orchestrator._diagnosis_event.is_set()
+
+    def test_consume_diagnosis_returns_and_clears(self, orchestrator):
+        diagnosis = _mock_diagnosis()
+        scoring = _mock_scoring()
+        orchestrator.set_diagnosis_data(diagnosis, scoring)
+
+        async def _run():
+            got_diag, got_score = await orchestrator._consume_diagnosis()
+            assert got_diag is diagnosis
+            assert got_score is scoring
+            assert orchestrator._pending_diagnosis is None
+            assert orchestrator._pending_scoring is None
+            assert not orchestrator._diagnosis_event.is_set()
+
+        asyncio.run(_run())
+
+    def test_consume_diagnosis_times_out_gracefully(self, orchestrator):
+        async def _run():
+            got_diag, got_score = await orchestrator._consume_diagnosis()
+            assert got_diag is None
+            assert got_score is None
+
+        asyncio.run(_run())
+
+    def test_set_recap_with_diagnosis_enriches_prompt(self):
+        """Set recap should include diagnosis data in the LLM prompt."""
+        cbs = _make_callbacks()
+        orch = CoachingOrchestrator(**cbs)
+        orch.set_diagnosis_data(_mock_diagnosis(), _mock_scoring())
+
+        async def _run():
+            event = CoachingEvent(
+                CuePriority.LLM_SET_RECAP,
+                time.monotonic(),
+                "llm_set_recap",
+                data={
+                    "set_number": 1, "total_reps": 5, "clean_reps": 4,
+                    "avg_depth": 95.0, "depth_consistency": 3.5,
+                    "avg_duration_ms": 2500, "fault_summary": {},
+                },
+            )
+            await orch._dispatch(event)
+            call_args = cbs["generate_llm_reply_fn"].call_args[0][0]
+            assert "FORM SCORE: 72/100" in call_args
+            assert "TREND: improving" in call_args
+            assert "stance" in call_args.lower()
+            assert "biomechanics analysis" in call_args
+
+        asyncio.run(_run())
+
+    def test_set_recap_without_diagnosis_uses_original_prompt(self):
+        """Without diagnosis data, the set recap should use the original prompt."""
+        cbs = _make_callbacks()
+        orch = CoachingOrchestrator(**cbs)
+
+        async def _run():
+            event = CoachingEvent(
+                CuePriority.LLM_SET_RECAP,
+                time.monotonic(),
+                "llm_set_recap",
+                data={
+                    "set_number": 1, "total_reps": 5, "clean_reps": 4,
+                    "avg_depth": 95.0, "depth_consistency": 3.5,
+                    "avg_duration_ms": 2500, "fault_summary": {},
+                },
+            )
+            await orch._dispatch(event)
+            call_args = cbs["generate_llm_reply_fn"].call_args[0][0]
+            assert "just finished a set" in call_args
+            assert "FORM SCORE" not in call_args
+
+        asyncio.run(_run())
+
+    def test_set_recap_stores_diagnosis_in_set_summary(self):
+        """Diagnosis data should be included in _all_set_summaries for exercise recap."""
+        cbs = _make_callbacks()
+        orch = CoachingOrchestrator(**cbs)
+        diagnosis = _mock_diagnosis()
+        scoring = _mock_scoring()
+        orch.set_diagnosis_data(diagnosis, scoring)
+
+        async def _run():
+            event = CoachingEvent(
+                CuePriority.LLM_SET_RECAP,
+                time.monotonic(),
+                "llm_set_recap",
+                data={
+                    "set_number": 1, "total_reps": 5, "clean_reps": 4,
+                    "avg_depth": 95.0, "depth_consistency": 3.5,
+                    "avg_duration_ms": 2500, "fault_summary": {},
+                },
+            )
+            await orch._dispatch(event)
+            assert len(orch._all_set_summaries) == 1
+            summary = orch._all_set_summaries[0]
+            assert "diagnosis" in summary
+            assert "scoring" in summary
+            assert summary["scoring"]["mean_score"] == 0.72
+
+        asyncio.run(_run())
+
+    def test_exercise_recap_with_diagnosis_progression(self):
+        """Exercise recap should include form score progression from diagnosed sets."""
+        cbs = _make_callbacks()
+        orch = CoachingOrchestrator(**cbs)
+
+        async def _run():
+            event = CoachingEvent(
+                CuePriority.LLM_EXERCISE_RECAP,
+                time.monotonic(),
+                "llm_exercise_recap",
+                data={
+                    "all_set_summaries": [
+                        {
+                            "set_number": 1, "total_reps": 5, "clean_reps": 3,
+                            "avg_depth": 90.0, "fault_summary": {},
+                            "scoring": {"mean_score": 0.65},
+                            "diagnosis": {"immediate_causes": [{"explanation": "Stance narrow"}]},
+                        },
+                        {
+                            "set_number": 2, "total_reps": 5, "clean_reps": 4,
+                            "avg_depth": 95.0, "fault_summary": {},
+                            "scoring": {"mean_score": 0.78},
+                            "diagnosis": {"immediate_causes": [{"explanation": "Minor knee cave"}]},
+                        },
+                    ],
+                    "total_sets": 2,
+                },
+            )
+            await orch._dispatch(event)
+            call_args = cbs["generate_llm_reply_fn"].call_args[0][0]
+            assert "Form score progression" in call_args
+            assert "Set 1: 65/100" in call_args
+            assert "Set 2: 78/100" in call_args
+            assert "improved by 13 points" in call_args
+            assert "biomechanics analysis" in call_args
+
+        asyncio.run(_run())

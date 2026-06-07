@@ -33,6 +33,7 @@ from biomechanics.calibration import (
 from biomechanics.coaching.ipc_bridge import IPCBridge
 from biomechanics.coaching.session_tracker import SessionTracker
 from biomechanics.config import load_pipeline_config
+from biomechanics.utils.types import CocoKeypoints as CK
 from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
@@ -286,6 +287,42 @@ def run_biomechanics_pipeline(
 
             # Save calibration report
             _save_calibration_report(peaks, cal_profile, calibration_reps, out_dir)
+
+            # Wire athlete params for diagnosis engine
+            if (
+                pipeline._bone_constraints.is_calibrated
+                and pipeline._bone_constraints.body_proportions is not None
+            ):
+                proportions = pipeline._bone_constraints.body_proportions
+                shoulder_width = pipeline._bone_constraints._calibrated_lengths.get(
+                    (CK.LEFT_SHOULDER, CK.RIGHT_SHOULDER), 0.40,
+                )
+                foot_l = pipeline._bone_constraints._calibrated_lengths.get(
+                    (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX), 0.26,
+                )
+                foot_r = pipeline._bone_constraints._calibrated_lengths.get(
+                    (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX), 0.26,
+                )
+                athlete_params = {
+                    "shoulder_width_m": shoulder_width,
+                    "femur_avg_m": proportions.femur_length_avg,
+                    "torso_avg_m": proportions.torso_length_avg,
+                    "hip_width_m": proportions.hip_width,
+                    "tibia_avg_m": proportions.tibia_length_avg,
+                    "foot_avg_m": (foot_l + foot_r) / 2.0,
+                }
+                baseline = {
+                    "peakDorsi": peaks["dorsiflexion_drop"],
+                    "peakKneeFlex": peaks["avg_depth"],
+                }
+                session_tracker.set_athlete_params(athlete_params, baseline)
+                print(
+                    f"  [DIAGNOSIS] Athlete params set: "
+                    f"shoulder={shoulder_width:.3f}m femur={proportions.femur_length_avg:.3f}m "
+                    f"tibia={proportions.tibia_length_avg:.3f}m"
+                )
+            else:
+                print("  [DIAGNOSIS] Bone constraints not yet calibrated — diagnosis unavailable")
 
             # Reset pipeline for workout phase
             pipeline.reset_readiness_gate()

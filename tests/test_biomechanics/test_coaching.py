@@ -583,6 +583,26 @@ class TestDiagnosisIntegration:
         assert second_diag["scoring"]["best_rep"] in [3, 4, 5]
         assert second_diag["scoring"]["worst_rep"] in [3, 4, 5]
 
+    def test_diagnosis_complete_includes_per_dimension_scoring(self, session_tracker, mock_ipc_client):
+        """diagnosis_complete message should include per-dimension score averages."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        for i in range(1, 4):
+            session_tracker.on_rep_complete(
+                make_rep(i, start_time=(i - 1) * 3.0),
+                bottom_kpts=_squat_bottom_kpts_mediapipe(),
+                bottom_angles=_squat_bottom_angles(),
+            )
+        session_tracker.force_end_set()
+
+        diag_msgs = [m for m in mock_ipc_client.messages if m["type"] == "diagnosis_complete"]
+        assert len(diag_msgs) == 1
+
+        per_dim = diag_msgs[0]["scoring"]["per_dimension"]
+        assert set(per_dim.keys()) == {"depth", "trunk_control", "knee_tracking", "symmetry", "ankle"}
+        for key, value in per_dim.items():
+            assert 0.0 <= value <= 1.0, f"{key} score {value} out of [0, 1] range"
+
     def test_reset_clears_kinematic_buffer(self, session_tracker, mock_ipc_client):
         """reset() should clear the kinematic buffer."""
         session_tracker.set_athlete_params(_default_athlete_params(), {})
@@ -596,3 +616,64 @@ class TestDiagnosisIntegration:
 
         session_tracker.reset()
         assert len(session_tracker._rep_kinematic_buffer) == 0
+
+    def test_missing_bottom_kpts_excluded_from_buffer(self, session_tracker, mock_ipc_client):
+        """Reps with None bottom_kpts are excluded from kinematic buffer."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        session_tracker.on_rep_complete(
+            make_rep(1, start_time=0.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        session_tracker.on_rep_complete(
+            make_rep(2, start_time=3.0),
+            bottom_kpts=None,
+            bottom_angles=_squat_bottom_angles(),
+        )
+        session_tracker.on_rep_complete(
+            make_rep(3, start_time=6.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        assert len(session_tracker._rep_kinematic_buffer) == 2
+
+        session_tracker.force_end_set()
+        diag_msgs = [m for m in mock_ipc_client.messages if m["type"] == "diagnosis_complete"]
+        assert len(diag_msgs) == 1
+
+    def test_missing_bottom_angles_excluded_from_buffer(self, session_tracker, mock_ipc_client):
+        """Reps with None bottom_angles are excluded from kinematic buffer."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        session_tracker.on_rep_complete(
+            make_rep(1, start_time=0.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=None,
+        )
+        session_tracker.on_rep_complete(
+            make_rep(2, start_time=3.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+        assert len(session_tracker._rep_kinematic_buffer) == 1
+
+    def test_all_reps_missing_data_skips_diagnosis(self, session_tracker, mock_ipc_client):
+        """If all reps have missing bottom frame data, diagnosis is skipped."""
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+
+        session_tracker.on_rep_complete(
+            make_rep(1, start_time=0.0),
+            bottom_kpts=None,
+            bottom_angles=None,
+        )
+        session_tracker.on_rep_complete(
+            make_rep(2, start_time=3.0),
+            bottom_kpts=None,
+            bottom_angles=_squat_bottom_angles(),
+        )
+        session_tracker.force_end_set()
+
+        types = [m["type"] for m in mock_ipc_client.messages]
+        assert "set_complete" in types
+        assert "diagnosis_complete" not in types

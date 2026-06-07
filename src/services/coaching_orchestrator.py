@@ -150,6 +150,11 @@ class CoachingOrchestrator:
         # Accumulated per-set summaries for exercise recap
         self._all_set_summaries: List[Dict[str, Any]] = []
 
+        # Diagnosis data — populated by set_diagnosis_data(), consumed by recaps
+        self._pending_diagnosis: Optional[Dict[str, Any]] = None
+        self._pending_scoring: Optional[Dict[str, Any]] = None
+        self._diagnosis_event: asyncio.Event = asyncio.Event()
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -202,6 +207,31 @@ class CoachingOrchestrator:
         """Called when rest timer expires — resume rep/fault processing."""
         self._resting = False
         logger.info("[ORCHESTRATOR] Rest complete — resuming")
+
+    def set_diagnosis_data(self, diagnosis: Dict[str, Any], scoring: Dict[str, Any]) -> None:
+        """Store diagnosis results from the pipeline and signal any waiting recap."""
+        self._pending_diagnosis = diagnosis
+        self._pending_scoring = scoring
+        self._diagnosis_event.set()
+        logger.info(
+            f"[ORCHESTRATOR] Diagnosis data received: "
+            f"confidence={diagnosis.get('confidence', 0):.2f} "
+            f"score={scoring.get('mean_score', 0):.3f}"
+        )
+
+    async def _consume_diagnosis(self) -> tuple:
+        """Wait briefly for diagnosis data if not yet arrived, then consume it."""
+        if self._pending_diagnosis is None:
+            try:
+                await asyncio.wait_for(self._diagnosis_event.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
+        diagnosis = self._pending_diagnosis
+        scoring = self._pending_scoring
+        self._pending_diagnosis = None
+        self._pending_scoring = None
+        self._diagnosis_event = asyncio.Event()
+        return diagnosis, scoring
 
     # ------------------------------------------------------------------
     # Angle sample recording (called from voice agent on frame_data)
@@ -697,6 +727,8 @@ class CoachingOrchestrator:
 
     async def _speak_llm_set_recap(self, data: dict):
         """Generate and speak comprehensive LLM set recap."""
+        diagnosis, scoring = await self._consume_diagnosis()
+
         set_num = data.get("set_number", 0)
         total_reps = data.get("total_reps", 0)
         clean_reps = data.get("clean_reps", 0)
@@ -736,17 +768,31 @@ class CoachingOrchestrator:
                 )
             parts.append("Per-rep breakdown:\n" + "\n".join(rep_lines))
 
+        # Enrich with diagnosis data if available
+        if diagnosis and scoring:
+            parts.extend(self._build_diagnosis_context(diagnosis, scoring))
+
         context_str = " ".join(parts)
 
-        instructions = (
-            f"Your athlete just finished a set. You are giving them feedback on what they just did using the data. "
-            f"Give honest feedback. You have {self._rest_seconds - 5} seconds to make your point. "
-            f"Highlight what went well. If recurring faults, "
-            f"give ONE specific coaching tip for the next set. "
-            f"Be encouraging — reference the numbers. "
-            f"Here is the data: "
-            f"{context_str}"
-        )
+        if diagnosis and scoring:
+            instructions = (
+                f"Your athlete just finished a set. Here's their biomechanics analysis and rep data. "
+                f"Give honest, encouraging feedback (2-3 sentences). "
+                f"Lead with the form score, give the ONE specific adjustment from the analysis, "
+                f"end on what went well. You have {self._rest_seconds - 5} seconds. "
+                f"Here is the data: "
+                f"{context_str}"
+            )
+        else:
+            instructions = (
+                f"Your athlete just finished a set. You are giving them feedback on what they just did using the data. "
+                f"Give honest feedback. You have {self._rest_seconds - 5} seconds to make your point. "
+                f"Highlight what went well. If recurring faults, "
+                f"give ONE specific coaching tip for the next set. "
+                f"Be encouraging — reference the numbers. "
+                f"Here is the data: "
+                f"{context_str}"
+            )
 
         logger.info(f"[ORCHESTRATOR] LLM set recap instructions: {instructions[:120]}...")
         try:
@@ -766,7 +812,7 @@ class CoachingOrchestrator:
             if report:
                 self._pending_reports.append({"set_number": set_num, "report": report})
             # Accumulate set summary for exercise recap
-            self._all_set_summaries.append({
+            summary: Dict[str, Any] = {
                 "set_number": set_num,
                 "total_reps": total_reps,
                 "clean_reps": clean_reps,
@@ -774,16 +820,73 @@ class CoachingOrchestrator:
                 "depth_consistency": depth_consistency,
                 "avg_duration_ms": avg_duration_ms,
                 "fault_summary": fault_summary,
-            })
+            }
+            if diagnosis and scoring:
+                summary["diagnosis"] = diagnosis
+                summary["scoring"] = scoring
+            self._all_set_summaries.append(summary)
             # Only reset if not already reset by rep-count trigger
             # (rep-count trigger resets immediately in on_rep_complete)
             if data.get("trigger") != "rep_count":
                 self.reset_set(self._set_target_reps, self._positive_cue_keys)
 
+    @staticmethod
+    def _build_diagnosis_context(diagnosis: dict, scoring: dict) -> List[str]:
+        """Build diagnosis-enriched context lines for the LLM prompt."""
+        parts: List[str] = []
+
+        mean_pct = round(scoring.get("mean_score", 0) * 100)
+        dims = scoring.get("per_dimension", {})
+        dim_labels = [
+            ("depth", "depth"), ("trunk", "trunk_control"),
+            ("knee", "knee_tracking"), ("symmetry", "symmetry"),
+            ("ankle", "ankle"),
+        ]
+        dim_str = ", ".join(
+            f"{label}: {round(dims[key] * 100)}"
+            for label, key in dim_labels if key in dims
+        )
+        parts.append(f"\nFORM SCORE: {mean_pct}/100 ({dim_str})")
+
+        slope = scoring.get("trend_slope", 0)
+        if slope > 0.01:
+            trend = "improving"
+        elif slope < -0.01:
+            trend = "declining"
+        else:
+            trend = "stable"
+        parts.append(f"TREND: {trend} over the set")
+
+        immediate = diagnosis.get("immediate_causes", [])
+        if immediate:
+            top = immediate[0]
+            parts.append(f"TOP ISSUE: {top.get('explanation', 'N/A')}")
+            delta = top.get("parameter_delta")
+            if delta:
+                delta_str = ", ".join(f"{k}: {v}" for k, v in delta.items())
+                parts.append(f"ADJUSTMENT: {delta_str}")
+
+        session_causes = diagnosis.get("session_causes", [])
+        if session_causes:
+            parts.append(f"SESSION PATTERN: {session_causes[0].get('explanation', '')}")
+
+        confidence = diagnosis.get("confidence", 0)
+        parts.append(f"Analysis confidence: {round(confidence * 100)}%")
+
+        return parts
+
     async def _speak_llm_exercise_recap(self, data: dict):
         """Generate and speak comprehensive exercise recap after all sets."""
+        # Consume pending diagnosis for the final set
+        diagnosis, scoring = await self._consume_diagnosis()
+
         all_summaries = data.get("all_set_summaries", [])
         total_sets = data.get("total_sets", len(all_summaries))
+
+        # Attach final set's diagnosis if available
+        if diagnosis and scoring and all_summaries:
+            all_summaries[-1]["diagnosis"] = diagnosis
+            all_summaries[-1]["scoring"] = scoring
 
         # Compute aggregate stats
         total_reps = sum(s.get("total_reps", 0) for s in all_summaries)
@@ -834,15 +937,54 @@ class CoachingOrchestrator:
             fault_str = ", ".join(f"{ft}: {cnt}x across all sets" for ft, cnt in top_faults)
             parts.append(f"Most common faults: {fault_str}.")
 
+        # Diagnosis progression across sets
+        diagnosed_sets = [s for s in all_summaries if "scoring" in s]
+        has_diagnosis = len(diagnosed_sets) > 0
+        if diagnosed_sets:
+            score_lines = []
+            for s in diagnosed_sets:
+                sn = s["set_number"]
+                mean_pct = round(s["scoring"].get("mean_score", 0) * 100)
+                score_lines.append(f"Set {sn}: {mean_pct}/100")
+            parts.append(f"Form score progression: {'; '.join(score_lines)}.")
+
+            if len(diagnosed_sets) >= 2:
+                first_score = diagnosed_sets[0]["scoring"].get("mean_score", 0)
+                last_score = diagnosed_sets[-1]["scoring"].get("mean_score", 0)
+                delta = round((last_score - first_score) * 100)
+                if delta > 0:
+                    parts.append(f"Overall: improved by {delta} points from first to last set.")
+                elif delta < 0:
+                    parts.append(f"Overall: declined by {abs(delta)} points from first to last set.")
+
+            all_issues = []
+            for s in diagnosed_sets:
+                diag = s.get("diagnosis", {})
+                immediate = diag.get("immediate_causes", [])
+                if immediate:
+                    all_issues.append(f"Set {s['set_number']}: {immediate[0].get('explanation', '')}")
+            if all_issues:
+                parts.append(f"Key issues by set: {'; '.join(all_issues)}.")
+
         context_str = " ".join(parts)
 
-        instructions = (
-            f"Your athlete just finished their entire exercise. Give them a comprehensive recap. "
-            f"{context_str} "
-            f"Give honest, encouraging feedback (3-5 sentences). "
-            f"Highlight overall performance, progression across sets, and one key takeaway. "
-            f"End on a high note — they just finished!"
-        )
+        if has_diagnosis:
+            instructions = (
+                f"Your athlete just finished their entire exercise. Here's their comprehensive biomechanics analysis. "
+                f"{context_str} "
+                f"Give honest, encouraging feedback (3-5 sentences). "
+                f"Reference the form score progression, highlight the specific improvement or issue, "
+                f"and give one key takeaway for next session. "
+                f"End on a high note — they just finished!"
+            )
+        else:
+            instructions = (
+                f"Your athlete just finished their entire exercise. Give them a comprehensive recap. "
+                f"{context_str} "
+                f"Give honest, encouraging feedback (3-5 sentences). "
+                f"Highlight overall performance, progression across sets, and one key takeaway. "
+                f"End on a high note — they just finished!"
+            )
 
         logger.info(f"[ORCHESTRATOR] LLM exercise recap instructions: {instructions[:120]}...")
         try:

@@ -151,6 +151,8 @@ class IPCBridge:
         score_summary: SetScoreSummary,
     ) -> None:
         """Send structured diagnosis and scoring results for a completed set."""
+        per_rep = score_summary.per_rep_scores
+        n = len(per_rep)
         self.ipc_client.send_message({
             "type": "diagnosis_complete",
             "set_number": set_number,
@@ -172,6 +174,13 @@ class IPCBridge:
             },
             "scoring": {
                 "mean_score": score_summary.mean_score,
+                "per_dimension": {
+                    "depth": round(sum(r.depth_score for r in per_rep) / n, 3),
+                    "trunk_control": round(sum(r.trunk_control_score for r in per_rep) / n, 3),
+                    "knee_tracking": round(sum(r.knee_tracking_score for r in per_rep) / n, 3),
+                    "symmetry": round(sum(r.symmetry_score for r in per_rep) / n, 3),
+                    "ankle": round(sum(r.ankle_utilization_score for r in per_rep) / n, 3),
+                },
                 "best_rep": score_summary.best_rep_number,
                 "worst_rep": score_summary.worst_rep_number,
                 "trend_slope": score_summary.trend_slope,
