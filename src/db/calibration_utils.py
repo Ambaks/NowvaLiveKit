@@ -50,6 +50,8 @@ def get_user_calibration_full(db: Session, user_id, movement_pattern: str) -> Op
         "peaks": row.peaks,
         "thresholds": row.thresholds,
         "calibration_reps": row.calibration_reps,
+        "athlete_params": row.athlete_params,
+        "baseline": row.baseline,
     }
 
 
@@ -60,6 +62,8 @@ def save_user_calibration(
     peaks: dict,
     thresholds: dict,
     calibration_reps: int = 5,
+    athlete_params: dict | None = None,
+    baseline: dict | None = None,
 ) -> None:
     """Upsert calibration profile to DB.
 
@@ -78,6 +82,8 @@ def save_user_calibration(
         row.peaks = peaks
         row.thresholds = thresholds
         row.calibration_reps = calibration_reps
+        row.athlete_params = athlete_params
+        row.baseline = baseline
         logger.info(
             f"[CALIBRATION] Updated calibration for user={user_id} pattern={movement_pattern}"
         )
@@ -88,6 +94,8 @@ def save_user_calibration(
             peaks=peaks,
             thresholds=thresholds,
             calibration_reps=calibration_reps,
+            athlete_params=athlete_params,
+            baseline=baseline,
         )
         db.add(row)
         logger.info(

@@ -272,12 +272,25 @@ class CoachingService:
                 # from dispatching cached cues that collide with the announcement.
                 if self._coaching_orchestrator:
                     self._coaching_orchestrator.on_rest_complete()
+            elif msg_type == "assessment_rep":
+                rep = message.get("rep_number", 0)
+                total = message.get("total_required", 2)
+                round_num = message.get("round", 1)
+                logger.info(f"[COACHING SERVICE] ASSESSMENT REP {rep}/{total} (round {round_num})")
+                cue_key = f"rep_{rep}"
+                await self._play_cached_cue_audio(cue_key)
+            elif msg_type == "assessment_result":
+                passed = message.get("passed", False)
+                round_num = message.get("round", 1)
+                logger.info(
+                    f"[COACHING SERVICE] ASSESSMENT RESULT: passed={passed} round={round_num}"
+                )
+                await self._on_assessment_result(message)
             elif msg_type == "calibration_rep":
                 rep = message.get("rep_number", 0)
                 total = message.get("total_required", 5)
                 depth = message.get("depth_angle", 0)
                 logger.info(f"[COACHING SERVICE] CALIBRATION REP {rep}/{total} depth={depth}°")
-                # Play cached rep count cue (same "rep_N" keys used during workouts)
                 cue_key = f"rep_{rep}"
                 await self._play_cached_cue_audio(cue_key)
             elif msg_type == "calibration_complete":
@@ -319,6 +332,114 @@ class CoachingService:
         except Exception as e:
             logger.error(f"[COACHING SERVICE] TTS cache generation failed: {e}")
 
+    async def _on_assessment_result(self, message: dict) -> None:
+        """Handle assessment result — speak feedback via LLM."""
+        passed = message.get("passed", False)
+        round_num = message.get("round", 1)
+        diagnosis = message.get("diagnosis", {})
+        scoring = message.get("scoring", {})
+
+        if not passed:
+            instructions = self._build_assessment_correction_prompt(
+                diagnosis, scoring, round_num,
+            )
+        else:
+            instructions = self._build_assessment_pass_prompt(
+                diagnosis, scoring, round_num,
+            )
+
+        logger.info(f"[ASSESSMENT] LLM prompt: {instructions[:150]}...")
+        await self._coaching_llm_reply(instructions)
+
+    def _build_assessment_correction_prompt(
+        self, diagnosis: dict, scoring: dict, round_num: int,
+    ) -> str:
+        immediate = diagnosis.get("immediate_causes", [])
+        top_issue = immediate[0] if immediate else {}
+
+        context_parts = []
+        context_parts.append(f"Assessment round {round_num}: 2 bodyweight squats analyzed.")
+
+        mean_pct = round(scoring.get("mean_score", 0) * 100)
+        context_parts.append(f"Form score: {mean_pct}/100.")
+
+        if top_issue:
+            context_parts.append(
+                f"Main issue: {top_issue.get('explanation', 'form issue detected')}."
+            )
+            delta = top_issue.get("parameter_delta")
+            if delta:
+                delta_str = ", ".join(f"{k}: {v}" for k, v in delta.items())
+                context_parts.append(f"Recommended adjustment: {delta_str}.")
+
+        if len(immediate) > 1:
+            other = immediate[1]
+            context_parts.append(
+                f"Secondary issue: {other.get('explanation', '')}."
+            )
+
+        context_str = " ".join(context_parts)
+
+        return (
+            f"[PRE-WORKOUT ASSESSMENT] You are assessing the user's squat form before their workout. "
+            f"This is a form check — NOT a workout set. "
+            f"{context_str} "
+            f"Tell the user the specific issue you found and what to adjust. "
+            f"Be specific and actionable (e.g., 'widen your stance a bit' or 'push your knees out more'). "
+            f"Then tell them to try 2 more reps with that adjustment. "
+            f"Keep it encouraging and brief (2-3 sentences). "
+            f"Do NOT say 'assessment' — say something like 'Let me see that again with [adjustment].'"
+        )
+
+    def _build_assessment_pass_prompt(
+        self, diagnosis: dict, scoring: dict, round_num: int,
+    ) -> str:
+        session_causes = diagnosis.get("session_causes", [])
+        contextual = diagnosis.get("contextual_notes", [])
+        mean_pct = round(scoring.get("mean_score", 0) * 100)
+
+        context_parts = []
+        context_parts.append(
+            f"Assessment complete after {round_num} round(s). Form score: {mean_pct}/100."
+        )
+
+        other_notes = []
+        for cause in session_causes:
+            explanation = cause.get("explanation", "")
+            if explanation:
+                other_notes.append(explanation)
+        for note in contextual:
+            explanation = note.get("explanation", "")
+            if explanation:
+                other_notes.append(explanation)
+
+        if other_notes:
+            context_parts.append(
+                f"Things that may show up during heavier sets: {'; '.join(other_notes[:2])}."
+            )
+
+        context_str = " ".join(context_parts)
+
+        if other_notes:
+            return (
+                f"[PRE-WORKOUT ASSESSMENT PASSED] The user's squat form looks good — no immediate fixes needed. "
+                f"{context_str} "
+                f"Praise their form briefly, then mention 1-2 things they might notice during heavier sets "
+                f"(these are informational, not something to fix right now). "
+                f"Then transition to calibration: tell them you need 5 deep bodyweight squats "
+                f"to learn their movement pattern so you can coach them during the workout. "
+                f"Keep it natural and brief (3-4 sentences max)."
+            )
+        else:
+            return (
+                f"[PRE-WORKOUT ASSESSMENT PASSED] The user's squat form looks great — no issues at all! "
+                f"{context_str} "
+                f"Praise their form enthusiastically. "
+                f"Then transition to calibration: tell them you need 5 deep bodyweight squats "
+                f"to fine-tune your understanding of how they move. "
+                f"Keep it brief and hype (2-3 sentences)."
+            )
+
     async def _on_calibration_complete(self, message: dict):
         """Handle calibration_complete IPC message — save to DB and notify user."""
         from db.database import SessionLocal
@@ -327,6 +448,8 @@ class CoachingService:
         movement_pattern = message.get("movement_pattern", "squat")
         peaks = message.get("peaks", {})
         thresholds = message.get("thresholds", {})
+        athlete_params = message.get("athlete_params")
+        baseline = message.get("baseline")
 
         # Save calibration to database
         user_id = self._state.get("user.id")
@@ -339,6 +462,8 @@ class CoachingService:
                     movement_pattern=movement_pattern,
                     peaks=peaks,
                     thresholds=thresholds,
+                    athlete_params=athlete_params,
+                    baseline=baseline,
                 )
                 logger.info(f"[CALIBRATION] Saved calibration to DB for user={user_id} pattern={movement_pattern}")
             except Exception as e:

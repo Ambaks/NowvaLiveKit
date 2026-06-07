@@ -54,12 +54,11 @@ class WorkoutAgent(BaseNovaAgent):
         if needs_calibration:
             # Don't restore turn detection — calibration is conversational
             await self._say(
-                f"Tell the user conversationally that you don't have their biomechanical data "
-                f"for {exercise_name} yet, and that you need to gather it before they can move on. "
-                f"Say something like: 'So, I don't have your movement data for {exercise_name} yet. "
-                f"Before we get into your workout, I need you to do 5 deep bodyweight squats "
-                f"with your hands out in front of you. Go as deep as you can — this helps me "
-                f"learn how you move so I can coach you better. Step into frame whenever you're ready.' "
+                f"Tell the user conversationally that you haven't seen them do {exercise_name} before. "
+                f"Say something like: 'So, I haven't seen you squat before — before we get into "
+                f"your workout, I want to take a quick look at your form. Do 2 bodyweight squats "
+                f"for me — hands out in front, go as deep as you can. I'll check your movement "
+                f"and let you know if anything needs adjusting. Step into frame whenever you're ready.' "
                 f"Keep it natural and encouraging.",
                 restore=True,
             )

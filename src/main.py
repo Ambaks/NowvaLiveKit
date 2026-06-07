@@ -467,6 +467,15 @@ class NowvaApp:
                                 print(f"[BIOMECH] Calibration rep {rep}/{total}")
                             elif msg_type == 'calibration_complete':
                                 print(f"[BIOMECH] Calibration complete for {message.get('movement_pattern')}")
+                            elif msg_type == 'diagnosis_complete':
+                                print(f"[BIOMECH] Diagnosis complete — confidence={message.get('diagnosis', {}).get('confidence', 0):.2f}")
+                            elif msg_type == 'assessment_rep':
+                                rep = message.get('rep_number', 0)
+                                total = message.get('total_required', 2)
+                                print(f"[BIOMECH] Assessment rep {rep}/{total} (round {message.get('round', 1)})")
+                            elif msg_type == 'assessment_result':
+                                passed = message.get('passed', False)
+                                print(f"[BIOMECH] Assessment result: {'PASSED' if passed else 'NEEDS CORRECTION'} (round {message.get('round', 1)})")
                             elif msg_type == 'pipeline_status':
                                 print(f"[BIOMECH] Pipeline: {message.get('status')}")
                             # --- Legacy / backward-compatible types ---
@@ -484,7 +493,7 @@ class NowvaApp:
                                 print(f"[IPC] Error: {value}")
 
                             # Forward coaching-relevant messages to voice agent
-                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete'):
+                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep'):
                                 if self.coaching_ipc and self.coaching_ipc.client_socket:
                                     try:
                                         self.coaching_ipc.send_message(message)

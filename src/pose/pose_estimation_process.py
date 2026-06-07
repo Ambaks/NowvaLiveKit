@@ -34,6 +34,10 @@ from biomechanics.coaching.ipc_bridge import IPCBridge
 from biomechanics.coaching.session_tracker import SessionTracker
 from biomechanics.config import load_pipeline_config
 from biomechanics.utils.types import CocoKeypoints as CK
+from biomechanics.diagnosis.bridge import build_anthro_dict, build_rom_dict
+from biomechanics.diagnosis.engine import HypothesisEngine
+from biomechanics.diagnosis.rep_scoring import score_set
+from biomechanics.diagnosis.types import SetFeatures
 from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
@@ -112,6 +116,73 @@ def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir:
     print(f"  Saved: {md_path}")
 
 
+def _extract_athlete_params(pipeline) -> dict | None:
+    """Extract athlete body proportions from calibrated bone constraints."""
+    if not (
+        pipeline._bone_constraints.is_calibrated
+        and pipeline._bone_constraints.body_proportions is not None
+    ):
+        return None
+    proportions = pipeline._bone_constraints.body_proportions
+    shoulder_width = pipeline._bone_constraints._calibrated_lengths.get(
+        (CK.LEFT_SHOULDER, CK.RIGHT_SHOULDER), 0.40,
+    )
+    foot_l = pipeline._bone_constraints._calibrated_lengths.get(
+        (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX), 0.26,
+    )
+    foot_r = pipeline._bone_constraints._calibrated_lengths.get(
+        (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX), 0.26,
+    )
+    return {
+        "shoulder_width_m": shoulder_width,
+        "femur_avg_m": proportions.femur_length_avg,
+        "torso_avg_m": proportions.torso_length_avg,
+        "hip_width_m": proportions.hip_width,
+        "tibia_avg_m": proportions.tibia_length_avg,
+        "foot_avg_m": (foot_l + foot_r) / 2.0,
+    }
+
+
+def _serialize_diagnosis(diagnosis_result, score_summary) -> tuple[dict, dict]:
+    """Convert diagnosis engine output into JSON-serializable dicts for IPC."""
+    per_rep = score_summary.per_rep_scores
+    n = len(per_rep)
+    diagnosis_dict = {
+        "confidence": diagnosis_result.confidence,
+        "detected_symptoms": [
+            {"symptom_id": s.symptom_id, "severity": s.severity, "contributing_reps": s.contributing_reps}
+            for s in diagnosis_result.detected_symptoms
+        ],
+        "immediate_causes": [
+            {"cause_id": c.cause_id, "score": c.score, "explanation": c.explanation, "parameter_delta": c.parameter_delta}
+            for c in diagnosis_result.immediate_causes
+        ],
+        "session_causes": [
+            {"cause_id": c.cause_id, "score": c.score, "explanation": c.explanation}
+            for c in diagnosis_result.session_causes
+        ],
+        "contextual_notes": [
+            {"cause_id": c.cause_id, "score": c.score, "explanation": c.explanation}
+            for c in diagnosis_result.contextual_notes
+        ],
+        "combined_perturbation": diagnosis_result.combined_perturbation,
+    }
+    scoring_dict = {
+        "mean_score": score_summary.mean_score,
+        "per_dimension": {
+            "depth": round(sum(r.depth_score for r in per_rep) / n, 3) if n else 0,
+            "trunk_control": round(sum(r.trunk_control_score for r in per_rep) / n, 3) if n else 0,
+            "knee_tracking": round(sum(r.knee_tracking_score for r in per_rep) / n, 3) if n else 0,
+            "symmetry": round(sum(r.symmetry_score for r in per_rep) / n, 3) if n else 0,
+            "ankle": round(sum(r.ankle_utilization_score for r in per_rep) / n, 3) if n else 0,
+        },
+        "best_rep": score_summary.best_rep_number,
+        "worst_rep": score_summary.worst_rep_number,
+        "trend_slope": score_summary.trend_slope,
+    }
+    return diagnosis_dict, scoring_dict
+
+
 def run_biomechanics_pipeline(
     cam0_id: int = 0,
     cam1_id: int = 1,
@@ -187,15 +258,254 @@ def run_biomechanics_pipeline(
         except Exception as e:
             print(f"[CALIBRATION] Failed to load calibration file: {e}")
 
-    # --- Calibration phase (if no existing calibration) ---
+    # --- Assessment + Calibration phase (if no existing calibration) ---
     if calibration_mode:
+        movement_pattern = get_movement_pattern(exercise_name) or "squat"
+
+        # ============================================================
+        #  PHASE 1: PRE-WORKOUT FORM ASSESSMENT (2-rep loop)
+        # ============================================================
+        ASSESSMENT_TARGET_REPS = 2
+
+        print(f"\n{'='*60}")
+        print(f"  ASSESSMENT PHASE ({ASSESSMENT_TARGET_REPS} bodyweight squats)")
+        print(f"{'='*60}\n")
+
+        # Wait for readiness gate + bone constraint calibration
+        print("  [ASSESSMENT] Waiting for readiness gate + bone constraints...")
+        try:
+            while not (pipeline.is_ready and pipeline._bone_constraints.is_calibrated):
+                result = pipeline.process_frame()
+
+                frame = pipeline.last_frame
+                if frame is not None:
+                    display = frame.copy()
+                    if result.skeleton_2d is not None:
+                        draw_skeleton(display, result.skeleton_2d)
+                    fps_counter.update()
+                    draw_fps(display, fps_counter.fps)
+
+                    h, w = display.shape[:2]
+                    current, required = pipeline._readiness_gate.progress
+                    text = f"WAITING {current}/{required}"
+                    color = (0, 200, 255)
+                    ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+                    x = w - ts[0] - 15
+                    cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
+                    cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+                    cv2.imshow(window_name, display)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        print("\nAssessment stopped early by user")
+                        cv2.destroyAllWindows()
+                        pipeline.release()
+                        ipc_client.disconnect()
+                        return
+
+                total_ms = sum(result.latency_ms.values())
+                target_ms = 1000.0 / config.target_fps
+                if total_ms < target_ms:
+                    time.sleep((target_ms - total_ms) / 1000.0)
+        except KeyboardInterrupt:
+            print("\nAssessment stopped by user")
+            cv2.destroyAllWindows()
+            pipeline.release()
+            ipc_client.disconnect()
+            return
+
+        # Extract athlete params from bone constraints
+        athlete_params = _extract_athlete_params(pipeline)
+        if athlete_params is not None:
+            baseline_stub = {"peakDorsi": 35.0, "peakKneeFlex": 120.0}
+            session_tracker.set_athlete_params(athlete_params, baseline_stub)
+            print(
+                f"  [ASSESSMENT] Athlete params set: "
+                f"shoulder={athlete_params['shoulder_width_m']:.3f}m "
+                f"femur={athlete_params['femur_avg_m']:.3f}m "
+                f"tibia={athlete_params['tibia_avg_m']:.3f}m"
+            )
+        else:
+            print("  [ASSESSMENT] WARNING: Bone constraints not calibrated — diagnosis unavailable")
+
+        # Assessment loop: collect reps, diagnose, repeat until no immediate causes
+        assessment_passed = False
+        assessment_round = 0
+
+        try:
+            while not assessment_passed:
+                assessment_round += 1
+                assessment_reps_done = 0
+                pipeline.rep_counter.reset()
+                session_tracker._rep_kinematic_buffer = []
+                session_tracker.current_set_reps = []
+                session_tracker.set_active = False
+
+                print(f"\n  [ASSESSMENT] Round {assessment_round} — collecting {ASSESSMENT_TARGET_REPS} reps")
+
+                while assessment_reps_done < ASSESSMENT_TARGET_REPS:
+                    result = pipeline.process_frame()
+
+                    if pipeline.is_ready and result.skeleton_3d is not None:
+                        bridge.send_frame_data(result)
+                        for fault in result.faults:
+                            bridge.send_fault(fault)
+
+                        if result.rep_data is not None:
+                            bottom_kpts = None
+                            bottom_angles = None
+                            if hasattr(pipeline, 'consume_bottom_frame'):
+                                bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
+
+                            session_tracker.on_rep_complete(
+                                result.rep_data,
+                                bottom_kpts=bottom_kpts,
+                                bottom_angles=bottom_angles,
+                            )
+                            assessment_reps_done += 1
+
+                            depth = result.rep_data.max_depth_angle
+                            print(f"  [ASSESSMENT REP {assessment_reps_done}/{ASSESSMENT_TARGET_REPS}] depth={depth:.1f}°")
+
+                            ipc_client.send_message({
+                                "type": "assessment_rep",
+                                "rep_number": assessment_reps_done,
+                                "total_required": ASSESSMENT_TARGET_REPS,
+                                "round": assessment_round,
+                                "depth_angle": round(depth, 1),
+                            })
+
+                    # Display
+                    frame = pipeline.last_frame
+                    if frame is not None:
+                        display = frame.copy()
+                        if result.skeleton_2d is not None:
+                            draw_skeleton(display, result.skeleton_2d)
+                        fps_counter.update()
+                        draw_fps(display, fps_counter.fps)
+
+                        h, w = display.shape[:2]
+                        text = f"ASSESSMENT  Round {assessment_round}  Rep {assessment_reps_done}/{ASSESSMENT_TARGET_REPS}"
+                        color = (255, 165, 0)
+                        ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+                        x = w - ts[0] - 15
+                        cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
+                        cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+                        cv2.putText(
+                            display, f"ASSESSMENT  {assessment_reps_done}/{ASSESSMENT_TARGET_REPS}",
+                            (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 165, 0), 3,
+                        )
+
+                        cv2.imshow(window_name, display)
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            print("\nAssessment stopped early by user")
+                            cv2.destroyAllWindows()
+                            pipeline.release()
+                            ipc_client.disconnect()
+                            return
+
+                    total_ms = sum(result.latency_ms.values())
+                    target_ms = 1000.0 / config.target_fps
+                    if total_ms < target_ms:
+                        time.sleep((target_ms - total_ms) / 1000.0)
+
+                # --- Run diagnosis on assessment reps ---
+                kinematic_buffer = list(session_tracker._rep_kinematic_buffer)
+
+                if kinematic_buffer and athlete_params is not None:
+                    anthro = build_anthro_dict(athlete_params)
+                    rom = build_rom_dict(athlete_params, baseline_stub)
+                    set_features = SetFeatures(
+                        user_id=0,
+                        set_id=f"assessment_{assessment_round}",
+                        rep_count=len(kinematic_buffer),
+                        per_rep_kinematics=kinematic_buffer,
+                        anthropometry=anthro,
+                        rom=rom,
+                    )
+                    diagnosis_result = HypothesisEngine().diagnose(set_features)
+                    score_summary = score_set(kinematic_buffer, anthro, rom)
+
+                    has_immediate = len(diagnosis_result.immediate_causes) > 0
+                    diagnosis_dict, scoring_dict = _serialize_diagnosis(diagnosis_result, score_summary)
+
+                    print(f"\n  [ASSESSMENT] Diagnosis: confidence={diagnosis_result.confidence:.2f}")
+                    print(f"  [ASSESSMENT] Immediate causes: {len(diagnosis_result.immediate_causes)}")
+                    print(f"  [ASSESSMENT] Session causes: {len(diagnosis_result.session_causes)}")
+                    print(f"  [ASSESSMENT] Form score: {round(score_summary.mean_score * 100)}/100")
+
+                    ipc_client.send_message({
+                        "type": "assessment_result",
+                        "round": assessment_round,
+                        "passed": not has_immediate,
+                        "diagnosis": diagnosis_dict,
+                        "scoring": scoring_dict,
+                    })
+
+                    if not has_immediate:
+                        assessment_passed = True
+                        print(f"\n  [ASSESSMENT] PASSED after {assessment_round} round(s)")
+                    else:
+                        print(f"  [ASSESSMENT] Issues found — user needs to correct and retry")
+                        pipeline.reset_readiness_gate()
+                        # Wait for readiness gate again before next round
+                        while not pipeline.is_ready:
+                            result = pipeline.process_frame()
+                            frame = pipeline.last_frame
+                            if frame is not None:
+                                display = frame.copy()
+                                if result.skeleton_2d is not None:
+                                    draw_skeleton(display, result.skeleton_2d)
+                                fps_counter.update()
+                                draw_fps(display, fps_counter.fps)
+                                cv2.imshow(window_name, display)
+                                if cv2.waitKey(1) & 0xFF == ord('q'):
+                                    cv2.destroyAllWindows()
+                                    pipeline.release()
+                                    ipc_client.disconnect()
+                                    return
+                            total_ms = sum(result.latency_ms.values())
+                            target_ms = 1000.0 / config.target_fps
+                            if total_ms < target_ms:
+                                time.sleep((target_ms - total_ms) / 1000.0)
+                else:
+                    # No kinematic data (athlete_params missing) — pass through
+                    print("  [ASSESSMENT] No kinematic data — skipping diagnosis, passing assessment")
+                    ipc_client.send_message({
+                        "type": "assessment_result",
+                        "round": assessment_round,
+                        "passed": True,
+                        "diagnosis": {},
+                        "scoring": {},
+                    })
+                    assessment_passed = True
+
+        except KeyboardInterrupt:
+            print("\nAssessment stopped by user")
+            cv2.destroyAllWindows()
+            pipeline.release()
+            ipc_client.disconnect()
+            return
+
+        # Reset pipeline state for calibration
+        pipeline.reset_readiness_gate()
+        pipeline.rep_counter.reset()
+        if pipeline._bilstm is not None:
+            pipeline._bilstm.reset()
+        session_tracker._rep_kinematic_buffer = []
+        session_tracker.current_set_reps = []
+        session_tracker.set_active = False
+        session_tracker.current_set_number = 0
+
+        # ============================================================
+        #  PHASE 2: CALIBRATION (5-rep threshold calibration)
+        # ============================================================
         print(f"\n{'='*60}")
         print(f"  CALIBRATION PHASE ({calibration_reps} bodyweight squats)")
         print(f"{'='*60}\n")
 
         tracker = CalibrationTracker(target_reps=calibration_reps)
         cal_set_collector = SetDataCollector()
-        movement_pattern = get_movement_pattern(exercise_name) or "squat"
 
         try:
             while not tracker.is_complete:
@@ -268,13 +578,24 @@ def run_biomechanics_pipeline(
             cal_profile = build_calibration_profile(peaks, config)
             apply_calibration_to_rule_engine(pipeline._rule_engine, cal_profile)
 
-            # Send calibration results to voice agent
-            ipc_client.send_message({
+            # Build real baseline from calibration peaks
+            cal_athlete_params = _extract_athlete_params(pipeline)
+            cal_baseline = {
+                "peakDorsi": peaks["dorsiflexion_drop"],
+                "peakKneeFlex": peaks["avg_depth"],
+            }
+
+            # Send calibration results + athlete data to voice agent
+            cal_complete_msg = {
                 "type": "calibration_complete",
                 "movement_pattern": movement_pattern,
                 "peaks": peaks,
                 "thresholds": {k: v for k, v in cal_profile.items() if k != "defaults"},
-            })
+            }
+            if cal_athlete_params is not None:
+                cal_complete_msg["athlete_params"] = cal_athlete_params
+                cal_complete_msg["baseline"] = cal_baseline
+            ipc_client.send_message(cal_complete_msg)
 
             print(f"\n{'='*60}")
             print(f"  CALIBRATION COMPLETE ({tracker.reps_completed} reps)")
@@ -289,37 +610,13 @@ def run_biomechanics_pipeline(
             _save_calibration_report(peaks, cal_profile, calibration_reps, out_dir)
 
             # Wire athlete params for diagnosis engine
-            if (
-                pipeline._bone_constraints.is_calibrated
-                and pipeline._bone_constraints.body_proportions is not None
-            ):
-                proportions = pipeline._bone_constraints.body_proportions
-                shoulder_width = pipeline._bone_constraints._calibrated_lengths.get(
-                    (CK.LEFT_SHOULDER, CK.RIGHT_SHOULDER), 0.40,
-                )
-                foot_l = pipeline._bone_constraints._calibrated_lengths.get(
-                    (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX), 0.26,
-                )
-                foot_r = pipeline._bone_constraints._calibrated_lengths.get(
-                    (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX), 0.26,
-                )
-                athlete_params = {
-                    "shoulder_width_m": shoulder_width,
-                    "femur_avg_m": proportions.femur_length_avg,
-                    "torso_avg_m": proportions.torso_length_avg,
-                    "hip_width_m": proportions.hip_width,
-                    "tibia_avg_m": proportions.tibia_length_avg,
-                    "foot_avg_m": (foot_l + foot_r) / 2.0,
-                }
-                baseline = {
-                    "peakDorsi": peaks["dorsiflexion_drop"],
-                    "peakKneeFlex": peaks["avg_depth"],
-                }
-                session_tracker.set_athlete_params(athlete_params, baseline)
+            if cal_athlete_params is not None:
+                session_tracker.set_athlete_params(cal_athlete_params, cal_baseline)
                 print(
                     f"  [DIAGNOSIS] Athlete params set: "
-                    f"shoulder={shoulder_width:.3f}m femur={proportions.femur_length_avg:.3f}m "
-                    f"tibia={proportions.tibia_length_avg:.3f}m"
+                    f"shoulder={cal_athlete_params['shoulder_width_m']:.3f}m "
+                    f"femur={cal_athlete_params['femur_avg_m']:.3f}m "
+                    f"tibia={cal_athlete_params['tibia_avg_m']:.3f}m"
                 )
             else:
                 print("  [DIAGNOSIS] Bone constraints not yet calibrated — diagnosis unavailable")

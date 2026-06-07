@@ -349,6 +349,8 @@ class UserCalibration(Base):
     peaks = Column(JSONB, nullable=False)
     thresholds = Column(JSONB, nullable=False)
     calibration_reps = Column(Integer, nullable=False, default=5)
+    athlete_params = Column(JSONB, nullable=True)
+    baseline = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
