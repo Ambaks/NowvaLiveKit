@@ -16,7 +16,7 @@ from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 # Add parent directory (src/) to path when running as subprocess
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 load_dotenv()
 

@@ -11,12 +11,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Add parent directory (src/) to path when running as subprocess
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 load_dotenv()
 
 from livekit import agents
-from livekit.agents import AgentSession
+from livekit.agents import AgentSession, TurnHandlingOptions
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import deepgram, google, cartesia, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -109,7 +109,7 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm,
         tts=tts,
         vad=vad,
-        turn_handling={"turn_detection": MultilingualModel()},
+        turn_handling=TurnHandlingOptions(turn_detection=MultilingualModel()),
         userdata=userdata,
         preemptive_generation=True,
     )
