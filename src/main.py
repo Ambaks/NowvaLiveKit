@@ -394,14 +394,10 @@ class NowvaApp:
                 # (workout.current_session is set by confirm_quick_exercise/start_workout)
                 has_workout_session = self.state.get("workout.current_session") is not None
                 if current_mode == "workout" and not pose_running and has_workout_session:
-                    # Wait for voice agent greeting to finish before starting
-                    # pose estimation (camera/window startup can cancel speech)
-                    if not self.state.get("workout.greeting_done", False):
-                        continue
-
-                    print("\n" + "="*50)
-                    print("STARTING WORKOUT SESSION")
-                    print("="*50)
+                    # Start IPC servers immediately so the voice agent's
+                    # CoachingService can connect while the greeting plays.
+                    # Only the pose estimation (camera window) waits for
+                    # greeting_done to avoid interrupting speech.
 
                     # Start coaching IPC server for forwarding messages to voice agent
                     if not self.coaching_ipc:
@@ -514,6 +510,15 @@ class NowvaApp:
                         ipc_thread.start()
                         await asyncio.sleep(1)
                         print("[IPC] Server ready")
+
+                    # Wait for greeting to finish before opening camera window
+                    # (window popup can cancel TTS speech on some platforms)
+                    if not self.state.get("workout.greeting_done", False):
+                        continue
+
+                    print("\n" + "="*50)
+                    print("STARTING WORKOUT SESSION")
+                    print("="*50)
 
                     if getattr(self, 'simulate_mode', False):
                         print("[SIMULATE] Skipping real pose estimation — use simulate_squat_workout.py")

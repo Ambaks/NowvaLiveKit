@@ -18,7 +18,7 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession, TurnHandlingOptions
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, google, elevenlabs, silero, noise_cancellation
+from livekit.plugins import deepgram, google, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from agent.core.agent_state import AgentState
@@ -88,15 +88,7 @@ async def entrypoint(ctx: agents.JobContext):
         model=os.getenv("LLM_MODEL", "gemini-3.1-flash-lite"),
     )
 
-    tts = elevenlabs.TTS(
-        voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
-        model=os.getenv("ELEVENLABS_VOICE_MODEL"),
-        encoding="pcm_24000",
-        voice_settings=elevenlabs.VoiceSettings(
-            stability=0.30,
-            similarity_boost=0.5,
-        ),
-    )
+    tts = "cartesia/sonic-2"
     logger.info("[NOVA] Cascade pipeline initialized")
 
     # Retrieve prewarmed VAD or load fresh as fallback
