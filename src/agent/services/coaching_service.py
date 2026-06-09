@@ -114,14 +114,14 @@ class CoachingService:
 
         from agent.core.ipc_communication import IPCClient
 
-        max_retries = 5
+        max_retries = 3
         base_delay = 1.0  # seconds
 
         def _connect_with_retry() -> bool:
             """Attempt IPC connection with exponential backoff."""
             for attempt in range(1, max_retries + 1):
                 self._coaching_ipc = IPCClient(socket_path="/tmp/nowva_coaching.sock")
-                if self._coaching_ipc.connect(timeout=15):
+                if self._coaching_ipc.connect(timeout=5):
                     logger.info(f"[COACHING SERVICE] Connected to coaching IPC server (attempt {attempt})")
                     return True
                 delay = base_delay * (2 ** (attempt - 1))
@@ -794,10 +794,16 @@ class CoachingService:
         task as user_input so the LLM has a clear user-role message to
         respond to (Llama models may generate near-empty responses when
         only system instructions are provided with no user turn).
+
+        Strips the user_input + assistant response from the chat context
+        after playout so ephemeral coaching calls don't bloat TTFT.
         """
         logger.info(f"[COACHING SERVICE] → Coaching LLM | instructions[:80]={instructions[:80]}...")
         self.is_coaching_speaking = True
         try:
+            agent = self._session.current_agent
+            ctx_len_before = len(agent.chat_ctx.items) if agent else 0
+
             handle = self._session.generate_reply(
                 instructions=_COACHING_PERSONA,
                 user_input=instructions,
@@ -806,6 +812,14 @@ class CoachingService:
             )
             await handle.wait_for_playout()
             logger.info("[COACHING SERVICE] ✓ Coaching LLM playout complete")
+
+            if agent and len(agent.chat_ctx.items) > ctx_len_before:
+                added = len(agent.chat_ctx.items) - ctx_len_before
+                del agent.chat_ctx.items[ctx_len_before:]
+                logger.debug(
+                    f"[COACHING SERVICE] Stripped {added} ephemeral coaching items from context"
+                )
+
             return handle
         except Exception as e:
             logger.error(f"[COACHING SERVICE] Coaching LLM reply failed: {e}", exc_info=True)

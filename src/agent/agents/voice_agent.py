@@ -19,10 +19,10 @@ load_dotenv()
 from livekit import agents
 from livekit.agents import AgentSession, TurnHandlingOptions
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, google, silero, noise_cancellation
+from livekit.plugins import deepgram, openai, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from agent.core.agent_state import AgentState
+from agent.core.agent_state import AgentState, set_state_notify_fd
 from agent.agents.onboarding_agent import OnboardingAgent
 from agent.agents.main_menu_agent import MainMenuAgent
 from agent.agents.workout_agent import WorkoutAgent
@@ -41,6 +41,11 @@ async def entrypoint(ctx: agents.JobContext):
     """Main entry point for Nova voice agent"""
 
     logger.info("[NOVA] Entrypoint function called")
+
+    notify_fd_str = os.environ.get("NOWVA_STATE_NOTIFY_FD")
+    if notify_fd_str is not None:
+        set_state_notify_fd(int(notify_fd_str))
+        logger.info(f"[NOVA] State notify pipe fd={notify_fd_str}")
 
     # Discover user_id from room metadata or most recent state file
     logger.info("[NOVA] Checking for user_id in room metadata...")
@@ -86,8 +91,8 @@ async def entrypoint(ctx: agents.JobContext):
         ],
     )
 
-    llm = google.LLM(
-        model=os.getenv("LLM_MODEL", "gemini-3.1-flash-lite"),
+    llm = openai.LLM(
+        model=os.getenv("LLM_MODEL", "gpt-5.4-mini"),
     )
 
     tts = "cartesia/sonic-2"
@@ -110,7 +115,8 @@ async def entrypoint(ctx: agents.JobContext):
         vad=vad,
         turn_handling=TurnHandlingOptions(
             turn_detection=MultilingualModel(),
-            preemptive_generation={"enabled": True},
+            endpointing={"min_delay": 0.3},
+            preemptive_generation={"enabled": True, "preemptive_tts": True},
         ),
         userdata=userdata,
     )

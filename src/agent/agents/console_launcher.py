@@ -37,12 +37,16 @@ def terminate_process_group(process):
             pass
 
 
-async def run_console_voice_agent(user_id: Optional[str] = None):
+async def run_console_voice_agent(
+    user_id: Optional[str] = None,
+    state_notify_fd: Optional[int] = None,
+):
     """
     Run voice agent in console mode - monitors output synchronously on main thread
 
     Args:
         user_id: Optional user ID for existing users, None for new onboarding
+        state_notify_fd: Write end of a pipe; the child writes a byte after each save_state()
 
     Returns:
         subprocess.Popen: The running agent process
@@ -58,6 +62,12 @@ async def run_console_voice_agent(user_id: Optional[str] = None):
         # Path to voice agent (same directory now)
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
+        env = os.environ.copy()
+        pass_fds: tuple = ()
+        if state_notify_fd is not None:
+            env["NOWVA_STATE_NOTIFY_FD"] = str(state_notify_fd)
+            pass_fds = (state_notify_fd,)
+
         # Run the voice agent in its own process group so we can kill all children
         process = subprocess.Popen(
             [sys.executable, str(voice_agent_path), 'console'],
@@ -66,7 +76,9 @@ async def run_console_voice_agent(user_id: Optional[str] = None):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            preexec_fn=os.setsid
+            preexec_fn=os.setsid,
+            env=env,
+            pass_fds=pass_fds,
         )
 
         return process
@@ -78,7 +90,9 @@ async def run_console_voice_agent(user_id: Optional[str] = None):
         return None
 
 
-async def run_console_voice_onboarding() -> Optional[Tuple[str, str]]:
+async def run_console_voice_onboarding(
+    state_notify_fd: Optional[int] = None,
+) -> Optional[Tuple[str, str]]:
     """
     Run voice onboarding in console by launching the voice agent
     DEPRECATED: This is kept for backwards compatibility but now just monitors for completion
@@ -97,6 +111,12 @@ async def run_console_voice_onboarding() -> Optional[Tuple[str, str]]:
         # Path to voice agent (same directory now)
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
+        env = os.environ.copy()
+        pass_fds: tuple = ()
+        if state_notify_fd is not None:
+            env["NOWVA_STATE_NOTIFY_FD"] = str(state_notify_fd)
+            pass_fds = (state_notify_fd,)
+
         # Run the voice agent in its own process group so we can kill all children
         process = subprocess.Popen(
             [sys.executable, str(voice_agent_path), 'console'],
@@ -105,7 +125,9 @@ async def run_console_voice_onboarding() -> Optional[Tuple[str, str]]:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            preexec_fn=os.setsid
+            preexec_fn=os.setsid,
+            env=env,
+            pass_fds=pass_fds,
         )
 
         # Monitor output for onboarding completion markers

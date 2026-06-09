@@ -4,6 +4,8 @@ Nowva Main Application
 Orchestrates voice agent and pose estimation with IPC communication
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 import sys
@@ -212,7 +214,7 @@ class NowvaApp:
 
         print("Pose estimation process started")
 
-    async def run_onboarding(self):
+    async def run_onboarding(self, state_notify_fd: int | None = None):
         """
         Run voice-based onboarding flow
 
@@ -232,7 +234,7 @@ class NowvaApp:
         print("6. Transition to main menu\n")
 
         # Run voice onboarding - returns (first_name, email, process)
-        result = await run_console_voice_onboarding()
+        result = await run_console_voice_onboarding(state_notify_fd=state_notify_fd)
 
         if not result:
             print("\nVoice onboarding failed. Exiting.")
@@ -286,6 +288,7 @@ class NowvaApp:
         self._profiler.start()
 
         self._voice_agent_process = None
+        self._state_pipe_r: int | None = None
 
         try:
             await self._run_inner()
@@ -331,14 +334,28 @@ class NowvaApp:
             # Small delay to ensure state file is written before voice agent loads it
             await asyncio.sleep(0.5)
 
+            # Create notification pipe so voice agent can signal state changes
+            self._state_pipe_r, state_pipe_w = os.pipe()
+            os.set_blocking(self._state_pipe_r, False)
+
             # Start voice agent for returning user
             from agent.agents.console_launcher import run_console_voice_agent
-            self._voice_agent_process = await run_console_voice_agent(user_id=self.current_user['user_id'])
+            self._voice_agent_process = await run_console_voice_agent(
+                user_id=self.current_user['user_id'],
+                state_notify_fd=state_pipe_w,
+            )
+            os.close(state_pipe_w)
 
         else:
+            # Create notification pipe before onboarding subprocess launches
+            self._state_pipe_r, state_pipe_w = os.pipe()
+            os.set_blocking(self._state_pipe_r, False)
+
             # Run onboarding - returns (success, agent_process)
-            success, voice_agent_process = await self.run_onboarding()
+            success, voice_agent_process = await self.run_onboarding(state_notify_fd=state_pipe_w)
             self._voice_agent_process = voice_agent_process
+
+            os.close(state_pipe_w)
 
             if not success:
                 print("Onboarding failed. Exiting.")
@@ -351,6 +368,40 @@ class NowvaApp:
         if not self._voice_agent_process:
             print("Error: Voice agent failed to start. Exiting.")
             return
+
+        # Bind coaching IPC server immediately so the socket is ready
+        # before WorkoutAgent.on_enter() tries to connect. The server
+        # just idles until a client connects — zero overhead until then.
+        def _coaching_message_handler(message: dict):
+            """Handle messages FROM voice agent (reverse direction)."""
+            msg_type = message.get("type")
+            if msg_type == "rest_start":
+                rest_sec = message.get("rest_seconds", 30)
+                print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
+                if self.ipc_server and self.ipc_server.client_socket:
+                    try:
+                        self.ipc_server.send_message(message)
+                        print(f"[REST] Forwarded rest_start to pose process")
+                    except Exception as e:
+                        print(f"[REST] Failed to forward to pose process: {e}")
+            elif msg_type == "workout_complete":
+                print("[COACHING IPC] Received workout_complete from voice agent")
+                if self.ipc_server and self.ipc_server.client_socket:
+                    try:
+                        self.ipc_server.send_message(message)
+                        print("[COACHING IPC] Forwarded workout_complete to pose process")
+                    except Exception as e:
+                        print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
+
+        self.coaching_ipc = IPCServer(socket_path="/tmp/nowva_coaching.sock")
+        self.coaching_ipc.bind(message_callback=_coaching_message_handler)
+
+        def _run_coaching_server():
+            self.coaching_ipc.accept_client()
+            self.coaching_ipc.listen()
+
+        threading.Thread(target=_run_coaching_server, daemon=True).start()
+        print("[COACHING IPC] Server bound — waiting for voice agent to connect")
 
         print("\n" + "="*50)
         print("SYSTEM READY")
@@ -376,25 +427,35 @@ class NowvaApp:
                     print("\n[SYSTEM] Voice agent terminated")
                     break
 
-                # Synchronously read voice agent output (main thread, blocking with short timeout)
-                # This uses select for Unix-like systems
+                # Monitor voice agent stdout + state notification pipe
+                state_notified = False
                 try:
                     import select
+                    read_fds = []
                     if self._voice_agent_process.stdout:
-                        # Wait up to 50ms for data to be available
-                        ready, _, _ = select.select([self._voice_agent_process.stdout], [], [], 0.05)
-                        if ready:
-                            # Data is available, read one line
-                            line = self._voice_agent_process.stdout.readline()
-                            if line:
-                                print(line, end='')
-                                sys.stdout.flush()
-                except Exception as e:
-                    # select() might not work on all platforms, continue anyway
+                        read_fds.append(self._voice_agent_process.stdout)
+                    if self._state_pipe_r is not None:
+                        read_fds.append(self._state_pipe_r)
+
+                    if read_fds:
+                        ready, _, _ = select.select(read_fds, [], [], 0.05)
+                        for fd in ready:
+                            if fd is self._voice_agent_process.stdout:
+                                line = self._voice_agent_process.stdout.readline()
+                                if line:
+                                    print(line, end='')
+                                    sys.stdout.flush()
+                            elif fd == self._state_pipe_r:
+                                try:
+                                    os.read(self._state_pipe_r, 1024)
+                                except BlockingIOError:
+                                    pass
+                                state_notified = True
+                except Exception:
                     pass
 
-                # Reload state to check for changes
-                self.state.reload_state()
+                if state_notified:
+                    self.state.reload_state()
                 current_mode = self.state.get_mode()
 
                 # Check for graceful shutdown request from voice agent
@@ -419,46 +480,8 @@ class NowvaApp:
                 # (workout.current_session is set by confirm_quick_exercise/start_workout)
                 has_workout_session = self.state.get("workout.current_session") is not None
                 if current_mode == "workout" and not pose_running and has_workout_session:
-                    # Start IPC servers immediately so the voice agent's
-                    # CoachingService can connect while the greeting plays.
-                    # Only the pose estimation (camera window) waits for
-                    # greeting_done to avoid interrupting speech.
-
-                    # Start coaching IPC server for forwarding messages to voice agent
-                    if not self.coaching_ipc:
-                        print("[COACHING IPC] Starting coaching IPC server...")
-                        self.coaching_ipc = IPCServer(socket_path="/tmp/nowva_coaching.sock")
-
-                        def coaching_message_handler(message: dict):
-                            """Handle messages FROM voice agent (reverse direction)."""
-                            msg_type = message.get("type")
-                            if msg_type == "rest_start":
-                                rest_sec = message.get("rest_seconds", 30)
-                                print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
-                                if self.ipc_server and self.ipc_server.client_socket:
-                                    try:
-                                        self.ipc_server.send_message(message)
-                                        print(f"[REST] Forwarded rest_start to pose process")
-                                    except Exception as e:
-                                        print(f"[REST] Failed to forward to pose process: {e}")
-                            elif msg_type == "workout_complete":
-                                print("[COACHING IPC] Received workout_complete from voice agent")
-                                if self.ipc_server and self.ipc_server.client_socket:
-                                    try:
-                                        self.ipc_server.send_message(message)
-                                        print("[COACHING IPC] Forwarded workout_complete to pose process")
-                                    except Exception as e:
-                                        print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
-
-                        self.coaching_ipc.bind(message_callback=coaching_message_handler)
-
-                        def run_coaching_server():
-                            self.coaching_ipc.accept_client()
-                            self.coaching_ipc.listen()
-
-                        coaching_thread = threading.Thread(target=run_coaching_server, daemon=True)
-                        coaching_thread.start()
-                        print("[COACHING IPC] Waiting for voice agent to connect...")
+                    # Coaching IPC is already bound (see above). Only the
+                    # pose-estimation IPC and camera need to start here.
 
                     # Start IPC server for pose estimation communication
                     if not self.ipc_server:
@@ -610,8 +633,9 @@ class NowvaApp:
                     pose_running = False
                     print("[POSE] Pose estimation stopped")
 
-                # Sleep briefly to avoid busy loop
-                await asyncio.sleep(0.1)
+                # Fallback poll — notifications handle the fast path
+                await asyncio.sleep(2.0)
+                self.state.reload_state()
 
         except KeyboardInterrupt:
             print("\n\n" + "="*50)
@@ -624,6 +648,13 @@ class NowvaApp:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
         print("\nCleaning up...")
+
+        if self._state_pipe_r is not None:
+            try:
+                os.close(self._state_pipe_r)
+            except OSError:
+                pass
+            self._state_pipe_r = None
 
         if self.state:
             print("Resetting state to main_menu...")

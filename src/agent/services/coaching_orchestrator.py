@@ -47,12 +47,11 @@ CUE_DISPLAY_LABELS: Dict[str, str] = {
 
 class CuePriority(enum.IntEnum):
     """Lower number = higher priority."""
-    FAULT_CUE = 1
     LLM_MOTIVATION = 2
     LLM_SET_RECAP = 3
     LLM_EXERCISE_RECAP = 4
-    REP_COUNT_CUE = 5
     POSITIVE_CUE = 6
+    FAULT_CUE = 7  # testing: demoted to lowest priority
 
 
 # =============================================================================
@@ -219,13 +218,8 @@ class CoachingOrchestrator:
             f"score={scoring.get('mean_score', 0):.3f}"
         )
 
-    async def _consume_diagnosis(self) -> tuple:
-        """Wait briefly for diagnosis data if not yet arrived, then consume it."""
-        if self._pending_diagnosis is None:
-            try:
-                await asyncio.wait_for(self._diagnosis_event.wait(), timeout=0.5)
-            except asyncio.TimeoutError:
-                pass
+    def _consume_diagnosis(self) -> tuple:
+        """Return diagnosis data if already available, otherwise skip."""
         diagnosis = self._pending_diagnosis
         scoring = self._pending_scoring
         self._pending_diagnosis = None
@@ -409,12 +403,13 @@ class CoachingOrchestrator:
             logger.info(f"[ORCHESTRATOR] Enqueued motivation at rep {self._set_rep_count}")
 
     async def on_set_complete(self, set_data: dict):
-        """Enqueue LLM set recap (lowest priority).
+        """Enqueue LLM set recap.
 
         Snapshots report data into the event so it survives reset_set().
+        Flushes stale in-set events (faults, motivation) before queuing
+        so the recap dispatches immediately.
         """
-        # Snapshot report data — reset_set() may be called before
-        # the queued event is processed
+        self._flush_queue()
         set_data["_report"] = {
             "angle_samples": list(self._set_angle_samples),
             "cue_log": list(self._set_cue_log),
@@ -431,6 +426,7 @@ class CoachingOrchestrator:
 
     async def _queue_exercise_recap(self, final_set_data: dict):
         """Queue the exercise recap after the last set completes."""
+        self._flush_queue()
         # Add the final set's summary to the accumulated list
         self._all_set_summaries.append({
             "set_number": final_set_data.get("set_number", 0),
@@ -590,14 +586,11 @@ class CoachingOrchestrator:
             logger.info("[ORCHESTRATOR] ✓ LLM motivation complete")
 
         elif event.event_type == "llm_set_recap":
-            # Drain any remaining cached cues first
-            await self._drain_cached_cues()
             logger.info("[ORCHESTRATOR] → Firing LLM set recap")
             await self._speak_llm_set_recap(event.data)
             logger.info("[ORCHESTRATOR] ✓ LLM set recap complete")
 
         elif event.event_type == "llm_exercise_recap":
-            await self._drain_cached_cues()
             logger.info("[ORCHESTRATOR] → Firing LLM exercise recap")
             await self._speak_llm_exercise_recap(event.data)
             logger.info("[ORCHESTRATOR] ✓ LLM exercise recap complete")
@@ -625,6 +618,18 @@ class CoachingOrchestrator:
                 await self._unduck_llm()
             except Exception:
                 pass
+
+    def _flush_queue(self):
+        """Drop all pending events — called at set boundaries to clear stale cues."""
+        dropped = 0
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+                dropped += 1
+            except asyncio.QueueEmpty:
+                break
+        if dropped:
+            logger.info(f"[ORCHESTRATOR] Flushed {dropped} stale events at set boundary")
 
     async def _drain_cached_cues(self):
         """Drain and play any remaining cached cues before an LLM event."""
@@ -737,7 +742,7 @@ class CoachingOrchestrator:
 
     async def _speak_llm_set_recap(self, data: dict):
         """Generate and speak comprehensive LLM set recap."""
-        diagnosis, scoring = await self._consume_diagnosis()
+        diagnosis, scoring = self._consume_diagnosis()
 
         set_num = data.get("set_number", 0)
         total_reps = data.get("total_reps", 0)
@@ -888,7 +893,7 @@ class CoachingOrchestrator:
     async def _speak_llm_exercise_recap(self, data: dict):
         """Generate and speak comprehensive exercise recap after all sets."""
         # Consume pending diagnosis for the final set
-        diagnosis, scoring = await self._consume_diagnosis()
+        diagnosis, scoring = self._consume_diagnosis()
 
         all_summaries = data.get("all_set_summaries", [])
         total_sets = data.get("total_sets", len(all_summaries))

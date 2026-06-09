@@ -3,11 +3,20 @@ Agent State Management
 Handles persistent state for the Nova AI voice agent across different modes
 """
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
 from typing import Dict, Optional, Any
 from datetime import datetime
+
+_notify_fd: int | None = None
+
+
+def set_state_notify_fd(fd: int) -> None:
+    global _notify_fd
+    _notify_fd = fd
 
 
 class AgentState:
@@ -196,6 +205,12 @@ class AgentState:
             print(f"[STATE] Saved to {filepath}")
         except Exception as e:
             print(f"[STATE] Failed to save state: {e}")
+
+        if _notify_fd is not None:
+            try:
+                os.write(_notify_fd, b'\x00')
+            except OSError:
+                pass
 
     def load_state(self, user_id: str):
         """
