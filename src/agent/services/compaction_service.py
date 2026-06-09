@@ -88,7 +88,7 @@ class CompactionService:
         self._model = model or os.getenv("COMPACTION_MODEL", "gpt-4.1-mini")
         self._interval_seconds = interval_seconds or float(os.getenv("COMPACTION_INTERVAL", "30"))
         self._cold_flush_threshold = cold_flush_threshold or int(os.getenv("COMPACTION_COLD_FLUSH_THRESHOLD", "300"))
-        self._debug = os.getenv("COMPACTION_DEBUG", "0") == "1"
+        self._audit = os.getenv("COMPACTION_AUDIT", "false") == "true"
 
         # OpenAI client — lazy-initialised if not injected
         self._client = openai_client
@@ -224,13 +224,6 @@ class CompactionService:
             }
             self._event_buffer.append(entry)
             self._total_events_processed += 1
-
-            if self._debug:
-                ts = now.strftime("%H:%M:%S")
-                logger.debug(
-                    f"[COMPACTION:EVENT] Buffered: {role}_speech [{ts}] "
-                    f"\"{text[:80]}\" (buf={len(self._event_buffer)})"
-                )
         except Exception as e:
             logger.error(f"[COMPACTION:ERROR] Failed to buffer conversation item: {e}")
 
@@ -261,13 +254,6 @@ class CompactionService:
                         "event_type": "tool_result",
                     })
                     self._total_events_processed += 1
-
-                if self._debug:
-                    ts = now.strftime("%H:%M:%S")
-                    logger.debug(
-                        f"[COMPACTION:EVENT] Buffered: tool_call [{ts}] "
-                        f"\"{call_content[:80]}\" (buf={len(self._event_buffer)})"
-                    )
         except Exception as e:
             logger.error(f"[COMPACTION:ERROR] Failed to buffer tool event: {e}")
 
@@ -348,11 +334,6 @@ class CompactionService:
             f"Current time in session: {session_elapsed:.1f} minutes"
         )
 
-        if self._debug:
-            truncated = transcript[:500].replace("\n", " | ")
-            logger.debug(
-                f"[COMPACTION:INPUT] Transcript ({len(snapshot)} events): \"{truncated}\""
-            )
 
         # Call LLM
         try:
@@ -401,18 +382,18 @@ class CompactionService:
             self._cycle_count += 1
             self._last_compaction = time.monotonic()
 
-        if self._debug:
-            logger.debug(
-                f"[COMPACTION:OUTPUT] GPT-4.1-mini response ({output_tokens} tokens):\n"
-                f"  [HOT] {self._hot[:200]}\n"
-                f"  [WARM] {self._warm[:200]}\n"
-                f"  [COLD] {self._cold[:200]}"
-            )
-
         logger.info(
             f"[COMPACTION:CYCLE] Cycle {self._cycle_count} complete — "
             f"hot={len(self._hot)} warm={len(self._warm)} cold={len(self._cold)} chars "
             f"({len(self._hot) + len(self._warm) + len(self._cold)} total)"
+        )
+
+        self._write_audit_file(
+            cycle=self._cycle_count,
+            events_in=snapshot,
+            prev_hot=prev_hot, prev_warm=prev_warm, prev_cold=prev_cold,
+            new_hot=self._hot, new_warm=self._warm, new_cold=self._cold,
+            input_tokens=input_tokens, output_tokens=output_tokens,
         )
 
         from profiler.collector import SessionProfiler
@@ -522,6 +503,34 @@ class CompactionService:
             )
         except Exception as e:
             logger.error(f"[COMPACTION:ERROR] Failed to flush cold to memory.md: {e}")
+
+    # ------------------------------------------------------------------
+    # Audit
+    # ------------------------------------------------------------------
+
+    def _write_audit_file(
+        self,
+        cycle: int,
+        events_in: list[dict[str, Any]],
+        prev_hot: str, prev_warm: str, prev_cold: str,
+        new_hot: str, new_warm: str, new_cold: str,
+        input_tokens: int, output_tokens: int,
+    ) -> None:
+        if not self._audit or not self._session_dir:
+            return
+        audit = {
+            "cycle": cycle,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "events_in": events_in,
+            "before": {"hot": prev_hot, "warm": prev_warm, "cold": prev_cold},
+            "after": {"hot": new_hot, "warm": new_warm, "cold": new_cold},
+            "tokens": {"input": input_tokens, "output": output_tokens},
+        }
+        path = self._session_dir / f"audit_cycle_{cycle}.json"
+        try:
+            path.write_text(json.dumps(audit, indent=2))
+        except Exception as e:
+            logger.error(f"[COMPACTION:AUDIT] Failed to write {path}: {e}")
 
     # ------------------------------------------------------------------
     # Public API
