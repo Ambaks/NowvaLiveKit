@@ -31,15 +31,19 @@ def _build_subprocess_env(state_notify_fd: Optional[int] = None) -> dict:
     return env
 
 
-def terminate_process_group(process):
-    """Kill a process and all its children by sending SIGTERM to the process group."""
+def terminate_process_group(process, timeout: float = 20):
+    """Kill a process and all its children by sending SIGTERM to the process group.
+
+    LiveKit's graceful shutdown sequence (session.aclose → session_end →
+    OTel flush → shutdown callbacks) needs time to run before SIGKILL.
+    """
     try:
         pgid = os.getpgid(process.pid)
         os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, OSError):
         pass
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
             pgid = os.getpgid(process.pid)

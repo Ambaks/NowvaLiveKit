@@ -1778,6 +1778,7 @@ async def entrypoint(ctx: agents.JobContext):
     await session.start(
         room=ctx.room,
         agent=agent,
+        record=True,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
             pre_connect_audio=True,
