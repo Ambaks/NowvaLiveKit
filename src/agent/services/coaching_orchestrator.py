@@ -569,7 +569,7 @@ class CoachingOrchestrator:
         SessionProfiler.get_instance().record(
             "coaching", "cue_dispatched",
             cue_key=event.cue_key or "",
-            event_type=event.event_type,
+            cue_event_type=event.event_type,
             priority=int(event.priority),
             queue_age_ms=round(age_s * 1000, 1),
         )

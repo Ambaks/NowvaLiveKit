@@ -72,8 +72,8 @@ class IPCServer:
         self.running = False
         self.message_callback: Optional[Callable[[Dict], None]] = None
 
-    def start(self, message_callback: Optional[Callable[[Dict], None]] = None):
-        """Start IPC server and wait for a client connection."""
+    def bind(self, message_callback: Optional[Callable[[Dict], None]] = None):
+        """Create and bind the server socket. Connectable immediately after return."""
         if os.path.exists(self.socket_path):
             os.remove(self.socket_path)
 
@@ -84,12 +84,18 @@ class IPCServer:
         self.running = True
         self.message_callback = message_callback
 
-        logger.info(f"IPC Server started on {self.socket_path}")
+        logger.info(f"IPC Server bound on {self.socket_path}")
 
-        # Accept connection (blocking)
+    def accept_client(self):
+        """Block until a client connects. Call after bind()."""
         logger.info("Waiting for client connection...")
         self.client_socket, _ = self.server_socket.accept()
         logger.info("Client connected!")
+
+    def start(self, message_callback: Optional[Callable[[Dict], None]] = None):
+        """Bind and wait for a client connection (convenience wrapper)."""
+        self.bind(message_callback)
+        self.accept_client()
 
     def listen(self):
         """Listen for incoming framed messages in a loop."""

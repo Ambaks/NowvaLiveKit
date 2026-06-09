@@ -162,7 +162,8 @@ class NowvaApp:
     def start_pose_estimation(self, cam0_id: int = 0, cam1_id: int = 1,
                               exercise_name: str = "Barbell Back Squat",
                               calibration_file: str = None,
-                              calibration_mode: bool = False):
+                              calibration_mode: bool = False,
+                              preload: bool = False):
         """
         Start pose estimation process
 
@@ -172,6 +173,8 @@ class NowvaApp:
             exercise_name: Name of the exercise for coaching cues
             calibration_file: Path to existing calibration JSON (if returning user)
             calibration_mode: If True, run calibration phase before workout
+            preload: If True, pass --preload so subprocess loads the model
+                     without opening the camera, then waits for start_capture.
         """
         print("\nStarting pose estimation process...")
 
@@ -183,6 +186,8 @@ class NowvaApp:
             cmd.extend(["--calibration-file", calibration_file])
         if calibration_mode:
             cmd.append("--calibration-mode")
+        if preload:
+            cmd.append("--preload")
 
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
@@ -445,8 +450,10 @@ class NowvaApp:
                                     except Exception as e:
                                         print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
 
+                        self.coaching_ipc.bind(message_callback=coaching_message_handler)
+
                         def run_coaching_server():
-                            self.coaching_ipc.start(message_callback=coaching_message_handler)
+                            self.coaching_ipc.accept_client()
                             self.coaching_ipc.listen()
 
                         coaching_thread = threading.Thread(target=run_coaching_server, daemon=True)
@@ -525,29 +532,20 @@ class NowvaApp:
                         # Create IPC server directly with the correct handler
                         # (avoids race condition with start_ipc_server's old handler)
                         self.ipc_server = IPCServer()
+                        self.ipc_server.bind(message_callback=ipc_message_handler)
+                        print("[IPC] Server ready")
 
                         def run_server():
-                            self.ipc_server.start(message_callback=ipc_message_handler)
+                            self.ipc_server.accept_client()
                             self.ipc_server.listen()
 
                         ipc_thread = threading.Thread(target=run_server, daemon=True)
                         ipc_thread.start()
-                        await asyncio.sleep(1)
-                        print("[IPC] Server ready")
 
-                    # Wait for greeting to finish before opening camera window
-                    # (window popup can cancel TTS speech on some platforms)
-                    if not self.state.get("workout.greeting_done", False):
-                        continue
-
-                    print("\n" + "="*50)
-                    print("STARTING WORKOUT SESSION")
-                    print("="*50)
-
-                    if getattr(self, 'simulate_mode', False):
-                        print("[SIMULATE] Skipping real pose estimation — use simulate_squat_workout.py")
-                    else:
-                        # Read exercise name from state (set by voice agent)
+                    # Preload pose model during greeting speech.
+                    # Launch the subprocess with --preload as soon as IPC
+                    # is bound so the model loads while the greeting plays.
+                    if not self.pose_process and not getattr(self, 'simulate_mode', False):
                         exercise_name = self.state.get("workout.exercise_name", "Barbell Back Squat")
                         if not exercise_name:
                             session_data = self.state.get("workout.current_session")
@@ -556,12 +554,10 @@ class NowvaApp:
                             else:
                                 exercise_name = "Barbell Back Squat"
 
-                        # Check for calibration state
                         cal_mode = bool(self.state.get("calibration.active"))
                         cal_file = None
                         cal_profile = self.state.get("workout.calibration_profile")
                         if cal_profile and not cal_mode:
-                            # Write calibration profile to temp file for pipeline
                             import json, tempfile
                             cal_file = os.path.join(tempfile.gettempdir(), f"nowva_cal_{id(self)}.json")
                             with open(cal_file, "w") as f:
@@ -572,7 +568,27 @@ class NowvaApp:
                             exercise_name=exercise_name,
                             calibration_file=cal_file,
                             calibration_mode=cal_mode,
+                            preload=True,
                         )
+                        print("[PRELOAD] Pose subprocess launched — model loading during greeting")
+
+                    # Wait for greeting to finish before telling subprocess
+                    # to open camera (window popup can cancel TTS on macOS)
+                    if not self.state.get("workout.greeting_done", False):
+                        continue
+
+                    print("\n" + "="*50)
+                    print("STARTING WORKOUT SESSION")
+                    print("="*50)
+
+                    if getattr(self, 'simulate_mode', False):
+                        print("[SIMULATE] Skipping real pose estimation — use simulate_squat_workout.py")
+                    else:
+                        # Signal the preloaded subprocess to open camera
+                        if self.ipc_server and self.ipc_server.client_socket:
+                            self.ipc_server.send_message({"type": "start_capture"})
+                            print("[PRELOAD] Sent start_capture — camera opening")
+
                     pose_running = True
                     print("[POSE] Pose estimation started" if not getattr(self, 'simulate_mode', False) else "[SIMULATE] IPC servers ready — waiting for simulator")
 

@@ -111,7 +111,7 @@ class CoachingService:
 
         from agent.core.ipc_communication import IPCClient
 
-        max_retries = 3
+        max_retries = 5
         base_delay = 1.0  # seconds
 
         def _connect_with_retry() -> bool:

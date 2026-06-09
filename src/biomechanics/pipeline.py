@@ -7,6 +7,8 @@ Wires all processing layers into a single pipeline:
 Returns a PipelineFrame per iteration with per-layer timing.
 """
 
+from __future__ import annotations
+
 import os
 import threading
 import time
@@ -54,6 +56,7 @@ class BiomechanicsPipeline:
         self,
         config: Optional[BiomechanicsConfig] = None,
         exercise_name: str = "Barbell Back Squat",
+        defer_capture: bool = False,
     ):
         self.config = config or BiomechanicsConfig()
         self._frame_index = 0
@@ -65,23 +68,14 @@ class BiomechanicsPipeline:
         self._preik_enabled = os.getenv("ENABLE_PREIK_FILTERS", "true").lower() == "true"
 
         # Layer 1: Capture (threaded — always holds the latest frame)
-        self._cap = cv2.VideoCapture(self.config.capture.device_id)
-        w, h = self.config.capture.resolution
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-
-        if not self._cap.isOpened():
-            raise RuntimeError(
-                f"Could not open camera device {self.config.capture.device_id}"
-            )
-
+        self._cap = None
         self._latest_frame = None
         self._frame_lock = threading.Lock()
-        self._capture_running = True
-        self._capture_thread = threading.Thread(
-            target=self._capture_loop, daemon=True
-        )
-        self._capture_thread.start()
+        self._capture_running = False
+        self._capture_thread = None
+
+        if not defer_capture:
+            self._open_capture()
 
         # Layer 2: Pose estimation
         if self.config.pose.backend == "rtmpose":
@@ -231,6 +225,33 @@ class BiomechanicsPipeline:
 
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
+
+    def _open_capture(self) -> None:
+        self._cap = cv2.VideoCapture(self.config.capture.device_id)
+        w, h = self.config.capture.resolution
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+
+        if not self._cap.isOpened():
+            raise RuntimeError(
+                f"Could not open camera device {self.config.capture.device_id}"
+            )
+
+        self._capture_running = True
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, daemon=True
+        )
+        self._capture_thread.start()
+
+    def start_capture(self) -> None:
+        """Open camera and start capture thread (phase 2 for deferred init)."""
+        if self._cap is not None:
+            return
+        self._open_capture()
+
+    def preload_pose_model(self) -> None:
+        """Eagerly load the pose estimation model instead of waiting for the first frame."""
+        self._pose_estimator.initialize()
 
     @property
     def rep_counter(self):

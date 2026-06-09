@@ -6,6 +6,8 @@ Launched as a subprocess by main.py when workout mode starts.
 Communicates with the voice agent via the existing IPC system.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import select
@@ -183,6 +185,22 @@ def _serialize_diagnosis(diagnosis_result, score_summary) -> tuple[dict, dict]:
     return diagnosis_dict, scoring_dict
 
 
+def _wait_for_start_capture(ipc_client: IPCClient) -> bool:
+    """Block until a start_capture message arrives over IPC. Returns False on disconnect."""
+    sock = ipc_client.client_socket
+    if sock is None:
+        return False
+    while True:
+        try:
+            msg = _recv_framed(sock)
+            if msg is None:
+                return False
+            if msg.get("type") == "start_capture":
+                return True
+        except Exception:
+            return False
+
+
 def run_biomechanics_pipeline(
     cam0_id: int = 0,
     cam1_id: int = 1,
@@ -191,6 +209,7 @@ def run_biomechanics_pipeline(
     calibration_file: str = None,
     calibration_mode: bool = False,
     calibration_reps: int = 5,
+    preload: bool = False,
 ):
     """
     Run the full biomechanics pipeline as a subprocess.
@@ -199,10 +218,10 @@ def run_biomechanics_pipeline(
     Connects to the existing IPC server and sends real-time
     coaching data to the voice agent.
 
-    Args:
-        calibration_file: Path to existing calibration JSON to load at startup.
-        calibration_mode: If True, run a calibration phase before the workout loop.
-        calibration_reps: Number of calibration reps to collect (default 5).
+    When preload=True the subprocess loads config + pose model eagerly
+    (without opening the camera) and waits for a start_capture IPC
+    message before opening the camera and entering the frame loop.
+    This lets main.py overlap model loading with the voice greeting.
     """
     print("\n=== Biomechanics Pipeline Starting ===")
 
@@ -224,7 +243,23 @@ def run_biomechanics_pipeline(
 
     # Initialize pipeline
     try:
-        pipeline = BiomechanicsPipeline(config, exercise_name=exercise_name)
+        pipeline = BiomechanicsPipeline(
+            config, exercise_name=exercise_name, defer_capture=preload,
+        )
+
+        if preload:
+            pipeline.preload_pose_model()
+            print("[PRELOAD] Pose model loaded — waiting for start_capture signal")
+            ipc_client.send_message({"type": "pipeline_status", "status": "preloaded"})
+
+            if not _wait_for_start_capture(ipc_client):
+                print("[PRELOAD] IPC disconnected while waiting for start_capture")
+                ipc_client.disconnect()
+                return
+
+            pipeline.start_capture()
+            print("[PRELOAD] Camera opened — entering frame loop")
+
         bridge = IPCBridge(ipc_client)
         session_tracker = SessionTracker(bridge, config=config.coaching)
 
@@ -952,10 +987,11 @@ if __name__ == "__main__":
     cam1 = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     exercise = sys.argv[3] if len(sys.argv) > 3 else "Barbell Back Squat"
 
-    # Parse optional calibration args
+    # Parse optional args
     cal_file = None
     cal_mode = False
     cal_reps = 5
+    preload_flag = False
     i = 4
     while i < len(sys.argv):
         if sys.argv[i] == "--calibration-file" and i + 1 < len(sys.argv):
@@ -967,6 +1003,9 @@ if __name__ == "__main__":
         elif sys.argv[i] == "--calibration-reps" and i + 1 < len(sys.argv):
             cal_reps = int(sys.argv[i + 1])
             i += 2
+        elif sys.argv[i] == "--preload":
+            preload_flag = True
+            i += 1
         else:
             i += 1
 
@@ -977,4 +1016,5 @@ if __name__ == "__main__":
         calibration_file=cal_file,
         calibration_mode=cal_mode,
         calibration_reps=cal_reps,
+        preload=preload_flag,
     )
