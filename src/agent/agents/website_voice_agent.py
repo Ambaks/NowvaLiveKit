@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 load_dotenv()
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RunContext
+from livekit.agents import AgentSession, Agent, RunContext, TurnHandlingOptions
 from livekit.agents.llm import function_tool
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import deepgram, openai, silero, elevenlabs, noise_cancellation
@@ -1734,14 +1734,21 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm,
         tts=tts,
         vad=vad,
-        turn_handling={"turn_detection": EnglishModel()},
-        preemptive_generation=True,
+        turn_handling=TurnHandlingOptions(
+            turn_detection=EnglishModel(),
+            preemptive_generation={"enabled": True},
+        ),
     )
 
     # Store session reference in agent so it can disconnect later
     agent._session_ref = session
 
     # --- Session event tracking ---
+    # TODO(v2.0): migrate to ChatMessage.metrics for per-turn latency
+    _lk_logger = logging.getLogger("livekit.agents.voice.agent_session")
+    _prev_level = _lk_logger.level
+    _lk_logger.setLevel(logging.ERROR)
+
     @session.on("metrics_collected")
     def _on_metrics(ev):
         m = ev.metrics
@@ -1759,6 +1766,8 @@ async def entrypoint(ctx: agents.JobContext):
             )
         else:
             logger.info(f"[METRICS] {m.type}")
+
+    _lk_logger.setLevel(_prev_level)
 
     @session.on("error")
     def _on_error(ev):

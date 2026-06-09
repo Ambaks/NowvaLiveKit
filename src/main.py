@@ -28,6 +28,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+from profiler.collector import SessionProfiler
+
 # Suppress SQLAlchemy INFO logs
 logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
@@ -176,18 +178,23 @@ class NowvaApp:
         # Start pose estimation as subprocess
         pose_script = Path(__file__).parent / 'biomechanics' / 'pipeline_process.py'
 
-        cmd = [sys.executable, str(pose_script), str(cam0_id), str(cam1_id), exercise_name]
+        cmd = [sys.executable, "-u", str(pose_script), str(cam0_id), str(cam1_id), exercise_name]
         if calibration_file:
             cmd.extend(["--calibration-file", calibration_file])
         if calibration_mode:
             cmd.append("--calibration-mode")
+
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
         self.pose_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            env=env,
         )
 
         # Print pose process output
@@ -269,6 +276,19 @@ class NowvaApp:
         self.session_logger.start_session()
         self.session_logger.log_system_event("app_started")
 
+        # Start profiler if enabled
+        self._profiler = SessionProfiler.get_instance()
+        self._profiler.start()
+
+        self._voice_agent_process = None
+
+        try:
+            await self._run_inner()
+        finally:
+            await self._cleanup()
+
+    async def _run_inner(self):
+        """Core application logic — always wrapped by run()'s try/finally."""
         print("\n" + "="*60)
         print("NOWVA - AI-Powered Smart Squat Rack")
         print("="*60)
@@ -279,8 +299,6 @@ class NowvaApp:
 
         # Initialize database (skips if tables already exist)
         init_db()
-
-        voice_agent_process = None
 
         # Check for existing session
         if self.check_session():
@@ -310,11 +328,12 @@ class NowvaApp:
 
             # Start voice agent for returning user
             from agent.agents.console_launcher import run_console_voice_agent
-            voice_agent_process = await run_console_voice_agent(user_id=self.current_user['user_id'])
+            self._voice_agent_process = await run_console_voice_agent(user_id=self.current_user['user_id'])
 
         else:
             # Run onboarding - returns (success, agent_process)
             success, voice_agent_process = await self.run_onboarding()
+            self._voice_agent_process = voice_agent_process
 
             if not success:
                 print("Onboarding failed. Exiting.")
@@ -324,7 +343,7 @@ class NowvaApp:
             from agent.core.agent_state import AgentState
             self.state = AgentState(user_id=self.current_user['user_id'])
 
-        if not voice_agent_process:
+        if not self._voice_agent_process:
             print("Error: Voice agent failed to start. Exiting.")
             return
 
@@ -348,7 +367,7 @@ class NowvaApp:
         try:
             while True:
                 # Check if voice agent is still running
-                if voice_agent_process.poll() is not None:
+                if self._voice_agent_process.poll() is not None:
                     print("\n[SYSTEM] Voice agent terminated")
                     break
 
@@ -356,12 +375,12 @@ class NowvaApp:
                 # This uses select for Unix-like systems
                 try:
                     import select
-                    if voice_agent_process.stdout:
+                    if self._voice_agent_process.stdout:
                         # Wait up to 50ms for data to be available
-                        ready, _, _ = select.select([voice_agent_process.stdout], [], [], 0.05)
+                        ready, _, _ = select.select([self._voice_agent_process.stdout], [], [], 0.05)
                         if ready:
                             # Data is available, read one line
-                            line = voice_agent_process.stdout.readline()
+                            line = self._voice_agent_process.stdout.readline()
                             if line:
                                 print(line, end='')
                                 sys.stdout.flush()
@@ -388,6 +407,7 @@ class NowvaApp:
                         "from_mode": last_mode,
                         "to_mode": current_mode
                     })
+                    self._profiler.record("agent", "mode_change", from_mode=last_mode, to_mode=current_mode)
                     last_mode = current_mode
 
                 # Handle workout mode — only start if workout session is fully configured
@@ -488,6 +508,10 @@ class NowvaApp:
                                 value = message.get('value')
                                 print(f"[IPC] Error: {value}")
 
+                            # Record IPC messages for profiler
+                            if msg_type and msg_type != 'frame_data':
+                                self._profiler.record("ipc", msg_type, direction="pose_to_main")
+
                             # Forward coaching-relevant messages to voice agent
                             if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep'):
                                 if self.coaching_ipc and self.coaching_ipc.client_socket:
@@ -578,14 +602,13 @@ class NowvaApp:
             print("SHUTTING DOWN")
             print("="*50)
 
-        # Ignore further signals during cleanup so it can't be interrupted
+    async def _cleanup(self):
+        """Cleanup that runs on ANY exit path — normal, early return, or Ctrl+C."""
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-        # Cleanup
         print("\nCleaning up...")
 
-        # Reset state to main_menu before shutdown for safety
         if self.state:
             print("Resetting state to main_menu...")
             self.state.switch_mode("main_menu")
@@ -593,11 +616,11 @@ class NowvaApp:
             self.state.set("shutdown_requested", False)
             self.state.save_state()
 
-        if voice_agent_process:
+        if self._voice_agent_process:
             print("Stopping voice agent...")
-            terminate_process_group(voice_agent_process)
+            terminate_process_group(self._voice_agent_process)
 
-        if pose_running and self.pose_process:
+        if self.pose_process:
             print("Stopping pose estimation...")
             self.pose_process.terminate()
             self.pose_process.wait()
@@ -618,10 +641,29 @@ class NowvaApp:
         # End session and generate summary
         self.session_logger.log_system_event("app_shutdown")
         summary = self.session_logger.end_session()
-
-        # Print summary
         print("\n" + summary)
         print(f"\nSession log saved to: {self.session_logger.get_log_path()}")
+
+        # Generate profiler report if enabled
+        if getattr(self, 'profile_mode', False):
+            print("\nGenerating session profile report...")
+            try:
+                self._profiler.stop()
+                from profiler.report import generate_profile_report
+                from profiler.collector import PROFILE_OUTPUT_DIR, AGENT_JSON_FILENAME
+                agent_json = PROFILE_OUTPUT_DIR / AGENT_JSON_FILENAME
+                for _ in range(50):
+                    if agent_json.exists():
+                        break
+                    await asyncio.sleep(0.1)
+                report_path = generate_profile_report(
+                    agent_json_path=agent_json if agent_json.exists() else None,
+                    main_profiler=self._profiler,
+                    output_dir=PROFILE_OUTPUT_DIR,
+                )
+                print(f"Profile report saved to: {report_path}")
+            except Exception as e:
+                print(f"Failed to generate profile report: {e}")
 
         print("\nGoodbye!")
 
@@ -632,10 +674,16 @@ async def main():
     parser = argparse.ArgumentParser(description="Nowva Main Application")
     parser.add_argument("--simulate", action="store_true",
                         help="Skip real pose estimation (use simulate_squat_workout.py instead)")
+    parser.add_argument("--profile", action="store_true",
+                        help="Enable live session profiling (writes HTML report on exit)")
     args = parser.parse_args()
+
+    if args.profile:
+        os.environ["NOWVA_PROFILE"] = "1"
 
     app = NowvaApp()
     app.simulate_mode = args.simulate
+    app.profile_mode = args.profile
     await app.run()
 
 

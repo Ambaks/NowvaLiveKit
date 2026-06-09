@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 venv/
+venv_old/*
 env/
 ENV/
 *.egg-info/
@@ -160,6 +161,12 @@ fault_visualizer.html
 # Generated audio cues
 src/assets/cues/
 nowva_pitch.pptx
+
+# Benchmark results (JSON + HTML reports)
+benchmarks/results/
+
+# Live session profiler results
+profiler_results/
 
 # Graphify files
 graphify-out/*

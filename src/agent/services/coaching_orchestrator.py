@@ -559,9 +559,19 @@ class CoachingOrchestrator:
 
     async def _dispatch(self, event: CoachingEvent):
         """Dispatch a single event based on its type and priority."""
+        age_s = time.monotonic() - event.timestamp
         logger.info(
             f"[ORCHESTRATOR] ▶ Dispatching: type={event.event_type} priority={event.priority} "
-            f"cue_key={event.cue_key} age={time.monotonic() - event.timestamp:.1f}s"
+            f"cue_key={event.cue_key} age={age_s:.1f}s"
+        )
+
+        from profiler.collector import SessionProfiler
+        SessionProfiler.get_instance().record(
+            "coaching", "cue_dispatched",
+            cue_key=event.cue_key or "",
+            event_type=event.event_type,
+            priority=int(event.priority),
+            queue_age_ms=round(age_s * 1000, 1),
         )
 
         if event.event_type == "cached_cue":

@@ -29,7 +29,7 @@ from openai import AsyncOpenAI
 logger = logging.getLogger(__name__)
 
 # Directory where pre-generated cue files live
-CUES_DIR = Path(__file__).parent.parent / "assets" / "cues"
+CUES_DIR = Path(__file__).parent.parent.parent / "assets" / "cues"
 CUES_WAV_DIR = CUES_DIR / "wav"
 REP_SOUND_PATH = CUES_DIR / "validation_sound.wav"
 

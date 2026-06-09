@@ -22,8 +22,8 @@ class SessionManager:
             session_file: Path to encrypted session file (relative to src/)
             key_file: Path to encryption key file (relative to src/)
         """
-        # Store in src/ directory (parent of core/)
-        src_dir = Path(__file__).parent.parent
+        # Store in src/ directory (core/ → agent/ → src/)
+        src_dir = Path(__file__).parent.parent.parent
         self.session_file = src_dir / session_file
         self.key_file = src_dir / key_file
 

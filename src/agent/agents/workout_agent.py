@@ -362,7 +362,7 @@ class WorkoutAgent(BaseNovaAgent):
 
         # Disable preemptive_generation
         try:
-            self.session.options.preemptive_generation = False
+            self.session.options.turn_handling["preemptive_generation"]["enabled"] = False
             logger.info("[WAKE WORD] Disabled preemptive_generation on AgentSession")
         except Exception as e:
             logger.error(f"[WAKE WORD] Failed to disable preemptive_generation: {e}")
@@ -388,7 +388,7 @@ class WorkoutAgent(BaseNovaAgent):
 
         # Re-enable preemptive_generation for conversational mode
         try:
-            self.session.options.preemptive_generation = True
+            self.session.options.turn_handling["preemptive_generation"]["enabled"] = True
             logger.info("[WAKE WORD] Re-enabled preemptive_generation")
         except Exception as e:
             logger.error(f"[WAKE WORD] Failed to re-enable preemptive_generation: {e}")

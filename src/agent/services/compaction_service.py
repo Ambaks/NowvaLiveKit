@@ -415,6 +415,18 @@ class CompactionService:
             f"({len(self._hot) + len(self._warm) + len(self._cold)} total)"
         )
 
+        from profiler.collector import SessionProfiler
+        SessionProfiler.get_instance().record(
+            "compaction", "cycle",
+            cycle_number=self._cycle_count,
+            events_processed=len(snapshot),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            hot_chars=len(self._hot),
+            warm_chars=len(self._warm),
+            cold_chars=len(self._cold),
+        )
+
         # Check if cold needs flushing
         cold_words = len(self._cold.split()) if self._cold else 0
         estimated_tokens = int(cold_words * 1.3)

@@ -191,6 +191,13 @@ class CoachingService:
         msg_type = message.get("type")
         logger.info(f"[COACHING SERVICE] ← IPC message received: type={msg_type} | keys={list(message.keys())}")
 
+        from profiler.collector import SessionProfiler
+        _profiler = SessionProfiler.get_instance()
+        _profiler.record("coaching", msg_type or "unknown", **{
+            k: v for k, v in message.items()
+            if k != "type" and not isinstance(v, (bytes, bytearray)) and k != "joint_angles"
+        })
+
         try:
             if msg_type == "cache_cues":
                 await self._on_cache_cues(message)
