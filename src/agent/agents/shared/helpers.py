@@ -5,6 +5,7 @@ Used by multiple agent classes.
 
 import logging
 from typing import Optional
+import asyncio
 
 from db.database import SessionLocal
 
@@ -48,10 +49,6 @@ def normalize_exercise_name(raw_name: str) -> Optional[str]:
 
 
 async def check_calibration(user_id: str, exercise_name: str) -> Optional[dict]:
-    """Check if user has calibration data for this exercise's movement pattern.
-
-    Returns the calibration thresholds dict if it exists, None if calibration is needed.
-    """
     from biomechanics.calibration import get_movement_pattern
     from db.calibration_utils import get_user_calibration
 
@@ -59,11 +56,14 @@ async def check_calibration(user_id: str, exercise_name: str) -> Optional[dict]:
     if not pattern:
         return None
 
-    db = SessionLocal()
-    try:
-        return get_user_calibration(db, user_id, pattern)
-    finally:
-        db.close()
+    def _query():
+        db = SessionLocal()
+        try:
+            return get_user_calibration(db, user_id, pattern)
+        finally:
+            db.close()
+
+    return await asyncio.to_thread(_query)
 
 
 def start_calibration_mode(state, exercise_name: str, pending_workout: dict):

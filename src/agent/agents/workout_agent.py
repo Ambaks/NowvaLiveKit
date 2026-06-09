@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 class WorkoutAgent(BaseNovaAgent):
     """Handles active workout sessions with wake word detection and coaching integration."""
 
-    def __init__(self, state, userdata) -> None:
+    def __init__(self, state, userdata, from_calibration: bool = False) -> None:
+        self._from_calibration = from_calibration
+
         # Wake word system state (agent-local)
         self._wake_word_active: bool = False
         self._wake_word_listening: bool = False
@@ -31,76 +33,61 @@ class WorkoutAgent(BaseNovaAgent):
 
     async def on_enter(self):
         """Start coaching service, generate greeting, then activate wake word system."""
-        # Create and start coaching service
+        if self._from_calibration:
+            # CalibrationAgent already started CoachingService and showed greeting.
+            # Wire up the workout-complete callback and start wake word.
+            coaching = self.userdata.coaching_service
+            if coaching:
+                coaching.set_workout_complete_callback(self._on_workout_complete_signal)
+            await self._start_wake_word_system()
+            return
+
+        # Normal path — no calibration, create CoachingService fresh
         from agent.services.coaching_service import CoachingService
         coaching_service = CoachingService(
             session=self.session,
             state=self.state,
             room=self.userdata.room,
             on_workout_complete=self._on_workout_complete_signal,
-            on_calibration_complete=self._on_calibration_complete,
             audio_cue_service=self.userdata.audio_cue_service,
         )
         await coaching_service.start()
         self.userdata.coaching_service = coaching_service
 
-        # Check if calibration is active
-        needs_calibration = self.state.get("calibration.active", False)
-
         # Generate context-aware greeting BEFORE starting wake word system.
         # _say() suppresses turn detection so the greeting can't be interrupted.
-        exercise_name = self.state.get("workout.exercise_name", "")
-
-        if needs_calibration:
-            # Don't restore turn detection — calibration is conversational
-            await self._say(
-                f"Tell the user conversationally that you haven't seen them do {exercise_name} before. "
-                f"Say something like: 'So, I haven't seen you squat before — before we get into "
-                f"your workout, I want to take a quick look at your form. Do 2 bodyweight squats "
-                f"for me — hands out in front, go as deep as you can. I'll check your movement "
-                f"and let you know if anything needs adjusting. Step into frame whenever you're ready.' "
-                f"Keep it natural and encouraging.",
-                restore=True,
-            )
-            # Signal main.py that greeting is done — safe to start pose estimation
-            self.state.set("workout.greeting_done", True)
-            self.state.save_state()
-            logger.info("[WORKOUT] Greeting done — signalled main.py to start pose estimation")
-        else:
-            # Don't restore — wake word system sets its own turn detection next
-            from agent.core.workout_session import WorkoutSession
-            session_data = self.state.get("workout.current_session")
-            if session_data:
-                session = WorkoutSession.from_dict(session_data)
-                first_desc = session.get_current_exercise_description()
-                is_quick = session.is_quick_exercise
-                if is_quick:
-                    await self._say(
-                        f"Quick exercise started! First up: {first_desc}. "
-                        f"Tell the user enthusiastically that you're ready to go — get them going for the first set ",
-                        restore=False,
-                    )
-                else:
-                    workout_name = session_data.get("workout_name", "today's workout")
-                    await self._say(
-                        f"Workout started! Today's workout: {workout_name}. "
-                        f"First exercise: {first_desc}. Inform the user enthusiastically "
-                        f"and let them know you're tracking their form",
-                        restore=False,
-                    )
-            else:
+        # Don't restore — wake word system sets its own turn detection next.
+        from agent.core.workout_session import WorkoutSession
+        session_data = self.state.get("workout.current_session")
+        if session_data:
+            session = WorkoutSession.from_dict(session_data)
+            first_desc = session.get_current_exercise_description()
+            is_quick = session.is_quick_exercise
+            if is_quick:
                 await self._say(
-                    f"Workout mode is starting. Psych the user up and get them ready to workout!",
+                    f"Quick exercise started! First up: {first_desc}. "
+                    f"Tell the user enthusiastically that you're ready to go — get them going for the first set ",
                     restore=False,
                 )
+            else:
+                workout_name = session_data.get("workout_name", "today's workout")
+                await self._say(
+                    f"Workout started! Today's workout: {workout_name}. "
+                    f"First exercise: {first_desc}. Inform the user enthusiastically "
+                    f"and let them know you're tracking their form",
+                    restore=False,
+                )
+        else:
+            await self._say(
+                f"Workout mode is starting. Psych the user up and get them ready to workout!",
+                restore=False,
+            )
 
-            # Signal main.py that greeting is done — safe to start pose estimation
-            self.state.set("workout.greeting_done", True)
-            self.state.save_state()
-            logger.info("[WORKOUT] Greeting done — signalled main.py to start pose estimation")
+        self.state.set("workout.greeting_done", True)
+        self.state.save_state()
+        logger.info("[WORKOUT] Greeting done — signalled main.py to start pose estimation")
 
-            # Now start wake word system AFTER greeting has fully played out
-            await self._start_wake_word_system()
+        await self._start_wake_word_system()
 
     # ===== COACHING SERVICE CALLBACKS =====
 
@@ -108,13 +95,6 @@ class WorkoutAgent(BaseNovaAgent):
         """Called by CoachingService when the entire workout is done."""
         logger.info("[COACHING] Workout complete signal received — scheduling cleanup")
         asyncio.create_task(self._handle_workout_complete())
-
-    async def _on_calibration_complete(self):
-        """Called by CoachingService after calibration finishes.
-        Activate wake word system so agent suppresses auto-responses during workout.
-        """
-        logger.info("[CALIBRATION] Calibration complete — starting wake word system")
-        await self._start_wake_word_system()
 
     async def _handle_workout_complete(self):
         """Run cleanup and agent handoff outside the orchestrator's task."""

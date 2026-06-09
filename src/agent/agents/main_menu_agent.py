@@ -8,9 +8,10 @@ import re
 from livekit.agents import RunContext
 from livekit.agents.llm import function_tool
 
+from agent.agents.StartQuickExerciseAgent import CollectExerciseInfoTask
 from agent.agents.prompts import get_main_menu_prompt
 from agent.agents.shared.base_agent import BaseNovaAgent
-from agent.agents.shared.helpers import normalize_exercise_name, check_calibration, start_calibration_mode
+from agent.agents.shared.helpers import check_calibration, start_calibration_mode
 from db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,8 @@ class MainMenuAgent(BaseNovaAgent):
     """Primary interaction hub: schedule management, workout start, program creation."""
 
     def __init__(self, state, userdata) -> None:
-        super().__init__(state=state, userdata=userdata, instructions=get_main_menu_prompt())
+        super().__init__(state=state, userdata=userdata, instructions=get_main_menu_prompt()),
+        self.calibration_profile = None
 
     async def on_enter(self):
         """Generate main menu greeting only on first visit or first login; silent otherwise."""
@@ -81,10 +83,10 @@ class MainMenuAgent(BaseNovaAgent):
             self.state.set("workout.exercise_name", exercise_name)
 
             # Check calibration for the first exercise
-            calibration_profile = await check_calibration(user_id, exercise_name)
+            self.calibration_profile = await check_calibration(user_id, exercise_name)
 
-            if calibration_profile:
-                self.state.set("workout.calibration_profile", calibration_profile)
+            if self.calibration_profile:
+                self.state.set("workout.calibration_profile", self.calibration_profile)
                 logger.info(f"[CALIBRATION] Found existing calibration for {exercise_name}")
             else:
                 start_calibration_mode(self.state, exercise_name, {
@@ -118,143 +120,19 @@ class MainMenuAgent(BaseNovaAgent):
         """
         Call this when the user wants to do a single exercise without a scheduled workout.
         User might say: "I want to squat", "let me do some bench press",
-        "I just want to deadlift", "can I just do squats?"
+        "I just want to deadlift", "can I just do squats?" 
+        Or the user might not mention a particular exercise but just say "I want to start a quick exercise"
 
         Args:
             exercise_name: The exercise the user wants to do (e.g., "squat", "bench press", "deadlift")
         """
         logger.info(f"[MAIN MENU] User wants quick exercise: {exercise_name}")
-
-        normalized = normalize_exercise_name(exercise_name)
-
-        if not normalized:
-            result = (None, (
-                "Tell the user: 'I can't track that exercise with form feedback just yet. "
-                "Right now I can track squats, deadlifts, bench press, and overhead press. "
-                "Would you like to do one of those?' Keep it helpful and casual."
-            ))
-            self._log_function_call("start_quick_exercise", {"exercise_name": exercise_name}, result)
-            return result
-
-        self.state.set("quick_exercise.exercise_name", normalized)
-        self.state.set("quick_exercise.gathering_params", True)
-        self.state.save_state()
-
-        result = (None, (
-            f"The user wants to do {normalized} as a quick exercise (not part of a scheduled workout). "
-            f"Now ask the user conversationally about their plan. Ask how many sets they're thinking, "
-            f"how many reps per set, what weight they want to use, and how long they want to rest between sets. "
-            f"Once you have all the details, use the confirm_quick_exercise tool with the parameters. "
-            f"Keep it natural and conversational — like a coach checking in. "
-            f"If they're unsure about anything, suggest reasonable defaults "
-            f"(3-5 sets, 5-10 reps, 90-120 seconds rest)."
-        ))
-        self._log_function_call("start_quick_exercise", {"exercise_name": exercise_name}, result)
-        return result
-
-    @function_tool
-    async def confirm_quick_exercise(
-        self,
-        sets: int,
-        reps: int,
-        weight: float = 0.0,
-        rest_seconds: int = 120,
-        context: RunContext = None
-    ):
-        """
-        Call this after gathering all parameters for a quick exercise session.
-        This starts workout mode for the single exercise.
-
-        Args:
-            sets: Number of sets to perform
-            reps: Target reps per set
-            weight: Weight in lbs. Use 0 for bodyweight exercises.
-            rest_seconds: Rest between sets in seconds (default 120)
-        """
-        logger.info(f"[QUICK EXERCISE] Confirming: {sets} sets x {reps} reps, "
-                    f"weight={weight}, rest={rest_seconds}s")
-
-        exercise_name = self.state.get("quick_exercise.exercise_name")
-
-        if not exercise_name:
-            return None, ("Tell the user: 'Hmm, I lost track of which exercise we were setting up. "
-                          "Can you tell me again what you'd like to do?' Keep it casual.")
-
-        from agent.core.workout_session import WorkoutSession, ExerciseProgress, SetProgress
-
-        # Check calibration
-        calibration_profile = await check_calibration(self.user_id, exercise_name)
-
-        if calibration_profile:
-            self.state.set("workout.calibration_profile", calibration_profile)
-            logger.info(f"[CALIBRATION] Found existing calibration for {exercise_name}")
-        else:
-            start_calibration_mode(self.state, exercise_name, {
-                "type": "quick_exercise",
-                "sets": sets, "reps": reps, "weight": weight,
-                "rest_seconds": rest_seconds, "exercise_name": exercise_name,
-            })
-            logger.info(f"[CALIBRATION] No calibration found for {exercise_name} — entering calibration mode")
-
-        # Build synthetic sets
-        set_list = []
-        for i in range(sets):
-            set_list.append(SetProgress(
-                set_id=None,
-                set_number=i + 1,
-                target_reps=reps,
-                target_weight=weight,
-                intensity_percent=None,
-                rpe_target=None,
-                rest_seconds=rest_seconds,
-                velocity_threshold=None,
-            ))
-
-        exercise = ExerciseProgress(
-            workout_exercise_id=None,
-            exercise_id=None,
+        return CollectExerciseInfoTask(
             exercise_name=exercise_name,
-            muscle_group=None,
-            category="Strength",
-            order_number=1,
-            notes=None,
-            sets=set_list,
-        )
-
-        workout_data = {
-            "workout_id": None,
-            "workout_name": f"Quick {exercise_name}",
-            "description": f"Ad-hoc {exercise_name} session",
-            "exercises": []
-        }
-
-        session = WorkoutSession(
             user_id=self.user_id,
-            schedule_id=None,
-            workout_data=workout_data,
-            is_quick_exercise=True,
+            state=self.state,
+            userdata=self.userdata,
         )
-        session.exercises = [exercise]
-
-        # Store in state and switch to workout mode
-        self.state.set("workout.current_session", session.to_dict())
-        self.state.set("quick_exercise.gathering_params", False)
-        self.state.set("workout.exercise_name", exercise_name)
-        self.state.set("workout.active", True)
-
-        self.state.switch_mode("workout")
-        self.state.save_state()
-
-        logger.info("[STATE] Switched to workout mode with quick exercise - main.py will detect and start pose estimation")
-
-        self._log_function_call("confirm_quick_exercise", {
-            "sets": sets, "reps": reps, "weight": weight, "rest_seconds": rest_seconds
-        }, "handoff to WorkoutAgent")
-
-        # Handoff to WorkoutAgent
-        await self._suppress_turn_detection()
-        from agent.agents.workout_agent import WorkoutAgent
-        return WorkoutAgent(state=self.state, userdata=self.userdata)
 
     # ===== PROGRAM TOOLS =====
 

@@ -57,6 +57,9 @@ class CoachingService:
         # Flag for wake word system to detect active coaching speech
         self.is_coaching_speaking: bool = False
 
+    def set_workout_complete_callback(self, callback: Callable) -> None:
+        self._on_workout_complete_callback = callback
+
     # ------------------------------------------------------------------
     # Lifecycle API
     # ------------------------------------------------------------------
