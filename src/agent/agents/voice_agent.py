@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 load_dotenv()
 
 from livekit import agents
-from livekit.agents import AgentSession, TurnHandlingOptions
+from livekit.agents import AgentSession, TurnHandlingOptions, AgentStateChangedEvent, MetricsCollectedEvent, metrics
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import deepgram, openai, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -41,6 +41,15 @@ async def entrypoint(ctx: agents.JobContext):
     """Main entry point for Nova voice agent"""
 
     logger.info("[NOVA] Entrypoint function called")
+
+    usage_collector = metrics.UsageCollector()
+
+    async def log_usage():
+        summary = usage_collector.get_summary()
+        logger.info("Usage summary: %s", summary)
+
+    ctx.add_shutdown_callback(log_usage)
+
 
     notify_fd_str = os.environ.get("NOWVA_STATE_NOTIFY_FD")
     if notify_fd_str is not None:
@@ -226,7 +235,10 @@ async def entrypoint(ctx: agents.JobContext):
     _lk_logger.setLevel(logging.ERROR)
 
     @session.on("metrics_collected")
-    def _on_metrics(ev):
+    def _on_metrics(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
+
         m = ev.metrics
         if hasattr(m, "ttft"):
             logger.info(
