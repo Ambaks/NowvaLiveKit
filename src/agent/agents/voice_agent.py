@@ -93,6 +93,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     llm = openai.LLM(
         model=os.getenv("LLM_MODEL", "gpt-5.4-mini"),
+        reasoning_effort="low",
     )
 
     tts = "cartesia/sonic-2"
@@ -254,6 +255,40 @@ async def entrypoint(ctx: agents.JobContext):
             logger.info(f"[METRICS] {m.type}")
 
     _lk_logger.setLevel(_prev_level)
+
+    # --- Session usage tracking (feeds SessionLogger) ---
+    from agent.core.session_logger import SessionLogger
+    _session_logger = SessionLogger.get_instance()
+    _prev_llm_usage: dict[str, int] = {}
+
+    @session.on("session_usage_updated")
+    def _on_usage(ev):
+        for mu in ev.usage.model_usage:
+            if mu.type != "llm_usage":
+                continue
+            key = f"{mu.provider}/{mu.model}"
+            prev_input = _prev_llm_usage.get(f"{key}/in", 0)
+            prev_output = _prev_llm_usage.get(f"{key}/out", 0)
+            prev_cached = _prev_llm_usage.get(f"{key}/cached", 0)
+            delta_input = mu.input_tokens - prev_input
+            delta_output = mu.output_tokens - prev_output
+            delta_cached = max(0, mu.input_cached_tokens - prev_cached)
+            _prev_llm_usage[f"{key}/in"] = mu.input_tokens
+            _prev_llm_usage[f"{key}/out"] = mu.output_tokens
+            _prev_llm_usage[f"{key}/cached"] = mu.input_cached_tokens
+            if delta_input > 0 or delta_output > 0:
+                _session_logger.log_llm_call(
+                    component="cascade_pipeline",
+                    model=mu.model,
+                    input_tokens=delta_input,
+                    output_tokens=delta_output,
+                    cached_tokens=delta_cached,
+                )
+                logger.info(
+                    f"[USAGE] {mu.model} — "
+                    f"Δin={delta_input:,} Δout={delta_output:,} "
+                    f"(cumulative: in={mu.input_tokens:,} out={mu.output_tokens:,})"
+                )
 
     @session.on("function_tools_executed")
     def _on_tools_executed(ev):

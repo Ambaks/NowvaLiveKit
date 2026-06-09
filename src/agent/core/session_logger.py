@@ -67,7 +67,14 @@ class SessionLogger:
         return cls()
 
     def start_session(self):
-        """Initialize new session"""
+        """Initialize new session, or join an existing one via NOWVA_SESSION_LOG env var."""
+        import os
+        shared_log = os.environ.get("NOWVA_SESSION_LOG")
+        if shared_log:
+            self.log_file_path = Path(shared_log)
+            self.session_id = self.log_file_path.stem.replace("session_", "")
+            return
+
         self.session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         # Create output directory
@@ -213,13 +220,11 @@ class SessionLogger:
         self._add_event(event)
 
     def _add_event(self, event: LogEvent):
-        """Thread-safe event addition"""
+        """Thread-safe event addition — flushes immediately so subprocess
+        kills don't lose buffered data."""
         with self._lock:
             self.events.append(event)
-
-            # Periodic flush (every 50 events)
-            if len(self.events) % 50 == 0:
-                self._flush_to_csv()
+            self._flush_to_csv()
 
     def _flush_to_csv(self):
         """Write buffered events to CSV (append mode)"""
@@ -264,28 +269,55 @@ class SessionLogger:
         return summary
 
     def _generate_summary(self) -> str:
-        """Generate human-readable summary"""
+        """Generate human-readable summary from the CSV (includes subprocess data)."""
+        totals = self._read_csv_totals()
         summary_lines = [
             "="*60,
             f"SESSION SUMMARY - {self.session_id}",
             "="*60,
             "",
             "TOTALS:",
-            f"  Total LLM Calls: {self.llm_call_count}",
-            f"  Total Function Calls: {self.function_call_count}",
-            f"  Total Conversation Exchanges: {self.conversation_count}",
+            f"  Total LLM Calls: {totals['llm_calls']}",
+            f"  Total Function Calls: {totals['function_calls']}",
+            f"  Total Conversation Exchanges: {totals['conversations']}",
             "",
-            f"  Total Input Tokens: {self.total_input_tokens:,}",
-            f"  Total Output Tokens: {self.total_output_tokens:,}",
-            f"  Total Tokens: {self.total_input_tokens + self.total_output_tokens:,}",
+            f"  Total Input Tokens: {totals['input_tokens']:,}",
+            f"  Total Output Tokens: {totals['output_tokens']:,}",
+            f"  Total Tokens: {totals['input_tokens'] + totals['output_tokens']:,}",
             "",
-            f"  Estimated Total Cost: ${self.total_cost:.4f}",
+            f"  Estimated Total Cost: ${totals['cost']:.4f}",
             "",
             f"Log file: {self.log_file_path}",
             "="*60
         ]
 
         return "\n".join(summary_lines)
+
+    def _read_csv_totals(self) -> dict:
+        """Re-derive totals from the CSV file so subprocess contributions are included."""
+        totals = {
+            "llm_calls": 0, "function_calls": 0, "conversations": 0,
+            "input_tokens": 0, "output_tokens": 0, "cost": 0.0,
+        }
+        if not self.log_file_path or not self.log_file_path.exists():
+            return totals
+        try:
+            with open(self.log_file_path, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    event_type = row.get("event_type", "")
+                    if event_type == "llm_call":
+                        totals["llm_calls"] += 1
+                    elif event_type == "function_call":
+                        totals["function_calls"] += 1
+                    elif event_type == "conversation":
+                        totals["conversations"] += 1
+                    totals["input_tokens"] += int(row.get("input_tokens", 0))
+                    totals["output_tokens"] += int(row.get("output_tokens", 0))
+                    totals["cost"] += float(row.get("cost_usd", 0))
+        except Exception:
+            pass
+        return totals
 
     def get_log_path(self) -> Path:
         """Get path to CSV log file"""

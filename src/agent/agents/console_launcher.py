@@ -20,6 +20,17 @@ from livekit.agents import AgentSession, Agent, llm
 from livekit.plugins import openai
 
 
+def _build_subprocess_env(state_notify_fd: Optional[int] = None) -> dict:
+    env = os.environ.copy()
+    if state_notify_fd is not None:
+        env["NOWVA_STATE_NOTIFY_FD"] = str(state_notify_fd)
+    from agent.core.session_logger import SessionLogger
+    sl = SessionLogger.get_instance()
+    if sl.log_file_path:
+        env["NOWVA_SESSION_LOG"] = str(sl.log_file_path)
+    return env
+
+
 def terminate_process_group(process):
     """Kill a process and all its children by sending SIGTERM to the process group."""
     try:
@@ -62,10 +73,9 @@ async def run_console_voice_agent(
         # Path to voice agent (same directory now)
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
-        env = os.environ.copy()
+        env = _build_subprocess_env(state_notify_fd)
         pass_fds: tuple = ()
         if state_notify_fd is not None:
-            env["NOWVA_STATE_NOTIFY_FD"] = str(state_notify_fd)
             pass_fds = (state_notify_fd,)
 
         # Run the voice agent in its own process group so we can kill all children
@@ -111,10 +121,9 @@ async def run_console_voice_onboarding(
         # Path to voice agent (same directory now)
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
-        env = os.environ.copy()
+        env = _build_subprocess_env(state_notify_fd)
         pass_fds: tuple = ()
         if state_notify_fd is not None:
-            env["NOWVA_STATE_NOTIFY_FD"] = str(state_notify_fd)
             pass_fds = (state_notify_fd,)
 
         # Run the voice agent in its own process group so we can kill all children

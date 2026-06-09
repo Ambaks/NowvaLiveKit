@@ -36,6 +36,37 @@ from profiler.collector import SessionProfiler
 logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 
+class _TeeStream:
+    def __init__(self, original, log_file):
+        self._original = original
+        self._log_file = log_file
+
+    def write(self, data):
+        self._original.write(data)
+        self._log_file.write(data)
+
+    def flush(self):
+        self._original.flush()
+        self._log_file.flush()
+
+    def fileno(self):
+        return self._original.fileno()
+
+    def isatty(self):
+        return self._original.isatty()
+
+
+# Set NOWVA_LOG_CONSOLE=1 to mirror all console output to session_logs/console_<timestamp>.log
+_tee_file = None
+if os.environ.get("NOWVA_LOG_CONSOLE", "").lower() == "true":
+    from datetime import datetime as _dt
+    _log_dir = Path("session_logs")
+    _log_dir.mkdir(exist_ok=True)
+    _tee_file = open(_log_dir / f"console_{_dt.now().strftime('%Y%m%d_%H%M%S')}.log", "w")
+    sys.stdout = _TeeStream(sys.stdout, _tee_file)
+    sys.stderr = _TeeStream(sys.stderr, _tee_file)
+
+
 class NowvaApp:
     """Main Nowva application orchestrator"""
 
@@ -429,6 +460,7 @@ class NowvaApp:
 
                 # Monitor voice agent stdout + state notification pipe
                 state_notified = False
+                had_output = False
                 try:
                     import select
                     read_fds = []
@@ -445,6 +477,7 @@ class NowvaApp:
                                 if line:
                                     print(line, end='')
                                     sys.stdout.flush()
+                                    had_output = True
                             elif fd == self._state_pipe_r:
                                 try:
                                     os.read(self._state_pipe_r, 1024)
@@ -633,7 +666,9 @@ class NowvaApp:
                     pose_running = False
                     print("[POSE] Pose estimation stopped")
 
-                # Fallback poll — notifications handle the fast path
+                if had_output or state_notified:
+                    continue
+                # Nothing happened — long fallback poll for safety
                 await asyncio.sleep(2.0)
                 self.state.reload_state()
 

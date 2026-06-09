@@ -1,7 +1,7 @@
 """
 Pricing Configuration for All AI Services
 Centralized pricing data for cost calculation
-Updated: 2026-01-07
+Updated: 2026-06-09
 """
 
 # =============================================================================
@@ -35,9 +35,14 @@ OPENAI_PRICING = {
         "cached_input": 0.05 / 1_000_000
     },
     "gpt-5.4-nano": {
-        "input": 0.10 / 1_000_000,       # Estimated: aligned with gpt-5-nano
-        "output": 0.40 / 1_000_000,
-        "cached_input": 0.05 / 1_000_000
+        "input": 0.20 / 1_000_000,       # $0.20 per 1M tokens
+        "output": 1.25 / 1_000_000,      # $1.25 per 1M tokens
+        "cached_input": 0.02 / 1_000_000 # $0.02 per 1M tokens
+    },
+    "gpt-5.4-mini": {
+        "input": 0.75 / 1_000_000,       # $0.75 per 1M tokens
+        "output": 4.50 / 1_000_000,      # $4.50 per 1M tokens
+        "cached_input": 0.075 / 1_000_000 # $0.075 per 1M tokens
     }
 }
 

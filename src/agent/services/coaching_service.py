@@ -815,7 +815,9 @@ class CoachingService:
 
             if agent and len(agent.chat_ctx.items) > ctx_len_before:
                 added = len(agent.chat_ctx.items) - ctx_len_before
-                del agent.chat_ctx.items[ctx_len_before:]
+                ctx_copy = agent.chat_ctx.copy()
+                del ctx_copy.items[ctx_len_before:]
+                await agent.update_chat_ctx(ctx_copy)
                 logger.debug(
                     f"[COACHING SERVICE] Stripped {added} ephemeral coaching items from context"
                 )
