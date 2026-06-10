@@ -22,6 +22,13 @@ from biomechanics.utils.geometry import (
 
 logger = logging.getLogger(__name__)
 
+# Fixed reference-direction vectors, allocated once at import to avoid
+# re-creating them every frame in the IK hot path. Treated as read-only —
+# the geometry helpers never mutate their inputs in place.
+_AXIS_X = np.array([1.0, 0.0, 0.0])        # forward / sagittal-plane normal
+_VERTICAL_UP = np.array([0.0, 1.0, 0.0])     # Y-up reference
+_VERTICAL_DOWN = np.array([0.0, -1.0, 0.0])  # Y-down reference (MediaPipe "up")
+
 
 class AnalyticalIKSolver(IKSolver):
     """
@@ -190,7 +197,7 @@ class AnalyticalIKSolver(IKSolver):
         # 0 degrees when standing upright, increases with flexion
 
         # Downward reference (Y-up coordinate system)
-        vertical = np.array([0, -1, 0])
+        vertical = _VERTICAL_DOWN
 
         # Thigh angle from vertical (0 when standing)
         thigh_from_vertical = angle_between_vectors(thigh_vec, vertical)
@@ -225,7 +232,7 @@ class AnalyticalIKSolver(IKSolver):
             return 0.0
 
         # Sagittal plane normal (X-axis, pointing left)
-        sagittal_normal = np.array([1, 0, 0])
+        sagittal_normal = _AXIS_X
 
         # Project thigh vector onto frontal plane (remove X component)
         thigh_frontal = np.array([0, thigh_vec[1], thigh_vec[2]])
@@ -355,7 +362,7 @@ class AnalyticalIKSolver(IKSolver):
             return 0.0
 
         # Upward direction (Y-down MediaPipe convention: -Y is up)
-        up = np.array([0.0, -1.0, 0.0])
+        up = _VERTICAL_DOWN
         return angle_between_vectors(shank, up)
 
     def _compute_trunk_flexion(self, kpts: dict) -> float:
@@ -381,7 +388,7 @@ class AnalyticalIKSolver(IKSolver):
         trunk_vec = shoulder_mid - hip_mid
 
         # Y-down reference (MediaPipe world coords are Y-down)
-        vertical = np.array([0, -1, 0])
+        vertical = _VERTICAL_DOWN
 
         # 180 - angle: 180° upright, decreases with lean
         angle = angle_between_vectors(trunk_vec, vertical)
@@ -412,7 +419,7 @@ class AnalyticalIKSolver(IKSolver):
         trunk_frontal = np.array([trunk_vec[0], trunk_vec[1], 0])
 
         # Upward reference in frontal plane (Y-up coordinate system)
-        vertical = np.array([0, 1, 0])
+        vertical = _VERTICAL_UP
 
         angle = angle_between_vectors(trunk_frontal, vertical)
 
@@ -443,7 +450,7 @@ class AnalyticalIKSolver(IKSolver):
         shoulder_xz = np.array([shoulder_vec[0], 0, shoulder_vec[2]])
 
         # Reference: facing forward (X-axis)
-        reference = np.array([1, 0, 0])
+        reference = _AXIS_X
 
         if np.linalg.norm(shoulder_xz) < 1e-6:
             return 0.0
@@ -483,7 +490,7 @@ class AnalyticalIKSolver(IKSolver):
         trunk_sagittal = np.array([0, trunk_vec[1], trunk_vec[2]])
 
         # Upward reference (Y-up coordinate system)
-        vertical = np.array([0, 1, 0])
+        vertical = _VERTICAL_UP
 
         if np.linalg.norm(trunk_sagittal) < 1e-6:
             return 0.0
@@ -547,7 +554,7 @@ class AnalyticalIKSolver(IKSolver):
         hip_xz = np.array([hip_vec[0], 0, hip_vec[2]])
 
         # Reference: facing forward (X-axis)
-        reference = np.array([1, 0, 0])
+        reference = _AXIS_X
 
         if np.linalg.norm(hip_xz) < 1e-6:
             return 0.0
