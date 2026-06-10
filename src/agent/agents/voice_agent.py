@@ -44,7 +44,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     usage_collector = metrics.UsageCollector()
 
-    async def log_usage():
+    async def log_usage(reason: str):
         summary = usage_collector.get_summary()
         logger.info("Usage summary: %s", summary)
 
@@ -362,6 +362,8 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info("[SESSION] Workout state saved on close")
             except Exception as e:
                 logger.error(f"[SESSION] Failed to save workout state on close: {e}")
+
+    await ctx.connect()
 
     await session.start(
         room=ctx.room,
