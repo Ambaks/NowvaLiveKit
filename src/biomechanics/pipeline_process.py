@@ -40,7 +40,7 @@ from biomechanics.diagnosis.bridge import build_anthro_dict, build_rom_dict
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
-from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
+from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
 from biomechanics.viz.html_dashboard import generate_session_dashboard
@@ -281,6 +281,8 @@ def run_biomechanics_pipeline(
 
     fps_counter = FPSCounter()
     window_name = f"Nowva — {exercise_name}"
+    precreate_window(window_name)
+    _window_animated = False
     out_dir = make_output_dir()
 
     # --- Apply existing calibration if provided ---
@@ -329,6 +331,9 @@ def run_biomechanics_pipeline(
                     cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
                     cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
+                    if not _window_animated:
+                        animate_window_fullscreen(window_name)
+                        _window_animated = True
                     cv2.imshow(window_name, display)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         print("\nAssessment stopped early by user")
@@ -913,6 +918,9 @@ def run_biomechanics_pipeline(
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3,
                     )
 
+                if not _window_animated:
+                    animate_window_fullscreen(window_name)
+                    _window_animated = True
                 cv2.imshow(window_name, display)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print("\nStopped by user (pressed 'q')")

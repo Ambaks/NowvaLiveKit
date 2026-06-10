@@ -52,6 +52,9 @@ pandas>=2.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 
+# macOS Development (optional)
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+
 # =============================================================================
 # FASTAPI BACKEND (for program generation)
 # =============================================================================
