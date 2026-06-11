@@ -52,6 +52,7 @@ class WorkoutAgent(BaseNovaAgent):
             audio_cue_service=self.userdata.audio_cue_service,
         )
         await coaching_service.start()
+        coaching_service._workout_active = True
         self.userdata.coaching_service = coaching_service
 
         # Generate context-aware greeting BEFORE starting wake word system.

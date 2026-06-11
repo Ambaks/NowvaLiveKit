@@ -32,9 +32,12 @@ CAPTION_MARGIN_PX = 40
 
 FOOT_FADE_IN_WEIGHT = 0.5
 
-DEMO_CONNECTIONS: tuple[tuple[int, int], ...] = tuple(COCO_SKELETON_CONNECTIONS)
-FOOT_CONNECTIONS: tuple[tuple[int, int], ...] = ((15, 17), (16, 18))
 DRAWN_JOINTS: tuple[int, ...] = tuple(range(5, 19))
+DEMO_CONNECTIONS: tuple[tuple[int, int], ...] = tuple(
+    (a, b) for a, b in COCO_SKELETON_CONNECTIONS
+    if a >= min(DRAWN_JOINTS) and b >= min(DRAWN_JOINTS)
+)
+FOOT_CONNECTIONS: tuple[tuple[int, int], ...] = ((15, 17), (16, 18))
 SHARED_JOINT_COUNT = 17
 
 HIGHLIGHT_JOINTS: dict[str, tuple[int, ...]] = {

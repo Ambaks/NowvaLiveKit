@@ -243,7 +243,7 @@ class CollectOnboardingDataTask(AgentTask):
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions="Greet the user warmly and tell them who you are."
+            instructions="Greet the user warmly and introduce yourself briefly."
         )
 
     @function_tool

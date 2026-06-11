@@ -37,6 +37,12 @@ COCO_KEYPOINT_NAMES = [
 
 # COCO skeleton connections (pairs of keypoint indices)
 COCO_SKELETON_CONNECTIONS = [
+    (0, 1),    # nose - left_eye
+    (0, 2),    # nose - right_eye
+    (1, 3),    # left_eye - left_ear
+    (2, 4),    # right_eye - right_ear
+    (0, 5),    # nose - left_shoulder
+    (0, 6),    # nose - right_shoulder
     (5, 6),    # left_shoulder - right_shoulder
     (5, 7),    # left_shoulder - left_elbow
     (7, 9),    # left_elbow - left_wrist

@@ -60,6 +60,9 @@ class CoachingService:
         # Choreographed assessment demo fires once per session
         self._assessment_demo_played: bool = False
 
+        # Orchestrator is dormant until assessment+calibration finish
+        self._workout_active: bool = False
+
     def set_workout_complete_callback(self, callback: Callable) -> None:
         self._on_workout_complete_callback = callback
 
@@ -213,7 +216,9 @@ class CoachingService:
                 severity = message.get("severity", "")
                 fault_msg = message.get("message", "")
                 logger.info(f"[COACHING SERVICE] FAULT received: type={fault_type} severity={severity} cue={cue_key} msg='{fault_msg}'")
-                if self._coaching_orchestrator:
+                if not self._workout_active:
+                    logger.debug("[COACHING SERVICE] Fault ignored — workout not active yet")
+                elif self._coaching_orchestrator:
                     await self._coaching_orchestrator.on_fault(
                         cue_key=cue_key,
                         fault_type=fault_type,
@@ -233,7 +238,9 @@ class CoachingService:
                     f"[COACHING SERVICE] REP COMPLETE received: rep={rep} depth={depth} "
                     f"is_clean={is_clean} faults={faults}"
                 )
-                if self._coaching_orchestrator:
+                if not self._workout_active:
+                    logger.debug("[COACHING SERVICE] rep_complete ignored — workout not active yet")
+                elif self._coaching_orchestrator:
                     await self._coaching_orchestrator.on_rep_complete(
                         rep_number=rep or 0,
                         depth=depth,
@@ -245,7 +252,7 @@ class CoachingService:
                 else:
                     logger.warning("[COACHING SERVICE] No orchestrator — rep_complete dropped")
             elif msg_type == "frame_data":
-                if self._coaching_orchestrator:
+                if self._workout_active and self._coaching_orchestrator:
                     self._coaching_orchestrator.record_angle_sample(
                         message.get("joint_angles", {})
                     )
@@ -559,7 +566,8 @@ class CoachingService:
             target_reps = self._get_current_target_reps()
             total_sets = self._get_total_sets()
             self._coaching_orchestrator.reset_set(target_reps=target_reps, total_sets=total_sets)
-            logger.info("[CALIBRATION] Orchestrator reset for workout phase")
+            self._workout_active = True
+            logger.info("[CALIBRATION] Orchestrator reset for workout phase — workout_active=True")
 
         # Notify voice agent so it can start the wake word system now that
         # calibration speech is finished and the user is ready to work out.

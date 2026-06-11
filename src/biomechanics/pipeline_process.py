@@ -608,6 +608,16 @@ def run_biomechanics_pipeline(
                                     draw_skeleton(display, result.skeleton_2d)
                                 fps_counter.update()
                                 draw_fps(display, fps_counter.fps)
+
+                                h, w = display.shape[:2]
+                                current, required = pipeline._readiness_gate.progress
+                                text = f"WAITING {current}/{required}"
+                                color = (0, 200, 255)
+                                ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+                                x = w - ts[0] - 15
+                                cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
+                                cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
                                 cv2.imshow(window_name, display)
                                 if cv2.waitKey(1) & 0xFF == ord('q'):
                                     cv2.destroyAllWindows()

@@ -42,7 +42,6 @@ def animate_window_fullscreen(window_name: str) -> None:
         if nswindow is not None:
             screen_frame = NSScreen.mainScreen().frame()
             nswindow.setFrame_display_animate_(screen_frame, True, True)
-            return
     cv2.setWindowProperty(
         window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN,
     )
