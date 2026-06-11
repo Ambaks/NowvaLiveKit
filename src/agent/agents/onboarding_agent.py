@@ -6,7 +6,7 @@ import logging
 import re
 
 from livekit.agents import RunContext
-from livekit.agents.llm import function_tool
+from livekit.agents.llm import function_tool, AgentTask
 
 from auth.user_management import create_user_account
 from agent.agents.prompts import ONBOARDING_PROMPT
@@ -217,3 +217,55 @@ class OnboardingAgent(BaseNovaAgent):
             logger.debug(f"[DEBUG] User said email was incorrect, asking again...")
 
             return None, "The user said their email was not correct. Say 'No worries!' and ask for their email again."
+
+
+
+
+class CollectOnboardingDataTask(AgentTask):
+    def __init__(
+        self,
+        userdata,
+        state,
+        email: str,
+        first_name: str,
+        chat_ctx = None,
+    ):
+        super().__init__(
+            instructions=("""
+                Collect the user's first name and email address.
+                Always confirm their email address and spell it out character by character. 
+                Wait for the user's validation.
+                Once that is done, call the onboarding_to_menu tool.
+                """
+            ),
+            chat_ctx=chat_ctx,
+        )
+
+    async def on_enter(self):
+        await self.session.generate_reply(
+            instructions="Greet the user warmly and tell them who you are."
+        )
+
+    @function_tool
+    async def onboarding_to_menu(
+        self,
+        first_name: str,
+        email: str,
+    ):
+        """
+        Call this once the user has provided their first name and email address.
+
+        Args:
+            first_name: The user's first name
+            email: The user's email address
+        """
+
+        # save user to db and perform onboarding logic
+
+
+        from agent.agents.main_menu_agent import MainMenuAgent
+        
+        return MainMenuAgent(state=self.state, userdata = self.userdata)
+
+
+

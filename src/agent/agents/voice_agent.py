@@ -233,7 +233,7 @@ async def entrypoint(ctx: agents.JobContext):
     _lk_logger = logging.getLogger("livekit.agents.voice.agent_session")
     _prev_level = _lk_logger.level
     _lk_logger.setLevel(logging.ERROR)
-
+            
     @session.on("metrics_collected")
     def _on_metrics(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
