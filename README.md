@@ -38,6 +38,7 @@
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Testing](#testing)
+- [Profiling & Benchmarking](#profiling--benchmarking)
 
 ---
 
@@ -91,7 +92,7 @@ graph TB
     end
 
     subgraph voice ["Voice Agent"]
-        VA[LiveKit + OpenAI Realtime API<br/>Bidirectional Voice]
+        VA[LiveKit Cascade Pipeline<br/>Deepgram STT / Gemini LLM / Cartesia TTS]
         SM[State Machine<br/>Onboarding / Menu / Workout]
     end
 
@@ -130,6 +131,8 @@ NowvaApp (main.py)
 Each process communicates via **UNIX domain sockets** with 4-byte big-endian length-prefix framing and JSON payloads. Two IPC channels:
 - **Main IPC** — pose pipeline sends frame data (skeleton, angles, faults, rep events) to the main process
 - **Coaching IPC** — main process forwards events to the voice agent for real-time coaching delivery
+
+Mode transitions are signaled over a **notification pipe** rather than file polling: the voice agent writes to a pipe fd when it changes `AgentState`, and `main.py` `select()`s on it alongside subprocess stdout. The biomechanics pipeline supports **model preloading** (`--preload`) — models load before the workout starts so the camera window appears instantly (with a native macOS fullscreen animation).
 
 ---
 
@@ -207,8 +210,8 @@ VITE_LIVEKIT_URL=wss://nowva-k5kvmizx.livekit.cloud
 
 ## Website Voice Agent
 
-**Location:** `src/agents/website_voice_agent.py`
-**Prompts:** `src/agents/prompts/website_step_prompts.py`, `src/agents/prompts/website_agent_prompt.py`
+**Location:** `src/agent/agents/website_voice_agent.py`
+**Prompts:** `src/agent/agents/prompts/website_step_prompts.py`, `src/agent/agents/prompts/website_agent_prompt.py`
 
 A streamlined voice agent for **new website visitors** creating programs without authentication. The agent connects via LiveKit WebRTC from the browser's VoiceInterface component.
 
@@ -255,8 +258,8 @@ The agent checks for existing user data on connection. For returning visitors, i
 ## Console Voice Agent (main.py)
 
 **Entry point:** `src/main.py` (NowvaApp orchestrator)
-**Agent code:** `src/agents/voice_agent.py` (mode router)
-**Individual agents:** `src/agents/onboarding_agent.py`, `src/agents/main_menu_agent.py`, `src/agents/workout_agent.py`, `src/agents/program_creation_agent.py`, `src/agents/schedule_agent.py`
+**Agent code:** `src/agent/agents/voice_agent.py` (mode router)
+**Individual agents:** `src/agent/agents/onboarding_agent.py`, `src/agent/agents/main_menu_agent.py`, `src/agent/agents/workout_agent.py`, `src/agent/agents/program_creation_agent.py`, `src/agent/agents/schedule_agent.py`, `src/agent/agents/calibration_agent.py`
 
 The full coaching application for authenticated users running on a squat rack computer or laptop.
 
@@ -286,8 +289,10 @@ OnboardingAgent ──→ MainMenuAgent ──→ WorkoutAgent
 
 | Mode | Agent | Purpose | Key Function Tools |
 |------|-------|---------|--------------------|
-| Onboarding | `OnboardingAgent` | New user welcome, name/email collection | `complete_onboarding()` |
+| Onboarding | `OnboardingAgent` | New user welcome, name/email collection (AgentTask-based flow) | `complete_onboarding()` |
 | Main Menu | `MainMenuAgent` | Menu navigation, intent detection | `start_workout()`, `start_quick_exercise()`, `get_current_program()` |
+| Quick Exercise | `CollectExerciseInfoTask` | Collects sets/reps/weight/rest, routes to calibration or workout | `start_workout()` |
+| Calibration | `CalibrationAgent` | 2-rep form assessment + 5-rep calibration before a workout | — |
 | Workout | `WorkoutAgent` | Live workout coaching with biomechanics | `log_workout_complete()`, `skip_exercise()`, `pause_workout()` |
 | Program Creation | `ProgramCreationAgent` | Conversational program generation | `generate_new_program()`, `capture_profile()` |
 | Schedule | `ScheduleMaintenanceAgent` | Workout scheduling, deload management | `view_schedule()`, `reschedule_workout()` |
@@ -303,7 +308,7 @@ Session state is serialized to disk as `.agent_state_<user_id>.json` and survive
 
 ### Context Compaction
 
-The `CompactionService` (`src/services/compaction_service.py`) performs rolling conversation summarization every ~30 iterations using `gpt-4.1-mini`. This prevents token explosion in long workout sessions while preserving coaching context. A `ContextViewer` debug dashboard is available at `http://localhost:8899`.
+The `CompactionService` (`src/agent/services/compaction_service.py`) performs rolling conversation summarization using `gpt-4.1-mini`, maintaining a 3-tier (HOT/WARM/COLD) summary that decays over time. Cold context is flushed to a per-session `memory.md` on disk, and a detailed compaction log records every cycle. This prevents token explosion in long workout sessions while preserving coaching context. A `ContextViewer` debug dashboard is available at `http://localhost:8899`.
 
 ### Workout Mode Integration
 
@@ -811,7 +816,7 @@ Output probabilities are smoothed with vector EMA (α=0.2). When BiLSTM is enabl
 
 #### Synthetic Training Data
 
-Training data is generated via `scripts/generate_opensim_data.py` using the OpenSim Rajagopal 2015 musculoskeletal model:
+Training data is generated via `scripts/tools/generate_opensim_data.py` using the OpenSim Rajagopal 2015 musculoskeletal model:
 1. Generate 200-300 synthetic squat sessions with randomized parameters (max depth, speed, asymmetry)
 2. Forward kinematics → body positions → COCO-17 keypoint mapping
 3. Feature extraction (14 features per frame)
@@ -878,7 +883,7 @@ Profiles are registered via `registry.py` and selected at runtime based on the c
 
 ## Coaching System
 
-**Files:** `src/services/coaching_orchestrator.py`, `src/services/audio_cue_service.py`, `src/services/coaching_service.py`, `src/agents/teaching_agent.py`
+**Files:** `src/agent/services/coaching_orchestrator.py`, `src/agent/services/audio_cue_service.py`, `src/agent/services/coaching_service.py`, `src/agent/agents/teaching_agent.py`
 
 ### Coaching Orchestrator
 
@@ -903,7 +908,7 @@ Cues are pre-generated via `gpt-4o-mini-tts` (24kHz PCM, 30-minute TTL) before e
 
 ### Teaching Agent
 
-**File:** `src/agents/teaching_agent.py`
+**File:** `src/agent/agents/teaching_agent.py`
 
 Specialized agent for the first set of an exercise, operating as a phase state machine:
 
@@ -1001,7 +1006,7 @@ Program generation runs as a Celery task with Valkey (Redis-compatible) as the b
 
 ## Squat Visualizer
 
-**File:** `scripts/visualize_video_squats.py`
+**File:** `scripts/demos/visualize_video_squats.py`
 
 A **live-capture squat analysis and 3D replay tool**. This is an in-development feature that captures squat reps from a webcam, runs the full biomechanics pipeline in real time, and generates an interactive 3D HTML replay with comprehensive analytics.
 
@@ -1020,8 +1025,8 @@ A **live-capture squat analysis and 3D replay tool**. This is an in-development 
 ### Usage
 
 ```bash
-python scripts/visualize_video_squats.py
-python scripts/visualize_video_squats.py --output my_session.mp4 --camera 0
+python scripts/demos/visualize_video_squats.py
+python scripts/demos/visualize_video_squats.py --output my_session.mp4 --camera 0
 ```
 
 ### Pipeline Integration
@@ -1184,6 +1189,7 @@ NowvaLiveKit/
 │   │   ├── profiles/                     # Exercise-specific configurations
 │   │   ├── utils/                        # Types, geometry, filters
 │   │   └── viz/                          # Visualization and dashboards
+│   ├── profiler/                         # Session profiler (event/resource collection, HTML reports)
 │   ├── program_generator/                # 6-layer agentic workout program generator
 │   ├── api/                              # FastAPI REST backend
 │   ├── db/                               # SQLAlchemy models and migrations
@@ -1191,6 +1197,7 @@ NowvaLiveKit/
 │   ├── assets/                           # Pre-cached audio cue WAVs
 │   ├── templates/                        # HTML/CSS templates for program export
 │   └── utils/                            # Shared utilities
+├── benchmarks/                           # Component benchmark suite (run via python -m benchmarks)
 ├── frontend_demo/                        # React 19 + TypeScript website
 ├── config/                               # Gunicorn, Nginx, biomechanics YAML
 ├── scripts/
@@ -1208,6 +1215,7 @@ NowvaLiveKit/
 ├── models/                               # Pre-trained ML models (BiLSTM, YOLO)
 ├── data/                                 # Training data (gitignored)
 ├── requirements.txt
+├── requirements.lock                     # Pinned dependency versions
 └── .env                                  # Environment variables (not committed)
 ```
 
@@ -1278,6 +1286,9 @@ Optional:
 # Full system: voice agent + biomechanics pipeline + API
 python src/main.py
 
+# With session profiling (HTML report written to profiler_results/ on exit)
+python src/main.py --profile
+
 # API backend only
 uvicorn src.api.main:app --port 8000
 
@@ -1288,7 +1299,7 @@ cd frontend_demo && npm run dev
 cd frontend_demo && npm run build
 
 # Squat visualizer (standalone)
-python scripts/visualize_video_squats.py
+python scripts/demos/visualize_video_squats.py
 
 # Celery worker (for async program generation)
 celery -A src.api.services.celery_app worker --loglevel=info
@@ -1309,7 +1320,7 @@ Edit `config/biomechanics.yaml` to adjust:
 
 ## Testing
 
-18 test files covering all pipeline components:
+37 test files covering all pipeline components:
 
 ```bash
 pytest tests/
@@ -1339,6 +1350,42 @@ shell/test_api_integration.sh
 # VBT (velocity-based training) tests
 shell/test_vbt_*.sh
 ```
+
+---
+
+## Profiling & Benchmarking
+
+### Session Profiler (`src/profiler/`)
+
+Live instrumentation of full coaching sessions. Enable with `python src/main.py --profile` (or `NOWVA_PROFILE=1`):
+
+- **Cross-process collection** — the main process, voice agent, and biomechanics pipeline each record events (turns, LLM calls, mode changes, IPC messages) to per-process JSON
+- **Resource sampling** — background thread samples CPU, memory, and GPU at regular intervals
+- **HTML report** — on exit, all process data is merged into a self-contained Chart.js report in `profiler_results/` with per-turn latency, LLM token usage, and resource traces
+
+### Component Benchmarks (`benchmarks/`)
+
+Standalone benchmark suite measuring per-component latency across the entire stack — pose estimation, IK, filters, fault rules, rep counting, diagnosis, IPC, audio cues, compaction, STT/TTS/LLM/VAD:
+
+```bash
+# Run all local benchmarks (100 iterations, 10 warmup)
+python -m benchmarks
+
+# Run a subset
+python -m benchmarks --include "bench_ik*"
+
+# Include API-dependent benchmarks (STT/TTS/LLM round-trips)
+python -m benchmarks --include-api
+
+# Regression detection against a saved baseline
+python -m benchmarks --baseline benchmarks/results/baseline.json
+```
+
+Outputs JSON + HTML reports to `benchmarks/results/`. Regression detection flags components that slowed down versus the baseline.
+
+### LiveKit Cloud Metrics
+
+The voice agent uploads end-of-utterance (EOU) metrics to LiveKit Cloud via the OpenTelemetry pipeline, enabling latency benchmarking of the deployed voice stack (STT → LLM TTFT → TTS) from the LiveKit dashboard.
 
 ---
 

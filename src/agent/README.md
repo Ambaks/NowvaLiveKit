@@ -18,7 +18,7 @@ Low-level building blocks with no upward dependencies.
 | `agent_state.py` | `AgentState` -- persistent state machine. Manages mode transitions (onboarding, main_menu, workout, program_creation), user data, and workout state. Persisted to `.agent_state_{user_id}.json` with atomic writes. Supports dot-notation access (`state.get("workout.current_session")`). |
 | `ipc_communication.py` | `IPCServer` / `IPCClient` -- UNIX domain socket IPC with 4-byte length-prefix framing. Connects the voice agent process to the pose estimation process at `/tmp/nowva_coaching.sock`. |
 | `session_manager.py` | `SessionManager` -- encrypted local session storage using Fernet symmetric encryption. Persists user credentials between launches. |
-| `session_logger.py` | `SessionLogger` (singleton) -- CSV-based logging of all LLM calls, function tool calls, and conversation turns with token counts and cost tracking. |
+| `session_logger.py` | `SessionLogger` (singleton) -- cross-process CSV-based logging of all LLM calls, function tool calls, and conversation turns with token counts, cost tracking, and per-model usage aggregation. |
 | `workout_session.py` | `WorkoutSession`, `ExerciseProgress`, `SetProgress` -- structured workout state. Tracks sets, reps, weights, RPE, velocity, and completion status. Serializable to/from dict for storage in `AgentState`. |
 | `latency_tracker.py` | `LatencyTracker` (singleton) -- per-turn TTFT and end-to-end latency metrics with p50/p90/p99 percentiles. Detects progressive degradation in long sessions. |
 | `token_estimator.py` | Token estimation via tiktoken when actual usage data is unavailable. Helpers for text, audio, and function call token counts. |
@@ -38,6 +38,8 @@ Depends on `core/`. No dependency on `agents/`.
 | `email_service.py` | Sends workout programs to users via the Resend API. |
 | `set_report.py` | `generate_set_report()` -- produces per-set PNG timeseries plots with joint angle data and annotated coaching cues at their exact timestamps. |
 | `context_viewer.py` | `ContextViewer` -- debug HTTP server on port 8899 showing live LLM context, compaction tiers, and session stats. |
+| `demo_narration.py` | LLM script generation for the choreographed coaching demo. Produces narration text synchronized with pose correction animations after a failed assessment. |
+| `inline_task_runner.py` | Runs an `AgentTask` from non-inline contexts (e.g., IPC-triggered coaching demos) by injecting the task into the live `AgentSession`. |
 
 ### `agents/` -- LiveKit Voice Agents
 
@@ -55,10 +57,13 @@ extends LiveKit's `Agent` class and provides:
 
 | File | Purpose |
 |---|---|
-| `voice_agent.py` | Entrypoint. Sets up the cascade pipeline (Deepgram STT, Gemini LLM, Cartesia TTS, Silero VAD), initializes compaction and context viewer, then routes to the correct agent based on `AgentState.mode`. |
-| `onboarding_agent.py` | `OnboardingAgent` -- new user flow: welcome, name/email collection with confirmation, account creation, handoff to main menu. |
-| `main_menu_agent.py` | `MainMenuAgent` -- primary interaction hub. Routes to workout, program creation, schedule, or teaching flows. |
+| `voice_agent.py` | Entrypoint. Sets up the cascade pipeline (Deepgram STT, Gemini LLM, Cartesia TTS, Silero VAD), initializes compaction and context viewer, then routes to the correct agent based on `AgentState.mode`. Integrates `SessionProfiler` for per-session instrumentation and uploads EOU metrics to LiveKit Cloud. Uses pipe-based state notification (`set_state_notify_fd`) instead of polling to detect mode transitions from the main process. |
+| `onboarding_agent.py` | `OnboardingAgent` -- new user flow using AgentTask-based architecture. Delegates to discrete tasks (e.g., name/email collection) and hands off to main menu on completion. |
+| `main_menu_agent.py` | `MainMenuAgent` -- primary interaction hub. Routes to workout, program creation, schedule, teaching, or quick exercise flows. |
 | `workout_agent.py` | `WorkoutAgent` -- active workout sessions. Creates and starts `CoachingService`, manages wake word system ("hey Nova"), handles verbal set termination via `force_end_current_set()`. |
+| `StartQuickExerciseAgent.py` | `CollectExerciseInfoTask` -- an `AgentTask` that collects quick-exercise parameters (sets, reps, weight, rest) then checks calibration status and hands off to calibration or workout. |
+| `calibration_agent.py` | `CalibrationAgent` -- handles the calibration phase before a workout. Guides the user through the 2-rep form assessment and 5-rep calibration, relaying coaching orchestrator analysis data. |
+| `coaching_demo_task.py` | `CoachingDemoTask` -- an `AgentTask` that delivers the choreographed coaching demo after a failed assessment. Coordinates synced narration + yoyo pose animation. |
 | `program_creation_agent.py` | `ProgramCreationAgent` -- multi-step data collection (height, weight, age, goals, schedule) for generating personalized training programs. |
 | `schedule_agent.py` | `ScheduleMaintenanceAgent` -- schedule viewing and modification. |
 | `teaching_agent.py` | `TeachingAgent` -- guided squat instruction with phased progression. |

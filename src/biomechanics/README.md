@@ -82,6 +82,9 @@ compensatory knee cave.
   the `RepKinematicSummary` and `SetFeatures` types the engine expects.
 - `keypoint_corrector.py` -- applies geometric corrections to keypoints based on
   diagnosed faults (delta-FK approach matching the visualizer's deformLowerBody).
+- `demo_builder.py` -- `build_demo_data()` constructs choreographed coaching-demo
+  data (corrected pose stack + cue metadata) from a diagnosis result. Used after
+  a failed assessment to generate animated correction sequences.
 - `types.py` -- Pydantic models: `RepKinematicSummary`, `SetFeatures`,
   `DiagnosisResult`, `HypothesizedCause`, `DetectedSymptom`, `RepScore`.
 
@@ -186,6 +189,12 @@ Visualization and debugging.
 - `set_plots.py` -- matplotlib plots for hip position and velocity traces.
 - `html_dashboard.py` -- generates self-contained HTML session dashboards with
   per-set charts and segmented rep data.
+- `window_anim.py` -- window pre-creation and native macOS fullscreen animation
+  helpers. Pre-creates the OpenCV window before the pipeline starts so the
+  transition to fullscreen is instant (uses PyObjC `NSApplication` on macOS).
+- `demo_renderer.py` -- choreographed coaching-demo rendering. Plays yoyo-style
+  pose correction animations in the live cv2 window, synchronized with voice
+  narration cues from the agent.
 
 ## Key Entry Points
 
@@ -198,10 +207,6 @@ a `PipelineFrame` with all outputs and per-layer timing.
 launched by `main.py` when a workout starts. Runs the assessment phase (2 bodyweight
 reps with diagnosis), calibration phase (5 reps to personalize thresholds), then
 the main workout loop. Communicates with the voice agent via `IPCBridge`.
-
-**`complete_pipeline.py`** -- `CompleteBiomechanicsPipeline`. Earlier prototype
-integrating stereo triangulation and muscle force prediction. Not used in the
-current production path but retained for reference.
 
 **`calibration.py`** -- `CalibrationTracker` collects peak angle values during
 calibration reps. `build_calibration_profile()` converts peaks into personalized

@@ -12,6 +12,7 @@ Main source code for Nowva. All Python imports assume `src/` is on `sys.path` (s
 |-----------|---------|
 | `agent/` | Voice agent stack — conversational AI, session management, coaching services |
 | `biomechanics/` | Core IP — real-time squat diagnosis engine (pose → IK → faults → coaching) |
+| `profiler/` | Session profiler — thread-safe event/resource collection, HTML report generation with Chart.js |
 | `program_generator/` | 6-layer agentic workout program generator |
 | `api/` | FastAPI REST backend (auth, programs, workouts, LiveKit tokens) |
 | `db/` | SQLAlchemy models, migrations, and database utilities |
@@ -25,5 +26,6 @@ Main source code for Nowva. All Python imports assume `src/` is on `sys.path` (s
 - `import numpy as np` — always aliased
 - `from agent.core.X import Y` — voice agent infrastructure
 - `from biomechanics.X import Y` — diagnosis engine
+- `from profiler.collector import SessionProfiler` — session instrumentation
 - `from program_generator import generate_program_v5` — program generation
 - `from api.main import app` — FastAPI app

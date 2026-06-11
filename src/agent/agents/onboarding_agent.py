@@ -5,8 +5,8 @@ OnboardingAgent - Handles new user onboarding (name + email capture)
 import logging
 import re
 
-from livekit.agents import RunContext
-from livekit.agents.llm import function_tool, AgentTask
+from livekit.agents import AgentTask, RunContext
+from livekit.agents.llm import function_tool
 
 from auth.user_management import create_user_account
 from agent.agents.prompts import ONBOARDING_PROMPT
