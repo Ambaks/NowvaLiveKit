@@ -58,6 +58,7 @@ class SessionTracker:
 
         # Diagnosis integration (populated via set_athlete_params)
         self._rep_kinematic_buffer: list[RepKinematicSummary] = []
+        self._bottom_frame_buffer: list[tuple[int, list]] = []
         self._athlete_params: dict | None = None
         self._baseline: dict | None = None
 
@@ -100,6 +101,7 @@ class SessionTracker:
             frame = build_frame_from_live_pipeline(bottom_kpts, bottom_angles)
             summary = build_rep_kinematic_summary(frame, self._athlete_params, rep.rep_number)
             self._rep_kinematic_buffer.append(summary)
+            self._bottom_frame_buffer.append((rep.rep_number, frame["kpts"]))
 
         self.last_rep_time = now
         self.total_reps += 1
@@ -158,8 +160,23 @@ class SessionTracker:
             )
 
         self._rep_kinematic_buffer = []
+        self._bottom_frame_buffer = []
         self.current_set_reps = []
         self.set_active = False
+
+    def reset_rep_buffers(self) -> None:
+        """Clear per-rep diagnosis buffers without ending the set."""
+        self._rep_kinematic_buffer = []
+        self._bottom_frame_buffer = []
+
+    def bottom_frame_for_rep(self, rep_number: int) -> list | None:
+        """Viewer-coords bottom-frame kpts for a rep, or the latest buffered frame."""
+        for buffered_rep_number, kpts in self._bottom_frame_buffer:
+            if buffered_rep_number == rep_number:
+                return kpts
+        if self._bottom_frame_buffer:
+            return self._bottom_frame_buffer[-1][1]
+        return None
 
     def _compute_set_summary(
         self, set_number: int, reps: List[RepData]
@@ -225,3 +242,4 @@ class SessionTracker:
         self.total_sets = 0
         self.all_reps = []
         self._rep_kinematic_buffer = []
+        self._bottom_frame_buffer = []

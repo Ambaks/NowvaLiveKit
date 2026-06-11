@@ -57,6 +57,9 @@ class CoachingService:
         # Flag for wake word system to detect active coaching speech
         self.is_coaching_speaking: bool = False
 
+        # Choreographed assessment demo fires once per session
+        self._assessment_demo_played: bool = False
+
     def set_workout_complete_callback(self, callback: Callable) -> None:
         self._on_workout_complete_callback = callback
 
@@ -296,6 +299,11 @@ class CoachingService:
                     f"[COACHING SERVICE] ASSESSMENT RESULT: passed={passed} round={round_num}"
                 )
                 await self._on_assessment_result(message)
+            elif msg_type == "demo_abort":
+                # Pipeline has no demo data — the demo task keeps speaking audio-only.
+                logger.warning(
+                    f"[COACHING SERVICE] Demo visuals aborted: {message.get('reason')}"
+                )
             elif msg_type == "calibration_rep":
                 rep = message.get("rep_number", 0)
                 total = message.get("total_required", 5)
@@ -343,11 +351,20 @@ class CoachingService:
             logger.error(f"[COACHING SERVICE] TTS cache generation failed: {e}")
 
     async def _on_assessment_result(self, message: dict) -> None:
-        """Handle assessment result — speak feedback via LLM."""
+        """Handle assessment result — choreographed demo on first failure, else spoken feedback."""
         passed = message.get("passed", False)
         round_num = message.get("round", 1)
         diagnosis = message.get("diagnosis", {})
         scoring = message.get("scoring", {})
+        demo = message.get("demo", {})
+
+        if not passed and demo.get("available") and not self._assessment_demo_played:
+            self._assessment_demo_played = True
+            if await self._run_assessment_demo(demo.get("cues", [])):
+                return
+            logger.warning(
+                "[COACHING SERVICE] Demo failed — falling back to spoken correction"
+            )
 
         if not passed:
             instructions = self._build_assessment_correction_prompt(
@@ -360,6 +377,45 @@ class CoachingService:
 
         logger.info(f"[ASSESSMENT] LLM prompt: {instructions[:150]}...")
         await self._coaching_llm_reply(instructions)
+
+    async def _run_assessment_demo(self, demo_cues: list) -> bool:
+        """Run the choreographed demo task. Returns False if it failed to run."""
+        from agent.agents.coaching_demo_task import CoachingDemoTask
+        from agent.services.demo_narration import generate_demo_lines
+        from agent.services.inline_task_runner import start_inline_agent_task
+
+        if not demo_cues or self._session.llm is None:
+            return False
+
+        # Script generation overlaps everything that follows (demo_start, morph-in).
+        lines_task = asyncio.create_task(
+            generate_demo_lines(self._session.llm, demo_cues)
+        )
+        self.is_coaching_speaking = True
+        try:
+            demo_task = CoachingDemoTask(
+                cues=demo_cues,
+                lines_task=lines_task,
+                send_to_pipeline_fn=self._send_to_pipeline,
+            )
+            runner = start_inline_agent_task(self._session, demo_task)
+            await runner
+            logger.info("[COACHING SERVICE] Choreographed demo complete")
+            return True
+        except Exception:
+            logger.exception("[COACHING SERVICE] Demo task failed")
+            lines_task.cancel()
+            return False
+        finally:
+            self.is_coaching_speaking = False
+
+    def _send_to_pipeline(self, message: dict) -> None:
+        if not self._coaching_ipc:
+            return
+        try:
+            self._coaching_ipc.send_message(message)
+        except Exception as e:
+            logger.error(f"[COACHING SERVICE] Failed to send {message.get('type')}: {e}")
 
     def _build_assessment_correction_prompt(
         self, diagnosis: dict, scoring: dict, round_num: int,

@@ -423,6 +423,13 @@ class NowvaApp:
                         print("[COACHING IPC] Forwarded workout_complete to pose process")
                     except Exception as e:
                         print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
+            elif msg_type in ("demo_start", "demo_cue", "demo_end"):
+                if self.ipc_server and self.ipc_server.client_socket:
+                    try:
+                        self.ipc_server.send_message(message)
+                        print(f"[COACHING IPC] Forwarded {msg_type} to pose process")
+                    except Exception as e:
+                        print(f"[COACHING IPC] Failed to forward {msg_type}: {e}")
 
         self.coaching_ipc = IPCServer(socket_path="/tmp/nowva_coaching.sock")
         self.coaching_ipc.bind(message_callback=_coaching_message_handler)
@@ -576,7 +583,7 @@ class NowvaApp:
                                 self._profiler.record("ipc", msg_type, direction="pose_to_main")
 
                             # Forward coaching-relevant messages to voice agent
-                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep'):
+                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep', 'demo_abort'):
                                 if self.coaching_ipc and self.coaching_ipc.client_socket:
                                     try:
                                         self.coaching_ipc.send_message(message)

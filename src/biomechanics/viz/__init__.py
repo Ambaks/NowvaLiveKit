@@ -14,6 +14,7 @@ from biomechanics.viz.overlay_2d import (
 
 from biomechanics.viz.dashboard import DebugDashboard
 from biomechanics.viz.window_anim import precreate_window, animate_window_fullscreen
+from biomechanics.viz.demo_renderer import DemoChoreographer
 
 __all__ = [
     "draw_skeleton",
@@ -24,4 +25,5 @@ __all__ = [
     "DebugDashboard",
     "precreate_window",
     "animate_window_fullscreen",
+    "DemoChoreographer",
 ]

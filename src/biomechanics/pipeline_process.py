@@ -37,10 +37,11 @@ from biomechanics.coaching.session_tracker import SessionTracker
 from biomechanics.config import load_pipeline_config
 from biomechanics.utils.types import CocoKeypoints as CK
 from biomechanics.diagnosis.bridge import build_anthro_dict, build_rom_dict
+from biomechanics.diagnosis.demo_builder import build_demo_data
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
-from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
+from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen, DemoChoreographer
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
 from biomechanics.viz.html_dashboard import generate_session_dashboard
@@ -48,6 +49,9 @@ from biomechanics.viz.html_dashboard import generate_session_dashboard
 
 # Ensure gate diagnostics are visible on stderr
 logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
+
+DEMO_START_TIMEOUT_S = 10.0
+DEMO_INACTIVITY_TIMEOUT_S = 45.0
 
 
 def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir: str):
@@ -183,6 +187,29 @@ def _serialize_diagnosis(diagnosis_result, score_summary) -> tuple[dict, dict]:
         "trend_slope": score_summary.trend_slope,
     }
     return diagnosis_dict, scoring_dict
+
+
+def _poll_incoming_message(ipc_client: IPCClient):
+    """Non-blocking check for a message from main.py."""
+    try:
+        sock = ipc_client.client_socket
+        if sock is None:
+            return None
+        ready, _, _ = select.select([sock], [], [], 0)
+        if ready:
+            return _recv_framed(sock)
+    except Exception:
+        pass
+    return None
+
+
+def _skeleton_pixels(skeleton_2d) -> np.ndarray | None:
+    keypoints = skeleton_2d.keypoints
+    if len(keypoints) < 17:
+        return None
+    if any(kp.confidence <= 0 for kp in keypoints[:17]):
+        return None
+    return np.array([[kp.x, kp.y] for kp in keypoints[:17]], dtype=np.float32)
 
 
 def _wait_for_start_capture(ipc_client: IPCClient) -> bool:
@@ -367,16 +394,73 @@ def run_biomechanics_pipeline(
         else:
             print("  [ASSESSMENT] WARNING: Bone constraints not calibrated — diagnosis unavailable")
 
+        def _run_demo_phase(demo_data) -> bool:
+            """Drive the choreographed demo from agent messages. Returns False if user quit."""
+            choreographer = DemoChoreographer()
+            live_skeleton_px = None
+            phase_start = time.time()
+            last_message_time = phase_start
+            finishing = False
+
+            while True:
+                result = pipeline.process_frame()
+
+                incoming = _poll_incoming_message(ipc_client)
+                if incoming is not None:
+                    last_message_time = time.time()
+                    msg_type = incoming.get("type")
+                    if msg_type == "demo_start":
+                        choreographer.start(demo_data, live_skeleton_px)
+                    elif msg_type == "demo_cue":
+                        choreographer.advance_cue(int(incoming.get("cue_index", 0)))
+                    elif msg_type == "demo_end":
+                        choreographer.finish()
+                        finishing = True
+
+                now = time.time()
+                if not choreographer.is_active:
+                    if finishing:
+                        return True
+                    if now - phase_start > DEMO_START_TIMEOUT_S:
+                        print("  [DEMO] No demo_start received — skipping demo")
+                        return True
+                elif not finishing and now - last_message_time > DEMO_INACTIVITY_TIMEOUT_S:
+                    print("  [DEMO] Agent went silent mid-demo — ending demo")
+                    choreographer.finish()
+                    finishing = True
+
+                frame = pipeline.last_frame
+                if frame is not None:
+                    if choreographer.is_active:
+                        display = choreographer.render(frame)
+                    else:
+                        if result.skeleton_2d is not None:
+                            live_skeleton_px = _skeleton_pixels(result.skeleton_2d)
+                        display = frame.copy()
+                        if result.skeleton_2d is not None:
+                            draw_skeleton(display, result.skeleton_2d)
+                    fps_counter.update()
+                    cv2.imshow(window_name, display)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        print("\nDemo stopped early by user")
+                        return False
+
+                total_ms = sum(result.latency_ms.values())
+                target_ms = 1000.0 / config.target_fps
+                if total_ms < target_ms:
+                    time.sleep((target_ms - total_ms) / 1000.0)
+
         # Assessment loop: collect reps, diagnose, repeat until no immediate causes
         assessment_passed = False
         assessment_round = 0
+        demo_played = False
 
         try:
             while not assessment_passed:
                 assessment_round += 1
                 assessment_reps_done = 0
                 pipeline.rep_counter.reset()
-                session_tracker._rep_kinematic_buffer = []
+                session_tracker.reset_rep_buffers()
                 session_tracker.current_set_reps = []
                 session_tracker.set_active = False
 
@@ -474,12 +558,31 @@ def run_biomechanics_pipeline(
                     print(f"  [ASSESSMENT] Session causes: {len(diagnosis_result.session_causes)}")
                     print(f"  [ASSESSMENT] Form score: {round(score_summary.mean_score * 100)}/100")
 
+                    # Build demo data before announcing the result so the
+                    # choreography is ready the moment the agent reacts.
+                    pending_demo = None
+                    if has_immediate and not demo_played:
+                        observed_kpts = session_tracker.bottom_frame_for_rep(
+                            score_summary.worst_rep_number
+                        )
+                        if observed_kpts is not None:
+                            pending_demo = build_demo_data(
+                                observed_kpts, diagnosis_result, anthro=anthro, rom=rom,
+                            )
+                    if pending_demo is not None:
+                        print(f"  [DEMO] Pose stack ready: {len(pending_demo.cues)} cue(s)")
+
                     ipc_client.send_message({
                         "type": "assessment_result",
                         "round": assessment_round,
                         "passed": not has_immediate,
                         "diagnosis": diagnosis_dict,
                         "scoring": scoring_dict,
+                        "demo": {
+                            "available": pending_demo is not None,
+                            "cues": [cue.model_dump() for cue in pending_demo.cues]
+                            if pending_demo is not None else [],
+                        },
                     })
 
                     if not has_immediate:
@@ -487,6 +590,13 @@ def run_biomechanics_pipeline(
                         print(f"\n  [ASSESSMENT] PASSED after {assessment_round} round(s)")
                     else:
                         print(f"  [ASSESSMENT] Issues found — user needs to correct and retry")
+                        if pending_demo is not None:
+                            demo_played = True
+                            if not _run_demo_phase(pending_demo):
+                                cv2.destroyAllWindows()
+                                pipeline.release()
+                                ipc_client.disconnect()
+                                return
                         pipeline.reset_readiness_gate()
                         # Wait for readiness gate again before next round
                         while not pipeline.is_ready:
@@ -532,7 +642,7 @@ def run_biomechanics_pipeline(
         pipeline.rep_counter.reset()
         if pipeline._bilstm is not None:
             pipeline._bilstm.reset()
-        session_tracker._rep_kinematic_buffer = []
+        session_tracker.reset_rep_buffers()
         session_tracker.current_set_reps = []
         session_tracker.set_active = False
         session_tracker.current_set_number = 0
@@ -685,16 +795,7 @@ def run_biomechanics_pipeline(
 
     def _check_incoming_message():
         """Non-blocking check for messages from main.py."""
-        try:
-            sock = ipc_client.client_socket
-            if sock is None:
-                return None
-            ready, _, _ = select.select([sock], [], [], 0)
-            if ready:
-                return _recv_framed(sock)
-        except Exception:
-            pass
-        return None
+        return _poll_incoming_message(ipc_client)
 
     def _draw_rest_timer(frame, remaining_seconds):
         """Draw a centered rest countdown timer on the video frame."""
