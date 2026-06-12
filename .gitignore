@@ -19,6 +19,7 @@ pip-delete-this-directory.txt
 # Node.js / Frontend
 node_modules/
 package-lock.json
+/package.json
 dist/
 dist-ssr/
 *.local
@@ -52,6 +53,7 @@ migrations/versions/*.pyc
 *.jks
 credentials/
 secrets/
+ssl/
 
 # Environment variables
 .env
@@ -84,9 +86,9 @@ logs/
 # Session logs and program generation logs
 session_logs/
 program_generation_logs/
-src/session_logs/*.csv
-src/session_logs/*.txt
-src/program_generation_logs/*.txt
+src/session_logs/
+src/agent/session_logs/
+src/program_generation_logs/
 
 # Temporary files
 *.tmp
@@ -145,12 +147,14 @@ downloads/
 /output/
 
 # Generated program files
-src/programs/*.md
-programs/*.md
-programs/*.pdf
+src/programs/
+programs/
 
 # Build archives
 *.tar.gz
+
+# Redundant lock files
+requirements_filtered.lock
 
 # Redis dumps
 dump.rdb
