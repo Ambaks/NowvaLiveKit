@@ -5,7 +5,7 @@ Fetches a generated workout program from the database and displays it in a forma
 """
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from db.database import SessionLocal
 from db.models import UserGeneratedProgram, Workout, WorkoutExercise, Exercise, Set

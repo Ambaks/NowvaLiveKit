@@ -7,7 +7,7 @@ Open them in a browser to preview the rendered program output.
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import logging
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
