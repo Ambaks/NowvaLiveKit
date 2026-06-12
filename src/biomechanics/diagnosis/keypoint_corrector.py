@@ -430,8 +430,9 @@ class KeypointCorrector:
         self._reground(kpts)
 
         if "depth_cue_unfamiliar" in tier1_causes:
-            self._lower_to_depth(
+            self._achieve_depth_within_dorsi_budget(
                 kpts, tier1_causes["depth_cue_unfamiliar"],
+                max_dorsi_deg,
                 original_thigh_l, original_shin_l,
                 original_thigh_r, original_shin_r,
             )
@@ -603,6 +604,129 @@ class KeypointCorrector:
             kpts[HIP_R], kpts[ANKLE_R],
             thigh_length_r, shin_length_r, kpts[KNEE_R],
         )
+
+    def _achieve_depth_within_dorsi_budget(
+        self,
+        kpts: np.ndarray,
+        cause,
+        max_dorsi_deg: float | None,
+        thigh_l: float,
+        shin_l: float,
+        thigh_r: float,
+        shin_r: float,
+    ) -> None:
+        """Lower to parallel, widening stance and toe-out if dorsi ROM is insufficient.
+
+        When lowering to parallel would push shin dorsiflexion beyond the
+        athlete's calibrated ROM, iteratively widens stance and increases
+        toe-out (via delta-FK) until parallel is achievable within the
+        dorsiflexion budget.
+        """
+        delta = cause.parameter_delta or {}
+        if delta.get("depth_target") != "parallel":
+            return
+
+        hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
+        knee_mid_y = (kpts[KNEE_L][1] + kpts[KNEE_R][1]) / 2.0
+        if hip_mid_y <= knee_mid_y:
+            return
+
+        if max_dorsi_deg is None:
+            self._lower_to_depth(kpts, cause, thigh_l, shin_l, thigh_r, shin_r)
+            return
+
+        max_dorsi_rad = math.radians(max_dorsi_deg)
+        captured = kpts.copy()
+
+        span_dx = captured[ANKLE_R][0] - captured[ANKLE_L][0]
+        span_dz = captured[ANKLE_R][2] - captured[ANKLE_L][2]
+        baseline_span = math.sqrt(span_dx**2 + span_dz**2)
+        if baseline_span < 1e-6:
+            self._lower_to_depth(kpts, cause, thigh_l, shin_l, thigh_r, shin_r)
+            return
+
+        stance_step = 0.015
+        toe_out_step_rad = math.radians(1.5)
+        max_stance_increase = 0.12
+        max_toe_out_increase_rad = math.radians(15.0)
+        dorsi_tol_rad = math.radians(0.5)
+        depth_tol_m = 0.003
+
+        stance_extra = 0.0
+        toe_out_extra = 0.0
+        best = None
+
+        for _ in range(20):
+            trial = captured.copy()
+
+            if stance_extra > 1e-6 or toe_out_extra > 1e-6:
+                target_span = baseline_span + 2.0 * stance_extra
+                base = bottom_up_build(
+                    captured, baseline_span, baseline_span, 0.0, 0.0, 0.0,
+                )
+                mod = bottom_up_build(
+                    captured, target_span, baseline_span,
+                    toe_out_extra, 0.0, 0.0,
+                )
+                if base is None or mod is None:
+                    break
+                for idx in range(HIP_L, FOOT_R + 1):
+                    trial[idx] = captured[idx] + (mod[idx] - base[idx])
+                old_hip_mid = (captured[HIP_L] + captured[HIP_R]) / 2.0
+                new_hip_mid = (trial[HIP_L] + trial[HIP_R]) / 2.0
+                for idx in UPPER_BODY_INDICES:
+                    trial[idx] += new_hip_mid - old_hip_mid
+                trial[KNEE_L] = solve_knee(
+                    trial[HIP_L], trial[ANKLE_L], thigh_l, shin_l, trial[KNEE_L],
+                )
+                trial[KNEE_R] = solve_knee(
+                    trial[HIP_R], trial[ANKLE_R], thigh_r, shin_r, trial[KNEE_R],
+                )
+
+            min_ank_y = min(trial[ANKLE_L][1], trial[ANKLE_R][1])
+            if min_ank_y < 0:
+                for idx in range(HIP_L, FOOT_R + 1):
+                    trial[idx][1] -= min_ank_y
+
+            for _ in range(8):
+                hy = (trial[HIP_L][1] + trial[HIP_R][1]) / 2.0
+                ky = (trial[KNEE_L][1] + trial[KNEE_R][1]) / 2.0
+                if hy <= ky + depth_tol_m:
+                    break
+                drop = hy - ky
+                for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
+                    trial[idx][1] -= drop
+                trial[KNEE_L] = solve_knee(
+                    trial[HIP_L], trial[ANKLE_L], thigh_l, shin_l, trial[KNEE_L],
+                )
+                trial[KNEE_R] = solve_knee(
+                    trial[HIP_R], trial[ANKLE_R], thigh_r, shin_r, trial[KNEE_R],
+                )
+
+            worst_dorsi = 0.0
+            for ki, ai in [(KNEE_L, ANKLE_L), (KNEE_R, ANKLE_R)]:
+                shin_vec = trial[ai] - trial[ki]
+                vert = -shin_vec[1]
+                horiz = math.sqrt(shin_vec[0] ** 2 + shin_vec[2] ** 2)
+                worst_dorsi = max(
+                    worst_dorsi, math.atan2(horiz, max(vert, 1e-9)),
+                )
+
+            best = trial
+
+            if worst_dorsi <= max_dorsi_rad + dorsi_tol_rad:
+                break
+
+            stance_extra = min(stance_extra + stance_step, max_stance_increase)
+            toe_out_extra = min(
+                toe_out_extra + toe_out_step_rad, max_toe_out_increase_rad,
+            )
+            if (stance_extra >= max_stance_increase
+                    and toe_out_extra >= max_toe_out_increase_rad):
+                break
+
+        if best is not None:
+            kpts[:] = best
 
     @staticmethod
     def _compute_dorsiflexion(knee: np.ndarray, ankle: np.ndarray) -> float:

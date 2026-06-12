@@ -12,24 +12,23 @@ This runs BEFORE the IK solver, operating on Skeleton3D objects.
 import numpy as np
 from typing import Optional
 
-from biomechanics.utils.types import Skeleton3D, Point3D
+from biomechanics.utils.types import Skeleton3D
 
 
 class VelocityClamp:
     """
     Clamps per-frame keypoint displacement to a maximum threshold.
 
-    Given a target FPS and a maximum human joint velocity (m/s), computes
-    the maximum displacement per frame. If any keypoint exceeds this,
-    its position is moved only as far as the threshold allows, along
-    the original displacement direction.
+    Uses actual inter-frame dt from skeleton timestamps to compute the
+    displacement limit each frame, so dropped frames or variable FPS
+    don't cause false clamping.
 
     Args:
         max_velocity_m_per_s: Maximum plausible joint velocity in meters/sec.
             Human joints rarely exceed 3 m/s during heavy barbell lifts.
             Default 2.5 m/s provides headroom without passing spikes.
-        target_fps: Expected frame rate. Used to compute per-frame threshold.
-            Default 30.
+        target_fps: Fallback frame rate used only when timestamps are
+            unavailable. Default 30.
     """
 
     def __init__(
@@ -37,15 +36,18 @@ class VelocityClamp:
         max_velocity_m_per_s: float = 2.5,
         target_fps: int = 30,
     ):
-        self.max_displacement = max_velocity_m_per_s / target_fps
+        self.max_velocity = max_velocity_m_per_s
+        self._fallback_dt = 1.0 / target_fps
         self._prev_positions: Optional[np.ndarray] = None  # (17, 3)
+        self._prev_timestamp: Optional[float] = None
 
     def clamp(self, skeleton: Skeleton3D) -> Skeleton3D:
         """
         Apply velocity clamping to a skeleton.
 
         First frame: stores positions, returns skeleton unchanged.
-        Subsequent frames: clamps each keypoint displacement.
+        Subsequent frames: clamps each keypoint displacement using
+        actual inter-frame dt so variable FPS doesn't cause false clamping.
 
         Args:
             skeleton: Current frame's Skeleton3D
@@ -59,13 +61,23 @@ class VelocityClamp:
 
         if self._prev_positions is None:
             self._prev_positions = current.copy()
+            self._prev_timestamp = skeleton.timestamp
             return skeleton
+
+        # Use actual dt when timestamps are available
+        dt = self._fallback_dt
+        if skeleton.timestamp is not None and self._prev_timestamp is not None:
+            actual_dt = skeleton.timestamp - self._prev_timestamp
+            if actual_dt > 1e-6:
+                dt = actual_dt
+
+        max_displacement = self.max_velocity * dt
 
         displacement = current - self._prev_positions  # (17, 3)
         distances = np.linalg.norm(displacement, axis=1)  # (17,)
 
         # Find keypoints that exceed threshold
-        exceeded = distances > self.max_displacement
+        exceeded = distances > max_displacement
 
         if np.any(exceeded):
             # Compute unit direction vectors for exceeded keypoints
@@ -77,12 +89,13 @@ class VelocityClamp:
             clamped = self._prev_positions.copy()
             clamped[exceeded] = (
                 self._prev_positions[exceeded]
-                + unit_dirs[exceeded] * self.max_displacement
+                + unit_dirs[exceeded] * max_displacement
             )
             # Keep non-exceeded keypoints at their detected position
             clamped[~exceeded] = current[~exceeded]
 
             self._prev_positions = clamped.copy()
+            self._prev_timestamp = skeleton.timestamp
             return Skeleton3D.from_numpy(
                 clamped,
                 confidences=confidences,
@@ -92,8 +105,10 @@ class VelocityClamp:
 
         # No clamping needed
         self._prev_positions = current.copy()
+        self._prev_timestamp = skeleton.timestamp
         return skeleton
 
     def reset(self):
         """Reset state (e.g., new session or exercise)."""
         self._prev_positions = None
+        self._prev_timestamp = None

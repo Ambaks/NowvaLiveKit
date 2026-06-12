@@ -38,6 +38,7 @@ from biomechanics.utils.derivatives import DerivativeTracker
 from biomechanics.utils.confidence_blend import ConfidenceBlender
 from biomechanics.utils.velocity_clamp import VelocityClamp
 from biomechanics.utils.bone_constraints import BoneLengthConstraints
+from biomechanics.utils.ground_clamp import GroundClamp
 from biomechanics.utils.position_filter import KeypointPositionSmoother
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
 from biomechanics.utils.standing_gate import StandingPoseGate
@@ -130,6 +131,7 @@ class BiomechanicsPipeline:
         self._confidence_blender = None
         self._velocity_clamp = None
         self._bone_constraints = None
+        self._ground_clamp = None
         self._position_smoother = None
         self._predictive_estimator = None
         self._proportions_applied = False
@@ -146,6 +148,12 @@ class BiomechanicsPipeline:
             self._bone_constraints = BoneLengthConstraints(
                 calibration_frames=self.config.bone_constraints.calibration_frames,
                 tolerance=self.config.bone_constraints.tolerance,
+                standing_gate=self._standing_gate,
+            )
+            self._ground_clamp = GroundClamp(
+                calibration_frames=self.config.ground_clamp.calibration_frames,
+                stance_width_tolerance_m=self.config.ground_clamp.stance_width_tolerance_m,
+                ankle_y_tolerance_m=self.config.ground_clamp.ankle_y_tolerance_m,
                 standing_gate=self._standing_gate,
             )
             self._position_smoother = KeypointPositionSmoother(
@@ -268,6 +276,8 @@ class BiomechanicsPipeline:
 
         Call this when a set ends or a rest period starts so the next
         set requires the user to be fully detected for 30 frames first.
+        Also resets pre-IK filter state so set 2+ doesn't blend against
+        stale positions from the previous set.
         """
         self._readiness_gate.reset()
         self._bilstm_max_knee_flex = 0.0
@@ -276,6 +286,11 @@ class BiomechanicsPipeline:
         self._bottom_max_knee_flex = 0.0
         self._bottom_kpts = None
         self._bottom_angles = None
+
+        if self._preik_enabled:
+            self._confidence_blender.reset()
+            self._velocity_clamp.reset()
+            self._position_smoother.reset()
 
     def consume_bottom_frame(self) -> tuple[Optional[List[List[float]]], Optional[dict]]:
         """Return and reset the bottom-of-rep keypoints and angles.
@@ -402,6 +417,7 @@ class BiomechanicsPipeline:
             skeleton_3d = self._confidence_blender.blend(skeleton_3d)
             skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+            skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
             skeleton_3d = self._position_smoother.smooth(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0

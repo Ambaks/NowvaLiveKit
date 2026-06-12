@@ -210,6 +210,13 @@ class ConfidenceBlendConfig(BaseModel):
     max_confidence: float = 0.9
 
 
+class GroundClampConfig(BaseModel):
+    """Ground plane clamping configuration."""
+    calibration_frames: int = 30
+    stance_width_tolerance_m: float = 0.02
+    ankle_y_tolerance_m: float = 0.01
+
+
 class PositionFilterConfig(BaseModel):
     """One Euro Filter for 3D keypoint position smoothing."""
     min_cutoff: float = 0.8
@@ -267,6 +274,7 @@ class BiomechanicsConfig(BaseModel):
     barbell_tracking: BarbellTrackingConfig = Field(default_factory=BarbellTrackingConfig)
     velocity_clamp: VelocityClampConfig = Field(default_factory=VelocityClampConfig)
     bone_constraints: BoneConstraintsConfig = Field(default_factory=BoneConstraintsConfig)
+    ground_clamp: GroundClampConfig = Field(default_factory=GroundClampConfig)
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
     position_filter: PositionFilterConfig = Field(default_factory=PositionFilterConfig)
     predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
@@ -387,6 +395,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "bone_constraints" in raw_config:
         config_dict["bone_constraints"] = BoneConstraintsConfig(**raw_config["bone_constraints"])
+
+    if "ground_clamp" in raw_config:
+        config_dict["ground_clamp"] = GroundClampConfig(**raw_config["ground_clamp"])
 
     if "confidence_blend" in raw_config:
         config_dict["confidence_blend"] = ConfidenceBlendConfig(**raw_config["confidence_blend"])
