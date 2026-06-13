@@ -259,8 +259,8 @@ class TestRuleEngineProportionScaling:
         heel_rule = engine.get_rule(
             __import__("biomechanics.faults.fault_types", fromlist=["FaultType"]).FaultType.HEEL_RISE
         )
-        # Default threshold = 3.0 * 5 = 15.0, scaled by 1.2 = 18.0
-        assert heel_rule.threshold_degrees == pytest.approx(15.0 * 1.2, abs=0.1)
+        # Default threshold = 20.0 deg, scaled by 1.2 = 24.0
+        assert heel_rule.threshold_degrees == pytest.approx(20.0 * 1.2, abs=0.1)
 
     def test_forward_lean_thresholds_scaled(self):
         engine = _make_engine_with_squat_rules()

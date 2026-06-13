@@ -44,7 +44,7 @@ DEFAULT_THRESHOLDS: Dict[FaultType, Dict[str, float]] = {
         "severe": 15.0,        # > 15° difference
     },
     FaultType.HEEL_RISE: {
-        "threshold_cm": 2.0,   # Vertical displacement threshold
+        "threshold_deg": 20.0,  # Dorsiflexion decrease from baseline (degrees)
     },
     FaultType.FORWARD_LEAN: {
         "mild": 35.0,          # 35-45° trunk flexion
@@ -126,8 +126,10 @@ class FaultRule(ABC):
     # Per-frame context set by RuleEngine before each evaluate() call.
     # Rules that don't need it simply never read it.
     _bar_detection = None  # type: Optional["BarbellDetection"]
+    _derivatives = None    # type: Optional["AngleDerivatives"]
+    _phase = None          # type: Optional[str]
 
-    def set_frame_context(self, bar_detection=None) -> None:
+    def set_frame_context(self, bar_detection=None, derivatives=None, phase=None) -> None:
         """Update per-frame auxiliary context for this rule.
 
         Called by the engine once per frame, before ``evaluate()``. Subclasses
@@ -135,6 +137,8 @@ class FaultRule(ABC):
         stash references as attributes.
         """
         self._bar_detection = bar_detection
+        self._derivatives = derivatives
+        self._phase = phase
 
     @property
     @abstractmethod

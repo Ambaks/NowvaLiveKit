@@ -675,7 +675,7 @@ def run_biomechanics_pipeline(
                     cal_set_collector.record_frame(result, result.skeleton_3d)
 
                     if result.joint_angles is not None:
-                        tracker.record_frame(result.joint_angles)
+                        tracker.record_frame(result.joint_angles, in_rep=pipeline.rep_counter.in_rep)
 
                     # Count reps but do NOT report faults during calibration
                     if result.rep_data is not None:

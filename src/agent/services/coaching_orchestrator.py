@@ -152,7 +152,6 @@ class CoachingOrchestrator:
         # Diagnosis data — populated by set_diagnosis_data(), consumed by recaps
         self._pending_diagnosis: Optional[Dict[str, Any]] = None
         self._pending_scoring: Optional[Dict[str, Any]] = None
-        self._diagnosis_event: asyncio.Event = asyncio.Event()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -211,7 +210,6 @@ class CoachingOrchestrator:
         """Store diagnosis results from the pipeline and signal any waiting recap."""
         self._pending_diagnosis = diagnosis
         self._pending_scoring = scoring
-        self._diagnosis_event.set()
         logger.info(
             f"[ORCHESTRATOR] Diagnosis data received: "
             f"confidence={diagnosis.get('confidence', 0):.2f} "
@@ -224,7 +222,6 @@ class CoachingOrchestrator:
         scoring = self._pending_scoring
         self._pending_diagnosis = None
         self._pending_scoring = None
-        self._diagnosis_event = asyncio.Event()
         return diagnosis, scoring
 
     # ------------------------------------------------------------------

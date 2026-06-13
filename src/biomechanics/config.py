@@ -70,8 +70,8 @@ class BilateralAsymmetryConfig(BaseModel):
 
 
 class HeelRiseConfig(BaseModel):
-    """Heel rise fault thresholds."""
-    threshold_cm: float = 3.0
+    """Heel rise fault thresholds (degrees of dorsiflexion decrease from baseline)."""
+    threshold_deg: float = 20.0
 
 
 class ForwardLeanConfig(BaseModel):

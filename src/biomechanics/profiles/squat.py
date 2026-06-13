@@ -73,7 +73,7 @@ class SquatProfile(ExerciseProfile):
                 severe_cm=bt.tilt_asym_severe_cm,
             ),
             HeelRiseRule(
-                threshold_degrees=fc.heel_rise.threshold_cm * 10,
+                threshold_degrees=fc.heel_rise.threshold_deg,
             ),
             ForwardLeanRule(
                 mild_threshold=fc.forward_lean.mild,

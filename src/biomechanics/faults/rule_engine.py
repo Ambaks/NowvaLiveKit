@@ -10,6 +10,7 @@ from collections import deque
 from typing import List, Optional, Dict
 
 from biomechanics.utils.types import JointAngles, FaultEvent, BarbellDetection
+from biomechanics.utils.derivatives import AngleDerivatives
 from biomechanics.faults.fault_types import FaultRule, FaultType
 from biomechanics.utils.bone_constraints import BodyProportions
 from biomechanics.config import BiomechanicsConfig, get_config
@@ -114,6 +115,8 @@ class RuleEngine:
         in_rep: bool = False,
         rep_number: int = 0,
         bar_detection: Optional[BarbellDetection] = None,
+        derivatives: Optional[AngleDerivatives] = None,
+        phase: Optional[str] = None,
     ) -> List[FaultEvent]:
         """
         Evaluate all rules for the current frame.
@@ -125,6 +128,8 @@ class RuleEngine:
             bar_detection: Optional real barbell detection for this frame.
                 Rules that care (BarPathRule, BarTiltAsymmetryRule) pick it up
                 via ``set_frame_context``; others ignore it.
+            derivatives: Optional velocity/acceleration data for tempo rules.
+            phase: Current rep phase (descending, bottom, ascending, idle).
 
         Returns:
             List of detected faults (deduplicated)
@@ -135,7 +140,7 @@ class RuleEngine:
         faults: List[FaultEvent] = []
 
         for rule in self.rules:
-            rule.set_frame_context(bar_detection=bar_detection)
+            rule.set_frame_context(bar_detection=bar_detection, derivatives=derivatives, phase=phase)
             fault = rule.evaluate(
                 angles=angles,
                 history=self.history,

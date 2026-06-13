@@ -29,6 +29,11 @@ _AXIS_X = np.array([1.0, 0.0, 0.0])        # forward / sagittal-plane normal
 _VERTICAL_UP = np.array([0.0, 1.0, 0.0])     # Y-up reference
 _VERTICAL_DOWN = np.array([0.0, -1.0, 0.0])  # Y-down reference (MediaPipe "up")
 
+# Minimum hip->knee floor-projection length (meters) for a stable valgus angle.
+# Near the top of a rep the knee sits over the hip, collapsing the femur's
+# floor projection to a point; its direction is then pure noise, so skip it.
+_VALGUS_MIN_FEMUR_M = 0.05
+
 
 class AnalyticalIKSolver(IKSolver):
     """
@@ -192,17 +197,15 @@ class AnalyticalIKSolver(IKSolver):
         # Thigh vector (hip to knee)
         thigh_vec = knee - hip
 
-        # In standing position, thigh points downward (negative Y in Y-up coords)
-        # Measure how far the thigh deviates from the downward direction
-        # 0 degrees when standing upright, increases with flexion
+        # Sagittal-plane angle between trunk and thigh.
+        # 0° = standing (trunk and thigh aligned), increases with flexion.
+        trunk_norm = np.linalg.norm(trunk_vec)
+        thigh_norm = np.linalg.norm(thigh_vec)
+        if trunk_norm < 1e-6 or thigh_norm < 1e-6:
+            return 0.0
 
-        # Downward reference (Y-up coordinate system)
-        vertical = _VERTICAL_DOWN
-
-        # Thigh angle from vertical (0 when standing)
-        thigh_from_vertical = angle_between_vectors(thigh_vec, vertical)
-
-        return thigh_from_vertical
+        raw_angle = angle_between_vectors(trunk_vec, thigh_vec)
+        return 180.0 - raw_angle
 
     def _compute_hip_adduction(self, kpts: dict, side: str) -> float:
         """
@@ -256,50 +259,49 @@ class AnalyticalIKSolver(IKSolver):
 
     def _compute_knee_valgus_from_toe(self, kpts: dict, side: str) -> tuple:
         """
-        Compute knee valgus as the ground-plane deviation of the knee
-        from the hip-to-big-toe reference line.
+        Compute knee valgus on the floor (XZ) plane as the angle between the
+        femur and foot directions, both projected to the ground.
 
-        Projects hip, knee, and foot_index onto the XZ ground plane
-        (bird's-eye view, discarding Y/height) so that knee flexion
-        depth does not conflate with medial/lateral collapse.
+        Femur direction: hip -> knee (projected to XZ).
+        Foot direction:  ankle -> toe (foot_index), projected to XZ.
+
+        When the knee tracks over the foot the two floor-projected vectors
+        point the same way; valgus rotates the femur medially relative to the
+        foot line. Projecting to XZ keeps squat depth (Y) out of the metric.
 
         Returns:
             (valgus_angle_degrees, foot_confidence)
 
-        Positive = valgus (knee medial to the hip-toe line)
-        Negative = varus (knee lateral to the hip-toe line)
+        Positive = valgus (knee medial to the foot line)
+        Negative = varus (knee lateral to the foot line)
         """
         hip = self._get_point(kpts, f"{side}_hip")
         knee = self._get_point(kpts, f"{side}_knee")
+        ankle = self._get_point(kpts, f"{side}_ankle")
         foot = self._get_point(kpts, f"{side}_foot_index")
 
         _, foot_conf = kpts.get(f"{side}_foot_index", (np.zeros(3), 0.0))
 
-        if hip is None or knee is None or foot is None:
+        if hip is None or knee is None or ankle is None or foot is None:
             return 0.0, foot_conf
 
-        # Project onto ground plane (XZ, removing Y/height) for bird's-eye view
-        hip_ground = np.array([hip[0], hip[2]])
-        knee_ground = np.array([knee[0], knee[2]])
-        foot_ground = np.array([foot[0], foot[2]])
+        # Project onto the floor plane (XZ, discarding Y/height)
+        femur_vec = np.array([knee[0] - hip[0], knee[2] - hip[2]])
+        foot_vec = np.array([foot[0] - ankle[0], foot[2] - ankle[2]])
 
-        # Reference line: hip to foot_index
-        ref_vec = foot_ground - hip_ground
-        ref_len = np.linalg.norm(ref_vec)
-        if ref_len < 1e-6:
+        femur_len = np.linalg.norm(femur_vec)
+        foot_len = np.linalg.norm(foot_vec)
+        if femur_len < _VALGUS_MIN_FEMUR_M or foot_len < 1e-6:
             return 0.0, foot_conf
-
-        # Knee vector: hip to knee
-        knee_vec = knee_ground - hip_ground
 
         # Angle magnitude via 3D helper (pad to 3D for angle_between_vectors)
         angle = angle_between_vectors(
-            np.array([ref_vec[0], ref_vec[1], 0.0]),
-            np.array([knee_vec[0], knee_vec[1], 0.0]),
+            np.array([foot_vec[0], foot_vec[1], 0.0]),
+            np.array([femur_vec[0], femur_vec[1], 0.0]),
         )
 
-        # Sign via 2D cross product in XZ ground plane
-        cross_2d = ref_vec[0] * knee_vec[1] - ref_vec[1] * knee_vec[0]
+        # Sign via 2D cross product in the XZ floor plane (foot line -> femur)
+        cross_2d = foot_vec[0] * femur_vec[1] - foot_vec[1] * femur_vec[0]
 
         if side == "left":
             # Left leg: knee medial (toward center/right) → cross > 0 = valgus

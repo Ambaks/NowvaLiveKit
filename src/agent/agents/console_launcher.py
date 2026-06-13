@@ -166,8 +166,7 @@ async def run_console_voice_onboarding(
                     onboarding_complete = True
                     print("[WRAPPER] Onboarding data captured...")
                     print("[WRAPPER] Agent will continue running in main menu mode")
-                    # Wait for welcome message to finish
-                    time.sleep(11)
+                    time.sleep(3)
                     break
 
         except KeyboardInterrupt:

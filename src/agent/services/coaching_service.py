@@ -603,50 +603,45 @@ class CoachingService:
         self._coaching_orchestrator.reset_set(target_reps=target_reps, total_sets=total_sets)
         self._coaching_orchestrator.start()
 
+    def _get_workout_session(self):
+        """Deserialize WorkoutSession from state. Single entry point to avoid repeated parsing."""
+        session_data = self._state.get("workout.current_session")
+        if not session_data:
+            return None
+        from agent.core.workout_session import WorkoutSession
+        try:
+            return WorkoutSession.from_dict(session_data)
+        except Exception:
+            return None
+
     def _get_current_target_reps(self) -> Optional[int]:
         """Get target reps for the current set from WorkoutSession."""
-        session_data = self._state.get("workout.current_session")
-        if session_data:
-            from agent.core.workout_session import WorkoutSession
-            try:
-                session = WorkoutSession.from_dict(session_data)
-                current_set = session.get_current_set()
-                if current_set:
-                    return current_set.target_reps
-            except Exception:
-                pass
+        session = self._get_workout_session()
+        if session:
+            current_set = session.get_current_set()
+            if current_set:
+                return current_set.target_reps
         return None
 
     def _get_total_sets(self) -> Optional[int]:
         """Get total number of sets for the current exercise."""
-        session_data = self._state.get("workout.current_session")
-        if session_data:
-            from agent.core.workout_session import WorkoutSession
-            try:
-                session = WorkoutSession.from_dict(session_data)
-                exercise = session.get_current_exercise()
-                if exercise:
-                    return len(exercise.sets)
-            except Exception:
-                pass
+        session = self._get_workout_session()
+        if session:
+            exercise = session.get_current_exercise()
+            if exercise:
+                return len(exercise.sets)
         return None
 
     def _get_set_numbers(self) -> tuple:
         """Get (completed_set, next_set, total_sets) from WorkoutSession."""
-        session_data = self._state.get("workout.current_session")
-        if session_data:
-            from agent.core.workout_session import WorkoutSession
-            try:
-                session = WorkoutSession.from_dict(session_data)
-                exercise = session.get_current_exercise()
-                if exercise:
-                    # current_set_index points to the set about to start
-                    next_set = exercise.current_set_index + 1
-                    completed_set = next_set - 1
-                    total_sets = len(exercise.sets)
-                    return completed_set, next_set, total_sets
-            except Exception:
-                pass
+        session = self._get_workout_session()
+        if session:
+            exercise = session.get_current_exercise()
+            if exercise:
+                next_set = exercise.current_set_index + 1
+                completed_set = next_set - 1
+                total_sets = len(exercise.sets)
+                return completed_set, next_set, total_sets
         return 1, 2, 3  # Safe fallback
 
     # ------------------------------------------------------------------
@@ -655,15 +650,12 @@ class CoachingService:
 
     async def _advance_workout_set(self) -> Optional[int]:
         """Advance WorkoutSession to the next set. Returns new target_reps or None."""
-        from agent.core.workout_session import WorkoutSession
-
-        session_data = self._state.get("workout.current_session")
-        if not session_data:
+        session = self._get_workout_session()
+        if not session:
             logger.warning("[COACHING SERVICE] No active session to advance")
             return None
 
         try:
-            session = WorkoutSession.from_dict(session_data)
 
             completed_set = session.get_current_set()
             rest_seconds = completed_set.rest_seconds if completed_set else 30
@@ -879,9 +871,11 @@ class CoachingService:
 
             if agent and len(agent.chat_ctx.items) > ctx_len_before:
                 added = len(agent.chat_ctx.items) - ctx_len_before
-                ctx_copy = agent.chat_ctx.copy()
-                del ctx_copy.items[ctx_len_before:]
-                await agent.update_chat_ctx(ctx_copy)
+                from livekit.agents import llm
+                new_ctx = llm.ChatContext.empty()
+                for item in list(agent.chat_ctx.items)[:ctx_len_before]:
+                    new_ctx.items.append(item)
+                await agent.update_chat_ctx(new_ctx)
                 logger.debug(
                     f"[COACHING SERVICE] Stripped {added} ephemeral coaching items from context"
                 )

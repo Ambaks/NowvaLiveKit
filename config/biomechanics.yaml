@@ -1,7 +1,7 @@
 pipeline:
   target_fps: 30
   log_level: INFO
-  single_camera_mode: true     # Set false when stereo cameras available
+  single_camera_mode: true     # overridden by NOWVA_MULTI_CAMERA env var
 
 capture:
   source: webcam
@@ -15,7 +15,7 @@ pose:
   # model_path: src/biomechanics/pose/models/rtmpose-m-256x192.onnx  # uncomment for rtmpose
 
 triangulation:
-  enabled: false                # Set true when stereo cameras available
+  enabled: false                # overridden by NOWVA_MULTI_CAMERA env var
 
 kinematics:
   backend: analytical           # analytical | opensim
@@ -29,7 +29,7 @@ faults:
     moderate: 13.0
     severe: 18.0
   heel_rise:
-    threshold_cm: 3.0
+    threshold_deg: 20.0
   forward_lean:
     mild: 145.0
     moderate: 135.0

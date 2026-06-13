@@ -205,8 +205,13 @@ class WorkoutAgent(BaseNovaAgent):
             f"transcript='{getattr(ev, 'transcript', '')[:50]}'"
         )
 
-        if not self._wake_word_active or self._wake_word_listening:
-            logger.info(f"[WAKE WORD] Skipping (active={self._wake_word_active}, listening={self._wake_word_listening})")
+        if not self._wake_word_active:
+            return
+
+        if self._wake_word_listening:
+            if not ev.is_final and self._wake_word_timeout_task:
+                self._wake_word_timeout_task.cancel()
+                self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
             return
 
         if not ev.is_final:
@@ -319,6 +324,9 @@ class WorkoutAgent(BaseNovaAgent):
 
     async def _start_wake_word_system(self):
         """Activate wake word detection for workout mode."""
+        if self._wake_word_active:
+            await self._stop_wake_word_system()
+
         logger.info("[WAKE WORD] === Starting wake word system ===")
         self._wake_word_active = True
         self._wake_word_listening = False
@@ -348,6 +356,11 @@ class WorkoutAgent(BaseNovaAgent):
         except Exception as e:
             logger.error(f"[WAKE WORD] Failed to disable preemptive_generation: {e}")
 
+        try:
+            self.session.options.turn_handling["endpointing"]["min_delay"] = 0.2
+        except Exception:
+            pass
+
         self._set_workout_turn_detection()
         logger.info("[WAKE WORD] === Wake word system ACTIVE ===")
 
@@ -373,6 +386,11 @@ class WorkoutAgent(BaseNovaAgent):
             logger.info("[WAKE WORD] Re-enabled preemptive_generation")
         except Exception as e:
             logger.error(f"[WAKE WORD] Failed to re-enable preemptive_generation: {e}")
+
+        try:
+            self.session.options.turn_handling["endpointing"]["min_delay"] = 0.3
+        except Exception:
+            pass
 
         self._set_conversational_turn_detection()
         logger.info("[WAKE WORD] System deactivated")

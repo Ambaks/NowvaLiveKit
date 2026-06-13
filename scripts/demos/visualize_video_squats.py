@@ -3289,44 +3289,50 @@ def _plot_ground_plane_valgus(per_rep_data: list, output_path) -> None:
 
     HIP_L, HIP_R = 11, 12
     KNEE_L, KNEE_R = 13, 14
+    ANKLE_L, ANKLE_R = 15, 16
     FOOT_L, FOOT_R = 17, 18
 
     side_cfg = [
-        ("Left", HIP_L, KNEE_L, FOOT_L, "#2563eb", "#93c5fd"),
-        ("Right", HIP_R, KNEE_R, FOOT_R, "#dc2626", "#fca5a5"),
+        ("Left", HIP_L, KNEE_L, ANKLE_L, FOOT_L, "#2563eb", "#93c5fd"),
+        ("Right", HIP_R, KNEE_R, ANKLE_R, FOOT_R, "#dc2626", "#fca5a5"),
     ]
 
     for rep_idx, rep in enumerate(per_rep_data):
         ax = axes[0][rep_idx]
         kpts = np.array(rep["observed_kpts"])
 
-        for side_name, hip_i, knee_i, foot_i, dark_color, light_color in side_cfg:
+        for side_name, hip_i, knee_i, ankle_i, foot_i, dark_color, light_color in side_cfg:
             hip_vis = kpts[hip_i]
             knee_vis = kpts[knee_i]
+            ankle_vis = kpts[ankle_i]
             foot_vis = kpts[foot_i]
 
             hip_gp = np.array([-hip_vis[2], hip_vis[0]])
             knee_gp = np.array([-knee_vis[2], knee_vis[0]])
+            ankle_gp = np.array([-ankle_vis[2], ankle_vis[0]])
             foot_gp = np.array([-foot_vis[2], foot_vis[0]])
 
-            ref_vec = foot_gp - hip_gp
+            # Foot line: ankle -> toe.  Femur: hip -> knee.  Valgus is the
+            # angle between these two on the floor plane.
+            ref_vec = foot_gp - ankle_gp
             knee_vec = knee_gp - hip_gp
             ref_mag = np.linalg.norm(ref_vec)
             knee_mag = np.linalg.norm(knee_vec)
 
             ax.scatter(*hip_gp, color=dark_color, s=60, zorder=5)
             ax.scatter(*knee_gp, color=dark_color, s=60, zorder=5, marker="D")
+            ax.scatter(*ankle_gp, color=dark_color, s=60, zorder=5, marker="s")
             ax.scatter(*foot_gp, color=light_color, s=60, zorder=5, marker="^")
 
             if ref_mag > 1e-6:
                 ax.annotate(
-                    "", xy=foot_gp, xytext=hip_gp,
+                    "", xy=foot_gp, xytext=ankle_gp,
                     arrowprops=dict(arrowstyle="-|>", color=dark_color, lw=2),
                 )
-                mid_ref = hip_gp + ref_vec * 0.5
+                mid_ref = ankle_gp + ref_vec * 0.5
                 ax.text(
                     mid_ref[0], mid_ref[1],
-                    f"  ref {ref_mag:.3f}",
+                    f"  foot {ref_mag:.3f}",
                     fontsize=7, color=dark_color, ha="left",
                 )
 

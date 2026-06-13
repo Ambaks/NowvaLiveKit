@@ -109,6 +109,7 @@ class AudioCueService:
         # Eagerly load and pre-read all WAV cues into memory
         self._load_rep_sound()
         self._load_from_disk()
+        self._validate_expected_cues()
 
     def attach_session(self, session) -> None:
         """Bind a live AgentSession for audio playback (after prewarm)."""
@@ -248,6 +249,20 @@ class AudioCueService:
                 except Exception as e:
                     logger.warning(f"[AUDIO CUE] Failed to pre-load {wav_path}: {e}")
         logger.info(f"[AUDIO CUE] Pre-loaded {mem_count} WAV variants into memory")
+
+    def _validate_expected_cues(self) -> None:
+        """Log warnings for expected cue keys missing from disk (will use slow TTS fallback)."""
+        missing = [
+            k for k in CUE_TEXT_MAP
+            if not k.startswith("rep_")
+            and k not in self._memory_cache
+            and k not in self._disk_cache
+        ]
+        if missing:
+            logger.warning(
+                f"[AUDIO CUE] {len(missing)} cues missing from disk — "
+                f"will use TTS fallback (~500ms each): {missing}"
+            )
 
     async def cache_cues(self, cues: Dict[str, str]) -> None:
         """

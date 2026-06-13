@@ -127,9 +127,6 @@ def test_weight_shift(
     asymmetry_cm = abs(features.hip_y_l_at_bottom - features.hip_y_r_at_bottom)
     if asymmetry_cm < 1.5:
         return 0.0
-
-    if asymmetry_cm > 6.0:
-        return 0.2
     return _clamp((asymmetry_cm - 1.5) / 3.5)
 
 

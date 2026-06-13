@@ -470,6 +470,8 @@ class BiomechanicsPipeline:
             in_rep=self._rep_counter.in_rep,
             rep_number=self._rep_counter.rep_count + 1,
             bar_detection=bar_detection,
+            derivatives=derivatives,
+            phase=self._rep_counter.phase,
         )
 
         # Calibration uses ACTUAL angles
@@ -490,10 +492,14 @@ class BiomechanicsPipeline:
 
         # If rep completed, check depth faults and advance calibration
         if rep_data is not None:
-            depth_faults = self._rule_engine.evaluate_rep_complete(
-                rep_data.max_depth_angle, angles, rep_data.rep_number
-            )
-            faults.extend(depth_faults)
+            # Only evaluate depth here when BiLSTM is NOT active.
+            # When BiLSTM is active, depth evaluation happens in the BiLSTM
+            # path below to avoid double-counting.
+            if self._bilstm is None:
+                depth_faults = self._rule_engine.evaluate_rep_complete(
+                    rep_data.max_depth_angle, angles, rep_data.rep_number
+                )
+                faults.extend(depth_faults)
             self._rule_engine.on_rep_complete_calibration(is_clean=rep_data.is_clean)
 
             # When BiLSTM is active the hip counter's rep_data is suppressed

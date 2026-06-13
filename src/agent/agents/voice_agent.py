@@ -3,6 +3,8 @@ Nova Voice Agent - Multi-Agent Entrypoint
 Routes to the appropriate agent based on persisted mode.
 """
 
+import asyncio
+import glob
 import logging
 import os
 import signal
@@ -62,7 +64,6 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info(f"[NOVA] user_id from metadata: {user_id}")
 
     if not user_id:
-        import glob
         logger.info("[NOVA] Searching for state files...")
         state_files = glob.glob('.agent_state_*.json')
         logger.info(f"[NOVA] Found {len(state_files)} state files")
@@ -317,51 +318,35 @@ async def entrypoint(ctx: agents.JobContext):
     @session.on("close")
     def _on_close(ev):
         logger.info(f"[SESSION] Session closed — reason={ev.reason.value}, error={ev.error}")
-        # Log final latency summary
         latency_tracker.log_summary()
-        # Flush session profiler data to disk
         profiler.stop()
 
-        # Stop context viewer
         try:
-            viewer = getattr(userdata, 'context_viewer', None)
-            if viewer:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(viewer.stop(), loop)
-                userdata.context_viewer = None
-        except Exception as e:
-            logger.error(f"[SESSION] Failed to stop context viewer: {e}")
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("[SESSION] No running event loop — skipping async cleanup")
+            if state.get_mode() == "workout":
+                state.save_state()
+            return
 
-        # Stop compaction service
-        try:
-            compaction = userdata.compaction_service
-            if compaction:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(compaction.stop(), loop)
-                userdata.compaction_service = None
-                logger.info("[SESSION] Compaction service stopped on close")
-        except Exception as e:
-            logger.error(f"[SESSION] Failed to stop compaction service: {e}")
-
-        # Graceful cleanup if session closes during workout
-        if state.get_mode() == "workout":
-            logger.info("[SESSION] Session closed during workout — saving state")
-            try:
-                coaching = userdata.coaching_service
-                if coaching:
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.run_coroutine_threadsafe(coaching.stop(), loop)
-                    userdata.coaching_service = None
+        async def _async_cleanup():
+            for name, obj in [
+                ("context_viewer", getattr(userdata, 'context_viewer', None)),
+                ("compaction_service", getattr(userdata, 'compaction_service', None)),
+                ("coaching_service", getattr(userdata, 'coaching_service', None) if state.get_mode() == "workout" else None),
+            ]:
+                if obj:
+                    try:
+                        await obj.stop()
+                        setattr(userdata, name, None)
+                        logger.info(f"[SESSION] {name} stopped on close")
+                    except Exception as e:
+                        logger.error(f"[SESSION] Failed to stop {name}: {e}")
+            if state.get_mode() == "workout":
                 state.save_state()
                 logger.info("[SESSION] Workout state saved on close")
-            except Exception as e:
-                logger.error(f"[SESSION] Failed to save workout state on close: {e}")
+
+        asyncio.run_coroutine_threadsafe(_async_cleanup(), loop)
 
     await ctx.connect()
 

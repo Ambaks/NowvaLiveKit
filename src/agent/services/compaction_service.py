@@ -139,8 +139,8 @@ class CompactionService:
         # Lazy-init OpenAI client
         if self._client is None:
             try:
-                from openai import OpenAI
-                self._client = OpenAI()
+                from openai import AsyncOpenAI
+                self._client = AsyncOpenAI()
             except Exception as e:
                 logger.error(f"[COMPACTION:ERROR] Failed to initialize OpenAI client: {e}")
                 self._running = False
@@ -337,7 +337,7 @@ class CompactionService:
 
         # Call LLM
         try:
-            response = self._client.chat.completions.create(
+            response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=[
                     {"role": "system", "content": system_prompt},

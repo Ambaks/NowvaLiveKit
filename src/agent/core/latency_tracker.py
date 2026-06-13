@@ -49,6 +49,7 @@ class LatencyTracker:
             return
         self._initialized = True
         self._metrics: List[TurnMetric] = []
+        self._metrics_by_turn: Dict[int, TurnMetric] = {}
         self._turn_counter = 0
         self._lock = threading.Lock()
 
@@ -60,6 +61,7 @@ class LatencyTracker:
         """Reset all metrics for a new session."""
         with self._lock:
             self._metrics.clear()
+            self._metrics_by_turn.clear()
             self._turn_counter = 0
 
     def record_ttft(self, ttft_seconds: float, turn_number: Optional[int] = None):
@@ -99,11 +101,12 @@ class LatencyTracker:
 
     def _find_or_create(self, turn_number: int) -> TurnMetric:
         """Find existing metric for turn or create new one. Must hold lock."""
-        for m in self._metrics:
-            if m.turn_number == turn_number:
-                return m
+        metric = self._metrics_by_turn.get(turn_number)
+        if metric is not None:
+            return metric
         metric = TurnMetric(turn_number=turn_number, timestamp=time.time())
         self._metrics.append(metric)
+        self._metrics_by_turn[turn_number] = metric
         return metric
 
     def get_stats(self) -> Dict:
