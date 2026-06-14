@@ -42,7 +42,7 @@ class CollectExerciseInfoTask(AgentTask):
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions="Tell the user you only need a few things from them."
+            instructions="Let the user know you only need a few things from them."
         )
 
     @function_tool

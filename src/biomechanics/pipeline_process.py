@@ -340,7 +340,7 @@ def run_biomechanics_pipeline(
         # ============================================================
         #  PHASE 1: PRE-WORKOUT FORM ASSESSMENT (2-rep loop)
         # ============================================================
-        ASSESSMENT_TARGET_REPS = 2
+        ASSESSMENT_TARGET_REPS = 1
 
         print(f"\n{'='*60}")
         print(f"  ASSESSMENT PHASE ({ASSESSMENT_TARGET_REPS} bodyweight squats)")

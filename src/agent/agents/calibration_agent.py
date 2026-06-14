@@ -63,13 +63,11 @@ class CalibrationAgent(BaseNovaAgent):
 
         exercise_name = self.state.get("workout.exercise_name", "this exercise")
 
-        await self._say(
-            f"Tell the user conversationally that you haven't seen them do {exercise_name} before. "
-            f"Say something like: 'So, I haven't seen you squat before — before we get into "
-            f"your workout, I want to take a quick look at your form. Do 2 bodyweight squats "
-            f"for me — hands out in front, go as deep as you can. I'll check your movement "
-            f"and let you know if anything needs adjusting. Step into frame whenever you're ready.' "
-            f"Keep it natural and encouraging.",
+        await self._say("""
+            Conversationally tell the user that you haven't seen them do {exercise_name} before,
+            and that you want to take a quick look at their form first. They have to do one bodyweight squat,
+            hands out in front, and go as deep as they can. You will correct them until they acheive acceptable, safe form. '
+            """,
             restore=True,
         )
 
