@@ -33,6 +33,14 @@ MODELS = {
         "filename": "rtmpose-l-256x192.onnx",
         "description": "RTMPose-L (large) 256x192 — higher accuracy, slower",
     },
+    "rtmpose-m-halpe26": {
+        "url": (
+            "https://huggingface.co/pocketpose/onnx-models/resolve/main/"
+            "pose_estimation-halpe26/halpe26_td-cc_rtmpose-m_body7_256x192.onnx"
+        ),
+        "filename": "rtmpose-m-halpe26-256x192.onnx",
+        "description": "RTMPose-M (medium) halpe26 256x192 — 26 keypoints with foot landmarks",
+    },
 }
 
 DEFAULT_MODEL = "rtmpose-m"

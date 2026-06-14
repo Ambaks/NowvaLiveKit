@@ -1,11 +1,11 @@
 pipeline:
   target_fps: 30
   log_level: INFO
-  single_camera_mode: true     # overridden by NOWVA_MULTI_CAMERA env var
+  single_camera_mode: false
 
 capture:
   source: webcam
-  device_id: 0
+  device_id: 1
   resolution: [1280, 720]
 
 pose:
@@ -15,7 +15,7 @@ pose:
   # model_path: src/biomechanics/pose/models/rtmpose-m-256x192.onnx  # uncomment for rtmpose
 
 triangulation:
-  enabled: false                # overridden by NOWVA_MULTI_CAMERA env var
+  enabled: true
 
 kinematics:
   backend: analytical           # analytical | opensim

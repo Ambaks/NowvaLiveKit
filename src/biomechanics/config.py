@@ -36,6 +36,7 @@ class PoseConfig(BaseModel):
     confidence_threshold: float = 0.3
     model_complexity: int = 2  # 0=lite, 1=full, 2=heavy (mediapipe only)
     model_path: Optional[str] = None  # Path to ONNX model (rtmpose only)
+    keypoint_format: str = "coco17"  # coco17 | halpe26
 
 
 class TriangulationConfig(BaseModel):

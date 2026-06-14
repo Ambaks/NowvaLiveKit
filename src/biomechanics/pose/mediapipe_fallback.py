@@ -13,6 +13,7 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Optional
+import cv2
 import numpy as np
 
 try:
@@ -67,6 +68,10 @@ MODEL_NAMES = {
     1: "pose_landmarker_full.task",
     2: "pose_landmarker_heavy.task",
 }
+
+# Downsample input frames before inference. MediaPipe rescales internally
+# anyway, so feeding full 720p is wasted work.
+INFERENCE_SCALE = 0.5
 
 
 def get_model_path(model_complexity: int = 1) -> Path:
@@ -136,6 +141,7 @@ class MediaPipePoseEstimator(PoseEstimator):
 
         self._landmarker = None
         self._frame_index = 0
+        self._last_timestamp_ms = 0
 
     def initialize(self) -> bool:
         """Initialize the MediaPipe pose landmarker."""
@@ -158,7 +164,7 @@ class MediaPipePoseEstimator(PoseEstimator):
 
             options = mp_vision.PoseLandmarkerOptions(
                 base_options=base_options,
-                running_mode=mp_vision.RunningMode.IMAGE,
+                running_mode=mp_vision.RunningMode.VIDEO,
                 num_poses=1,
                 min_pose_detection_confidence=self.min_detection_confidence,
                 min_pose_presence_confidence=self.min_detection_confidence,
@@ -180,6 +186,21 @@ class MediaPipePoseEstimator(PoseEstimator):
             self._landmarker.close()
             self._landmarker = None
         self._initialized = False
+
+    def _next_timestamp_ms(self) -> int:
+        ts = int(time.monotonic() * 1000)
+        if ts <= self._last_timestamp_ms:
+            ts = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = ts
+        return ts
+
+    def _downscale(self, frame_rgb: np.ndarray) -> np.ndarray:
+        h, w = frame_rgb.shape[:2]
+        return cv2.resize(
+            frame_rgb,
+            (int(w * INFERENCE_SCALE), int(h * INFERENCE_SCALE)),
+            interpolation=cv2.INTER_AREA,
+        )
 
     def _convert_landmarks_to_skeleton2d(
         self,
@@ -263,26 +284,21 @@ class MediaPipePoseEstimator(PoseEstimator):
             if not self.initialize():
                 return None
 
-        # Convert BGR to RGB for MediaPipe
+        orig_h, orig_w = frame.shape[:2]
         frame_rgb = frame[:, :, ::-1].copy() if frame.shape[2] == 3 else frame.copy()
+        frame_small = self._downscale(frame_rgb)
 
-        # Create MediaPipe Image
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-
-        # Run detection
-        result = self._landmarker.detect(mp_image)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_small)
+        result = self._landmarker.detect_for_video(mp_image, self._next_timestamp_ms())
 
         if not result.pose_landmarks or len(result.pose_landmarks) == 0:
             return None
 
-        h, w = frame.shape[:2]
         timestamp = time.time()
         self._frame_index += 1
 
-        # Get first detected pose
         landmarks = result.pose_landmarks[0]
-
-        return self._convert_landmarks_to_skeleton2d(landmarks, w, h, timestamp)
+        return self._convert_landmarks_to_skeleton2d(landmarks, orig_w, orig_h, timestamp)
 
     def estimate_3d(self, frame: np.ndarray) -> Optional[Skeleton3D]:
         """
@@ -300,14 +316,11 @@ class MediaPipePoseEstimator(PoseEstimator):
             if not self.initialize():
                 return None
 
-        # Convert BGR to RGB for MediaPipe
         frame_rgb = frame[:, :, ::-1].copy() if frame.shape[2] == 3 else frame.copy()
+        frame_small = self._downscale(frame_rgb)
 
-        # Create MediaPipe Image
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-
-        # Run detection
-        result = self._landmarker.detect(mp_image)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_small)
+        result = self._landmarker.detect_for_video(mp_image, self._next_timestamp_ms())
 
         if not result.pose_world_landmarks or len(result.pose_world_landmarks) == 0:
             return None
@@ -315,9 +328,7 @@ class MediaPipePoseEstimator(PoseEstimator):
         timestamp = time.time()
         self._frame_index += 1
 
-        # Get first detected pose
         world_landmarks = result.pose_world_landmarks[0]
-
         return self._convert_world_landmarks_to_skeleton3d(world_landmarks, timestamp)
 
     def estimate_both(self, frame: np.ndarray) -> tuple[Optional[Skeleton2D], Optional[Skeleton3D]]:
@@ -336,27 +347,22 @@ class MediaPipePoseEstimator(PoseEstimator):
             if not self.initialize():
                 return None, None
 
-        # Convert BGR to RGB for MediaPipe
+        orig_h, orig_w = frame.shape[:2]
         frame_rgb = frame[:, :, ::-1].copy() if frame.shape[2] == 3 else frame.copy()
+        frame_small = self._downscale(frame_rgb)
 
-        # Create MediaPipe Image
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-
-        # Run detection
-        result = self._landmarker.detect(mp_image)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_small)
+        result = self._landmarker.detect_for_video(mp_image, self._next_timestamp_ms())
 
         if not result.pose_landmarks or len(result.pose_landmarks) == 0:
             return None, None
 
-        h, w = frame.shape[:2]
         timestamp = time.time()
         self._frame_index += 1
 
-        # Get 2D skeleton
         landmarks = result.pose_landmarks[0]
-        skeleton_2d = self._convert_landmarks_to_skeleton2d(landmarks, w, h, timestamp)
+        skeleton_2d = self._convert_landmarks_to_skeleton2d(landmarks, orig_w, orig_h, timestamp)
 
-        # Get 3D skeleton if available
         skeleton_3d = None
         if result.pose_world_landmarks and len(result.pose_world_landmarks) > 0:
             world_landmarks = result.pose_world_landmarks[0]

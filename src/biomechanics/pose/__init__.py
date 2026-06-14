@@ -23,6 +23,13 @@ try:
 except ImportError:
     RTMPOSE_AVAILABLE = False
 
+try:
+    from biomechanics.pose.multi_camera import MultiCameraPoseProvider
+
+    MULTI_CAMERA_AVAILABLE = True
+except ImportError:
+    MULTI_CAMERA_AVAILABLE = False
+
 __all__ = [
     "PoseEstimator",
     "COCO_KEYPOINT_NAMES",
@@ -31,4 +38,6 @@ __all__ = [
     "MEDIAPIPE_AVAILABLE",
     "RTMPoseEstimator",
     "RTMPOSE_AVAILABLE",
+    "MultiCameraPoseProvider",
+    "MULTI_CAMERA_AVAILABLE",
 ]

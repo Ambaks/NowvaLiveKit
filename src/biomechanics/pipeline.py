@@ -75,16 +75,38 @@ class BiomechanicsPipeline:
         self._capture_running = False
         self._capture_thread = None
 
-        if not defer_capture:
+        # Multi-camera mode (env-driven)
+        self._multi_camera = os.getenv("NOWVA_MULTI_CAMERA", "false").lower() == "true"
+        self._multi_camera_provider = None
+
+        if self._multi_camera:
+            from biomechanics.pose.multi_camera import MultiCameraPoseProvider
+
+            tri = self.config.triangulation
+            self._multi_camera_provider = MultiCameraPoseProvider(
+                device_ids=tri.device_ids,
+                confidence_threshold=self.config.pose.confidence_threshold,
+                model_path=self.config.pose.model_path,
+                min_views=tri.min_views,
+                max_reprojection_error=tri.max_reprojection_error,
+                max_sync_delta_ms=tri.max_sync_delta_ms,
+                resolution=self.config.capture.resolution,
+                primary_camera=tri.primary_camera,
+                focal_length_factor=tri.focal_length_factor,
+            )
+            if tri.calibration_file:
+                self._multi_camera_provider.load_calibration(tri.calibration_file)
+        elif not defer_capture:
             self._open_capture()
 
-        # Layer 2: Pose estimation
+        # Layer 2: Pose estimation (single-camera only; multi-camera owns its estimator)
         if self.config.pose.backend == "rtmpose":
             from biomechanics.pose.rtmpose import RTMPoseEstimator
 
             self._pose_estimator = RTMPoseEstimator(
                 confidence_threshold=self.config.pose.confidence_threshold,
                 model_path=self.config.pose.model_path,
+                keypoint_format=self.config.pose.keypoint_format,
             )
         else:
             model_complexity = self.config.pose.model_complexity
@@ -253,13 +275,20 @@ class BiomechanicsPipeline:
 
     def start_capture(self) -> None:
         """Open camera and start capture thread (phase 2 for deferred init)."""
+        if self._multi_camera:
+            if self._multi_camera_provider is not None:
+                self._multi_camera_provider.start()
+            return
         if self._cap is not None:
             return
         self._open_capture()
 
     def preload_pose_model(self) -> None:
         """Eagerly load the pose estimation model instead of waiting for the first frame."""
-        self._pose_estimator.initialize()
+        if self._multi_camera and self._multi_camera_provider is not None:
+            self._multi_camera_provider.initialize()
+        else:
+            self._pose_estimator.initialize()
 
     @property
     def rep_counter(self):
@@ -323,11 +352,30 @@ class BiomechanicsPipeline:
         latency_ms = {}
         now = time.time()
 
-        # --- Capture (grab latest frame from capture thread) ---
-        t0 = time.perf_counter()
-        with self._frame_lock:
-            frame = self._latest_frame
-        latency_ms["capture"] = (time.perf_counter() - t0) * 1000.0
+        # --- Capture + Pose estimation ---
+        skeleton_2d: Optional[Skeleton2D] = None
+        skeleton_3d: Optional[Skeleton3D] = None
+        bar_detection: Optional[BarbellDetection] = None
+        bar_track: Optional[BarTrackState] = None
+
+        if self._multi_camera and self._multi_camera_provider is not None:
+            t0 = time.perf_counter()
+            frame, skeleton_2d, skeleton_3d = self._multi_camera_provider.get_pose()
+            latency_ms["capture"] = 0.0
+            latency_ms["pose"] = (time.perf_counter() - t0) * 1000.0
+        else:
+            t0 = time.perf_counter()
+            with self._frame_lock:
+                frame = self._latest_frame
+            latency_ms["capture"] = (time.perf_counter() - t0) * 1000.0
+
+            if frame is not None:
+                t0 = time.perf_counter()
+                try:
+                    skeleton_2d, skeleton_3d = self._pose_estimator.estimate_both(frame)
+                except Exception:
+                    pass
+                latency_ms["pose"] = (time.perf_counter() - t0) * 1000.0
 
         if frame is None:
             self._frame_index += 1
@@ -336,9 +384,6 @@ class BiomechanicsPipeline:
                 timestamp=now,
                 latency_ms=latency_ms,
             )
-
-        bar_detection: Optional[BarbellDetection] = None
-        bar_track: Optional[BarTrackState] = None
 
         self.last_frame = frame
 
@@ -354,18 +399,6 @@ class BiomechanicsPipeline:
             if self._bar_tracker is not None:
                 bar_track = self._bar_tracker.update(bar_detection, timestamp=now)
             latency_ms["barbell"] = (time.perf_counter() - t0) * 1000.0
-
-        # --- Pose estimation ---
-        t0 = time.perf_counter()
-        skeleton_2d: Optional[Skeleton2D] = None
-        skeleton_3d: Optional[Skeleton3D] = None
-
-        try:
-            skeleton_2d, skeleton_3d = self._pose_estimator.estimate_both(frame)
-        except Exception:
-            pass  # pose failed — skip downstream
-
-        latency_ms["pose"] = (time.perf_counter() - t0) * 1000.0
 
         if skeleton_3d is None:
             # No pose detected — return early with what we have
@@ -582,10 +615,13 @@ class BiomechanicsPipeline:
 
     def release(self):
         """Release all resources."""
-        self._capture_running = False
-        if self._capture_thread is not None:
-            self._capture_thread.join(timeout=2.0)
-        if self._cap is not None:
-            self._cap.release()
+        if self._multi_camera and self._multi_camera_provider is not None:
+            self._multi_camera_provider.release()
+        else:
+            self._capture_running = False
+            if self._capture_thread is not None:
+                self._capture_thread.join(timeout=2.0)
+            if self._cap is not None:
+                self._cap.release()
         if self._pose_estimator is not None:
             self._pose_estimator.release()

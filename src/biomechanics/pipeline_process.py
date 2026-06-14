@@ -287,6 +287,17 @@ def run_biomechanics_pipeline(
             pipeline.start_capture()
             print("[PRELOAD] Camera opened — entering frame loop")
 
+        # Multi-camera calibration (if needed)
+        if pipeline._multi_camera and pipeline._multi_camera_provider is not None:
+            if not pipeline._multi_camera_provider.is_calibrated:
+                height_m = float(os.getenv("NOWVA_USER_HEIGHT_M", "1.885"))
+                print(f"[MULTI-CAM] Running T-pose calibration (height={height_m}m)...")
+                pipeline._multi_camera_provider.calibrate(
+                    height_m=height_m,
+                    save_path="outputs/calibration.json",
+                )
+                print("[MULTI-CAM] Calibration complete")
+
         bridge = IPCBridge(ipc_client)
         session_tracker = SessionTracker(bridge, config=config.coaching)
 

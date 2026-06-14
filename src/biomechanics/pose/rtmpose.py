@@ -33,6 +33,15 @@ logger = logging.getLogger(__name__)
 # Default model location
 DEFAULT_MODEL_DIR = Path(__file__).parent / "models"
 DEFAULT_MODEL_NAME = "rtmpose-m-256x192.onnx"
+DEFAULT_HALPE26_MODEL_NAME = "rtmpose-m-halpe26-256x192.onnx"
+
+NUM_COCO17_KEYPOINTS = 17
+NUM_HALPE26_KEYPOINTS = 26
+
+# Halpe26 indices 0–16 are identical to COCO-17.
+# Map halpe26 foot keypoints to our COCO+foot format (indices 17–18).
+HALPE26_LEFT_BIG_TOE = 20
+HALPE26_RIGHT_BIG_TOE = 21
 
 # ImageNet normalization constants
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -62,14 +71,8 @@ class RTMPoseEstimator(PoseEstimator):
         self,
         confidence_threshold: float = 0.3,
         model_path: Optional[str] = None,
+        keypoint_format: str = "coco17",
     ):
-        """
-        Initialize RTMPose estimator.
-
-        Args:
-            confidence_threshold: Minimum confidence to consider keypoint valid
-            model_path: Path to ONNX model file. If None, uses default location.
-        """
         super().__init__(confidence_threshold)
 
         if not ONNXRUNTIME_AVAILABLE:
@@ -77,10 +80,18 @@ class RTMPoseEstimator(PoseEstimator):
                 "onnxruntime is not installed. Run: pip install onnxruntime"
             )
 
+        self._keypoint_format = keypoint_format
+        if keypoint_format == "halpe26":
+            self._num_raw_keypoints = NUM_HALPE26_KEYPOINTS
+            default_name = DEFAULT_HALPE26_MODEL_NAME
+        else:
+            self._num_raw_keypoints = NUM_COCO17_KEYPOINTS
+            default_name = DEFAULT_MODEL_NAME
+
         if model_path is not None:
             self._model_path = Path(model_path)
         else:
-            self._model_path = DEFAULT_MODEL_DIR / DEFAULT_MODEL_NAME
+            self._model_path = DEFAULT_MODEL_DIR / default_name
 
         self._session: Optional["ort.InferenceSession"] = None
         self._input_name: Optional[str] = None
@@ -185,15 +196,16 @@ class RTMPoseEstimator(PoseEstimator):
             scale_y: Vertical scaling from model input to original frame
 
         Returns:
-            Array of shape (17, 3) with [x_pixel, y_pixel, confidence]
+            Array of shape (N, 3) with [x_pixel, y_pixel, confidence]
+            where N is self._num_raw_keypoints (17 for coco17, 26 for halpe26).
         """
         # Remove batch dimension
-        x_logits = x_logits[0]  # (17, W*2)
-        y_logits = y_logits[0]  # (17, H*2)
+        x_logits = x_logits[0]  # (N, W*2)
+        y_logits = y_logits[0]  # (N, H*2)
 
         # Argmax to get coordinate indices
-        x_indices = np.argmax(x_logits, axis=1).astype(np.float64)  # (17,)
-        y_indices = np.argmax(y_logits, axis=1).astype(np.float64)  # (17,)
+        x_indices = np.argmax(x_logits, axis=1).astype(np.float64)  # (N,)
+        y_indices = np.argmax(y_logits, axis=1).astype(np.float64)  # (N,)
 
         # Confidence from max logit values via sigmoid
         x_max = np.max(x_logits, axis=1)
@@ -215,30 +227,28 @@ class RTMPoseEstimator(PoseEstimator):
         self, kpts: np.ndarray, timestamp: float
     ) -> Optional[Skeleton2D]:
         """
-        Convert (17, 3) keypoints array to Skeleton2D.
+        Convert raw keypoints array to Skeleton2D (19 entries: COCO-17 + 2 foot indices).
 
         Returns None if no keypoints have sufficient confidence.
         """
         if np.max(kpts[:, 2]) < self.confidence_threshold:
             return None
 
-        keypoints = []
-        for i in range(17):
-            conf = float(kpts[i, 2])
+        def _make_kpt(idx: int) -> Keypoint2D:
+            conf = float(kpts[idx, 2])
             if conf < self.confidence_threshold:
-                keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))
-            else:
-                keypoints.append(
-                    Keypoint2D(
-                        x=float(kpts[i, 0]),
-                        y=float(kpts[i, 1]),
-                        confidence=conf,
-                    )
-                )
+                return Keypoint2D(x=0.0, y=0.0, confidence=0.0)
+            return Keypoint2D(x=float(kpts[idx, 0]), y=float(kpts[idx, 1]), confidence=conf)
 
-        # Pad with zero-confidence foot_index keypoints (RTMPose lacks toe landmarks)
-        keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))  # left_foot_index
-        keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))  # right_foot_index
+        # Indices 0–16 are identical between COCO-17 and halpe26
+        keypoints = [_make_kpt(i) for i in range(NUM_COCO17_KEYPOINTS)]
+
+        if self._keypoint_format == "halpe26":
+            keypoints.append(_make_kpt(HALPE26_LEFT_BIG_TOE))
+            keypoints.append(_make_kpt(HALPE26_RIGHT_BIG_TOE))
+        else:
+            keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))
+            keypoints.append(Keypoint2D(x=0.0, y=0.0, confidence=0.0))
 
         return Skeleton2D(
             keypoints=keypoints,
