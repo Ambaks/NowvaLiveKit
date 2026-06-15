@@ -321,7 +321,8 @@ def run_biomechanics_pipeline(
     window_name = f"Nowva — {exercise_name}"
     precreate_window(window_name)
     _window_animated = False
-    out_dir = make_output_dir()
+    session_output = os.environ.get("NOWVA_SESSION_OUTPUT_DIR")
+    out_dir = make_output_dir(base=os.path.join(session_output, "output") if session_output else "output")
 
     # --- Apply existing calibration if provided ---
     if calibration_file and os.path.exists(calibration_file):

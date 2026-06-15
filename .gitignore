@@ -146,6 +146,9 @@ downloads/
 # Output files
 /output/
 
+# User test run recordings
+user_test_runs/*/
+
 # Generated program files
 src/programs/
 programs/

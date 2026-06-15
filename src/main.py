@@ -79,6 +79,8 @@ class NowvaApp:
         self.fastapi_process = None
         self.current_user = None
         self.state = None  # Track state for cleanup
+        self._recording_process = None
+        self._session_dir: Path | None = None
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -114,6 +116,136 @@ class NowvaApp:
             stderr=subprocess.PIPE,
         )
         print(f"[FASTAPI] Server started (PID: {self.fastapi_process.pid})")
+
+    # ------------------------------------------------------------------
+    #  Screen + audio recording (NOWVA_RECORD_SESSION=true)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_avfoundation_devices() -> dict[str, int | None]:
+        """Parse ffmpeg avfoundation device list to find screen, mic, and BlackHole indices."""
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                capture_output=True, text=True, timeout=5,
+            )
+            output = result.stderr
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return {"screen": None, "mic": None, "blackhole": None}
+
+        screen_idx: int | None = None
+        mic_idx: int | None = None
+        blackhole_idx: int | None = None
+        in_audio = False
+
+        for line in output.splitlines():
+            if "AVFoundation video devices" in line:
+                in_audio = False
+            elif "AVFoundation audio devices" in line:
+                in_audio = True
+                continue
+
+            bracket = line.rfind("[")
+            close = line.find("]", bracket + 1)
+            if bracket == -1 or close == -1:
+                continue
+            try:
+                idx = int(line[bracket + 1:close])
+            except ValueError:
+                continue
+
+            name = line[close + 1:].strip()
+
+            if not in_audio:
+                if "screen" in name.lower() or "capture screen" in name.lower():
+                    if screen_idx is None:
+                        screen_idx = idx
+            else:
+                if "blackhole" in name.lower():
+                    blackhole_idx = idx
+                elif "microphone" in name.lower() or "built-in" in name.lower():
+                    if mic_idx is None:
+                        mic_idx = idx
+
+        return {"screen": screen_idx, "mic": mic_idx, "blackhole": blackhole_idx}
+
+    def _start_screen_recording(self, session_dir: Path) -> None:
+        """Launch ffmpeg to record screen + audio into session_dir."""
+        devices = self._detect_avfoundation_devices()
+
+        if devices["screen"] is None:
+            print("[RECORDING] No screen capture device found — skipping recording")
+            return
+
+        screen_idx = devices["screen"]
+        mic_idx = devices["mic"]
+        blackhole_idx = devices["blackhole"]
+
+        if mic_idx is not None and blackhole_idx is not None:
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "avfoundation", "-framerate", "30",
+                "-capture_cursor", "1",
+                "-sample_rate", "48000",
+                "-i", f"{screen_idx}:{mic_idx}",
+                "-f", "avfoundation",
+                "-sample_rate", "48000",
+                "-i", f":{blackhole_idx}",
+                "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first",
+                "-c:v", "h264_videotoolbox", "-b:v", "5M",
+                "-c:a", "aac", "-ar", "48000", "-b:a", "128k",
+                str(session_dir / "screen_recording.mp4"),
+            ]
+            print(f"[RECORDING] Screen + mic + system audio (BlackHole)")
+        elif mic_idx is not None:
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "avfoundation", "-framerate", "30",
+                "-capture_cursor", "1",
+                "-sample_rate", "48000",
+                "-i", f"{screen_idx}:{mic_idx}",
+                "-c:v", "h264_videotoolbox", "-b:v", "5M",
+                "-c:a", "aac", "-ar", "48000", "-b:a", "128k",
+                str(session_dir / "screen_recording.mp4"),
+            ]
+            print("[RECORDING] Screen + mic (no BlackHole detected for system audio)")
+        else:
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "avfoundation", "-framerate", "30",
+                "-capture_cursor", "1",
+                "-i", f"{screen_idx}:none",
+                "-c:v", "h264_videotoolbox", "-b:v", "5M",
+                str(session_dir / "screen_recording.mp4"),
+            ]
+            print("[RECORDING] Screen only (no audio devices detected)")
+
+        self._recording_process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"[RECORDING] Started (PID: {self._recording_process.pid})")
+
+    def _stop_screen_recording(self) -> None:
+        """Gracefully stop ffmpeg recording."""
+        proc = getattr(self, "_recording_process", None)
+        if proc is None or proc.poll() is not None:
+            return
+
+        print("[RECORDING] Stopping screen recording...")
+        try:
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+            proc.wait(timeout=10)
+            print("[RECORDING] Recording saved")
+        except (BrokenPipeError, OSError):
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait(timeout=5)
 
     def check_session(self):
         """Check if user has an existing session"""
@@ -310,8 +442,19 @@ class NowvaApp:
 
     async def run(self):
         """Main application loop with voice agent coordination"""
-        # Start session logging
-        self.session_logger.start_session()
+        record_session = os.environ.get("NOWVA_RECORD_SESSION", "").lower() == "true"
+
+        if record_session:
+            from datetime import datetime as _dt
+            session_id = _dt.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self._session_dir = Path("user_test_runs") / session_id
+            self._session_dir.mkdir(parents=True, exist_ok=True)
+            os.environ["NOWVA_SESSION_OUTPUT_DIR"] = str(self._session_dir)
+            self.session_logger.start_session(log_dir=str(self._session_dir))
+            self._start_screen_recording(self._session_dir)
+        else:
+            self.session_logger.start_session()
+
         self.session_logger.log_system_event("app_started")
 
         # Start profiler if enabled
@@ -727,6 +870,8 @@ class NowvaApp:
             print("Stopping IPC server...")
             self.ipc_server.stop()
 
+        self._stop_screen_recording()
+
         # End session and generate summary
         self.session_logger.log_system_event("app_shutdown")
         summary = self.session_logger.end_session()
@@ -745,10 +890,12 @@ class NowvaApp:
                     if agent_json.exists():
                         break
                     await asyncio.sleep(0.1)
+                profiler_out = self._session_dir / "profiler_results" if self._session_dir else PROFILE_OUTPUT_DIR
+                profiler_out.mkdir(parents=True, exist_ok=True)
                 report_path = generate_profile_report(
                     agent_json_path=agent_json if agent_json.exists() else None,
                     main_profiler=self._profiler,
-                    output_dir=PROFILE_OUTPUT_DIR,
+                    output_dir=profiler_out,
                 )
                 print(f"Profile report saved to: {report_path}")
             except Exception as e:

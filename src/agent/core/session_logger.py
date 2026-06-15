@@ -66,7 +66,7 @@ class SessionLogger:
         """Get singleton instance"""
         return cls()
 
-    def start_session(self):
+    def start_session(self, log_dir: str | None = None):
         """Initialize new session, or join an existing one via NOWVA_SESSION_LOG env var."""
         import os
         shared_log = os.environ.get("NOWVA_SESSION_LOG")
@@ -77,11 +77,10 @@ class SessionLogger:
 
         self.session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-        # Create output directory
-        log_dir = Path("session_logs")
-        log_dir.mkdir(exist_ok=True)
+        output_dir = Path(log_dir) if log_dir else Path("session_logs")
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.log_file_path = log_dir / f"session_{self.session_id}.csv"
+        self.log_file_path = output_dir / f"session_{self.session_id}.csv"
 
         print(f"[SESSION LOGGER] Session started: {self.session_id}")
         print(f"[SESSION LOGGER] Logging to: {self.log_file_path}")
