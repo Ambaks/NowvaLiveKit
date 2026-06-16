@@ -8,6 +8,10 @@ import logging
 from livekit.agents import function_tool, AgentTask
 
 from agent.agents.shared.helpers import check_calibration, start_calibration_mode
+from agent.agents.calibration_agent import CalibrationAgent
+from agent.agents.workout_agent import WorkoutAgent
+from agent.core.workout_session import WorkoutSession, ExerciseProgress, SetProgress
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,7 @@ class CollectExerciseInfoTask(AgentTask):
     ):
         super().__init__(
             instructions=("""
-                Collect the amount of sets, reps, rest and weight
+                Conversationally collect the amount of sets, reps, rest and weight
                 the user wants to use for their quick exercise. 
                 Once that is done, call the start_workout tool.
                 """
@@ -42,7 +46,7 @@ class CollectExerciseInfoTask(AgentTask):
 
     async def on_enter(self):
         await self.session.generate_reply(
-            instructions="Let the user know you only need a few things from them."
+            instructions="You are transitionning smoothly from the main menu into collecting the required information for the quick exercise."
         )
 
     @function_tool
@@ -62,10 +66,6 @@ class CollectExerciseInfoTask(AgentTask):
             weight: Weight in lbs. Use 0 for bodyweight exercises.
             rest_seconds: Rest between sets in seconds (default 120)
         """
-        from agent.agents.calibration_agent import CalibrationAgent
-        from agent.agents.workout_agent import WorkoutAgent
-        from agent.core.workout_session import WorkoutSession, ExerciseProgress, SetProgress
-
         exercise_name = self.exercise_name
         logger.info(
             f"[QUICK EXERCISE] Collected: {sets}x{reps}, "
