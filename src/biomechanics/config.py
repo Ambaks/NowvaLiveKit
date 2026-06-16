@@ -253,7 +253,7 @@ class ReadinessGateConfig(BaseModel):
     max_trunk_flexion_deg: float = 35.0
     min_torso_length_m: float = 0.15
     max_torso_length_m: float = 1.00
-    required_consecutive_frames: int = 30
+    required_consecutive_frames: int = 5
 
 
 # =============================================================================
