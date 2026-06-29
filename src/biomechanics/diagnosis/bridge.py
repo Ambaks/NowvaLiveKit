@@ -26,6 +26,7 @@ def _mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
 def build_frame_from_live_pipeline(
     bottom_kpts: list[list[float]],
     bottom_angles: dict[str, float],
+    standing_kpts: list[list[float]] | None = None,
 ) -> dict:
     """Convert live pipeline data to the frame dict build_rep_kinematic_summary expects."""
     kpts_vis = _mediapipe_to_viewer_coords(bottom_kpts)
@@ -42,7 +43,10 @@ def build_frame_from_live_pipeline(
         ),
     }
 
-    return {"angles": angles, "kpts": kpts_vis}
+    result: dict = {"angles": angles, "kpts": kpts_vis}
+    if standing_kpts is not None:
+        result["standing_kpts"] = _mediapipe_to_viewer_coords(standing_kpts)
+    return result
 
 
 def find_bottom_frame(rep_frames: list[dict]) -> dict:
@@ -128,6 +132,16 @@ def build_rep_kinematic_summary(
     shoulder_width = athlete_params.get("shoulder_width_m", 0.40)
     stance_ratio = compute_stance_width_ratio(kpts, shoulder_width)
 
+    standing_kpts = frame.get("standing_kpts")
+    top_kwargs: dict = {}
+    if standing_kpts is not None:
+        top_kwargs = {
+            "hip_y_l_at_top": standing_kpts[11][1] * 100.0,
+            "hip_y_r_at_top": standing_kpts[12][1] * 100.0,
+            "knee_y_l_at_top": standing_kpts[13][1] * 100.0,
+            "knee_y_r_at_top": standing_kpts[14][1] * 100.0,
+        }
+
     return RepKinematicSummary(
         rep_number=rep_number,
         trunk_pitch_at_bottom=trunk_pitch,
@@ -143,6 +157,7 @@ def build_rep_kinematic_summary(
         foot_direction_angle_l=foot_angle_l,
         foot_direction_angle_r=foot_angle_r,
         depth_class_int=depth_class,
+        **top_kwargs,
     )
 
 
@@ -181,6 +196,8 @@ def build_set_features(
     per_rep_kinematics = []
     for rep_idx, rep_frames in enumerate(replay_reps):
         bottom_frame = find_bottom_frame(rep_frames)
+        if rep_frames:
+            bottom_frame["standing_kpts"] = rep_frames[0]["kpts"]
         rep_number = rep_idx + 2
         summary = build_rep_kinematic_summary(bottom_frame, athlete_params, rep_number)
         per_rep_kinematics.append(summary)

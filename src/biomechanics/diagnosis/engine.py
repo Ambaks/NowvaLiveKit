@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from .graph.loader import SYMPTOM_GRAPH, CAUSE_GRAPH
+from .rep_scoring import score_set
 from .types import (
     DetectedSymptom,
     DiagnosisResult,
@@ -109,7 +110,7 @@ class HypothesisEngine:
         cause_posteriors: dict[str, list[float]] = {}
         cause_implicated_by: dict[str, list[str]] = {}
 
-        representative_rep = self._pick_representative_rep(reps)
+        representative_rep = self._pick_representative_rep(reps, anthro, rom)
 
         for symptom in detected_symptoms:
             symptom_def = SYMPTOM_GRAPH[symptom.symptom_id]
@@ -151,7 +152,7 @@ class HypothesisEngine:
         anthro: dict,
         rom: dict,
     ) -> list[HypothesizedCause]:
-        representative_rep = self._pick_representative_rep(reps)
+        representative_rep = self._pick_representative_rep(reps, anthro, rom)
         hypotheses = []
 
         for cause_id, info in filtered_causes.items():
@@ -283,10 +284,17 @@ class HypothesisEngine:
         return 0.0
 
     def _pick_representative_rep(
-        self, reps: list[RepKinematicSummary]
+        self,
+        reps: list[RepKinematicSummary],
+        anthro: dict | None = None,
+        rom: dict | None = None,
     ) -> RepKinematicSummary:
         if len(reps) == 1:
             return reps[0]
+        if anthro is not None and rom is not None:
+            summary = score_set(reps, anthro, rom)
+            worst_idx = max(0, min(summary.worst_rep_number - 2, len(reps) - 1))
+            return reps[worst_idx]
         sorted_reps = sorted(reps, key=lambda r: r.trunk_pitch_at_bottom)
         return sorted_reps[len(sorted_reps) // 2]
 

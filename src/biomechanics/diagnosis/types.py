@@ -18,6 +18,10 @@ class RepKinematicSummary(BaseModel):
     foot_direction_angle_l: float
     foot_direction_angle_r: float
     depth_class_int: int
+    hip_y_l_at_top: float = 0.0
+    hip_y_r_at_top: float = 0.0
+    knee_y_l_at_top: float = 0.0
+    knee_y_r_at_top: float = 0.0
 
 
 class SetFeatures(BaseModel):
@@ -52,7 +56,6 @@ class RepScore(BaseModel):
     trunk_control_score: float
     knee_tracking_score: float
     symmetry_score: float
-    ankle_utilization_score: float
     composite_score: float
 
 

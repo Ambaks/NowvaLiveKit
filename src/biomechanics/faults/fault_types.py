@@ -52,9 +52,9 @@ DEFAULT_THRESHOLDS: Dict[FaultType, Dict[str, float]] = {
         "severe": 55.0,        # > 55° trunk flexion
     },
     FaultType.KNEE_VALGUS: {
-        "mild": 5.0,           # 5-10° hip adduction
-        "moderate": 10.0,      # 10-15° hip adduction
-        "severe": 15.0,        # > 15° hip adduction
+        "mild": 12.0,
+        "moderate": 17.0,
+        "severe": 24.0,
     },
     FaultType.BACK_ROUNDING: {
         "mild": 35.0,

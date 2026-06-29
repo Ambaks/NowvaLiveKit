@@ -3,7 +3,6 @@
 import pytest
 
 from biomechanics.diagnosis.rep_scoring import (
-    score_ankle_utilization,
     score_depth,
     score_knee_tracking,
     score_rep,
@@ -30,6 +29,10 @@ def _make_rep(**overrides) -> RepKinematicSummary:
         foot_direction_angle_l=20.0,
         foot_direction_angle_r=20.0,
         depth_class_int=4,
+        hip_y_l_at_top=80.0,
+        hip_y_r_at_top=80.0,
+        knee_y_l_at_top=50.0,
+        knee_y_r_at_top=50.0,
     )
     defaults.update(overrides)
     return RepKinematicSummary(**defaults)
@@ -51,30 +54,60 @@ def _default_rom() -> dict:
 
 
 class TestDepthScore:
-    def test_below_parallel_with_hip_below_knee(self):
-        rep = _make_rep(depth_class_int=4, hip_y_l_at_bottom=40.0, hip_y_r_at_bottom=40.0,
-                        knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0)
+    def test_full_depth_scores_one(self):
+        # hip_standing=80, hip_bottom=40, knee_bottom=45 → (80-40)/(80-45)=40/35=1.14 → clamped 1.0
+        rep = _make_rep(
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=40.0, hip_y_r_at_bottom=40.0,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
         assert score_depth(rep, _default_anthro(), _default_rom()) == 1.0
 
-    def test_parallel_no_bonus(self):
-        rep = _make_rep(depth_class_int=3, hip_y_l_at_bottom=50.0, hip_y_r_at_bottom=50.0,
-                        knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0)
-        assert score_depth(rep, _default_anthro(), _default_rom()) == 0.85
-
-    def test_parallel_with_bonus(self):
-        rep = _make_rep(depth_class_int=3, hip_y_l_at_bottom=40.0, hip_y_r_at_bottom=40.0,
-                        knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0)
+    def test_hip_below_knee_still_capped(self):
+        # hips go well below knees → still capped at 1.0
+        rep = _make_rep(
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=30.0, hip_y_r_at_bottom=30.0,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
         assert score_depth(rep, _default_anthro(), _default_rom()) == 1.0
 
-    def test_quarter_squat(self):
-        rep = _make_rep(depth_class_int=0, hip_y_l_at_bottom=60.0, hip_y_r_at_bottom=60.0,
-                        knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0)
-        assert score_depth(rep, _default_anthro(), _default_rom()) == 0.1
+    def test_half_depth(self):
+        # hip_standing=80, hip_bottom=62.5, knee_bottom=45 → (80-62.5)/(80-45)=17.5/35=0.5
+        rep = _make_rep(
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=62.5, hip_y_r_at_bottom=62.5,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
+        score = score_depth(rep, _default_anthro(), _default_rom())
+        assert score == pytest.approx(0.5, abs=0.01)
 
-    def test_half_squat(self):
-        rep = _make_rep(depth_class_int=1, hip_y_l_at_bottom=55.0, hip_y_r_at_bottom=55.0,
-                        knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0)
-        assert score_depth(rep, _default_anthro(), _default_rom()) == 0.25
+    def test_no_descent_scores_zero(self):
+        # hip doesn't move from standing
+        rep = _make_rep(
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=80.0, hip_y_r_at_bottom=80.0,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
+        assert score_depth(rep, _default_anthro(), _default_rom()) == 0.0
+
+    def test_no_standing_data_scores_zero(self):
+        # at_top fields default to 0.0 → denominator = 0 - 45 < 0 → 0.0
+        rep = _make_rep(
+            hip_y_l_at_top=0.0, hip_y_r_at_top=0.0,
+            knee_y_l_at_top=0.0, knee_y_r_at_top=0.0,
+        )
+        assert score_depth(rep, _default_anthro(), _default_rom()) == 0.0
+
+    def test_quarter_depth(self):
+        # hip_standing=80, hip_bottom=71.25, knee_bottom=45 → (80-71.25)/(80-45)=8.75/35=0.25
+        rep = _make_rep(
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=71.25, hip_y_r_at_bottom=71.25,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
+        score = score_depth(rep, _default_anthro(), _default_rom())
+        assert score == pytest.approx(0.25, abs=0.01)
 
 
 class TestTrunkControlScore:
@@ -102,16 +135,20 @@ class TestKneeTrackingScore:
         rep = _make_rep(knee_valgus_l=0.0, knee_valgus_r=0.0)
         assert score_knee_tracking(rep, _default_anthro(), _default_rom()) == 1.0
 
-    def test_within_perfect_zone(self):
+    def test_both_within_zone(self):
         rep = _make_rep(knee_valgus_l=3.5, knee_valgus_r=-2.0)
         assert score_knee_tracking(rep, _default_anthro(), _default_rom()) == 1.0
 
-    def test_at_zone_boundary(self):
-        rep = _make_rep(knee_valgus_l=4.0, knee_valgus_r=0.0)
-        assert score_knee_tracking(rep, _default_anthro(), _default_rom()) == 1.0
+    def test_one_bad_other_perfect(self):
+        # L=10° → (10-4)/12=0.5 → score_l=0.5.  R=0° → score_r=1.0
+        # combined = 0.5*0.5 + 0.5*1.0 = 0.75
+        rep = _make_rep(knee_valgus_l=10.0, knee_valgus_r=0.0)
+        score = score_knee_tracking(rep, _default_anthro(), _default_rom())
+        assert score == pytest.approx(0.75, abs=0.01)
 
-    def test_moderate_valgus(self):
-        rep = _make_rep(knee_valgus_l=10.0, knee_valgus_r=2.0)  # worst=10, (10-4)/12=0.5
+    def test_both_moderate(self):
+        # both at 10° → each scores 0.5 → combined = 0.5
+        rep = _make_rep(knee_valgus_l=10.0, knee_valgus_r=10.0)
         score = score_knee_tracking(rep, _default_anthro(), _default_rom())
         assert score == pytest.approx(0.5, abs=0.01)
 
@@ -122,7 +159,7 @@ class TestKneeTrackingScore:
         score_neg = score_knee_tracking(rep_negative, _default_anthro(), _default_rom())
         assert score_pos == score_neg
 
-    def test_extreme_valgus(self):
+    def test_both_extreme(self):
         rep = _make_rep(knee_valgus_l=16.0, knee_valgus_r=16.0)
         assert score_knee_tracking(rep, _default_anthro(), _default_rom()) == 0.0
 
@@ -146,30 +183,6 @@ class TestSymmetryScore:
         assert score_symmetry(rep, _default_anthro(), _default_rom()) == 0.0
 
 
-class TestAnkleUtilizationScore:
-    def test_ideal_utilization(self):
-        rom = {"dorsiflexion_drop": 35.0}
-        rep = _make_rep(ankle_df_l_max=22.0, ankle_df_r_max=22.0)  # 62.9% → in [50, 85]
-        assert score_ankle_utilization(rep, _default_anthro(), rom) == 1.0
-
-    def test_low_utilization(self):
-        rom = {"dorsiflexion_drop": 40.0}
-        rep = _make_rep(ankle_df_l_max=5.0, ankle_df_r_max=5.0)  # 12.5% → 0.125/0.5=0.25
-        score = score_ankle_utilization(rep, _default_anthro(), rom)
-        assert score == pytest.approx(0.25, abs=0.01)
-
-    def test_maxed_out(self):
-        rom = {"dorsiflexion_drop": 35.0}
-        rep = _make_rep(ankle_df_l_max=35.0, ankle_df_r_max=35.0)  # 100% → 0
-        assert score_ankle_utilization(rep, _default_anthro(), rom) == 0.0
-
-    def test_zero_capacity_guarded(self):
-        rom = {"dorsiflexion_drop": 0.0}
-        rep = _make_rep(ankle_df_l_max=10.0, ankle_df_r_max=10.0)
-        score = score_ankle_utilization(rep, _default_anthro(), rom)
-        assert 0.0 <= score <= 1.0
-
-
 class TestCompositeScore:
     def test_perfect_rep(self):
         rep = _make_rep(
@@ -177,8 +190,7 @@ class TestCompositeScore:
             knee_valgus_l=0.0, knee_valgus_r=0.0,
             hip_y_l_at_bottom=40.0, hip_y_r_at_bottom=40.0,
             knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
-            depth_class_int=4,
-            ankle_df_l_max=22.0, ankle_df_r_max=22.0,
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
         )
         result = score_rep(rep, _default_anthro(), _default_rom())
         assert result.composite_score >= 0.95
@@ -190,28 +202,35 @@ class TestCompositeScore:
         assert 0.0 <= result.trunk_control_score <= 1.0
         assert 0.0 <= result.knee_tracking_score <= 1.0
         assert 0.0 <= result.symmetry_score <= 1.0
-        assert 0.0 <= result.ankle_utilization_score <= 1.0
         assert 0.0 <= result.composite_score <= 1.0
 
     def test_weights_sum_to_one(self):
         from biomechanics.diagnosis.rep_scoring import (
-            WEIGHT_ANKLES,
             WEIGHT_DEPTH,
             WEIGHT_KNEES,
             WEIGHT_SYMMETRY,
             WEIGHT_TRUNK,
         )
-        total = WEIGHT_DEPTH + WEIGHT_TRUNK + WEIGHT_KNEES + WEIGHT_SYMMETRY + WEIGHT_ANKLES
+        total = WEIGHT_DEPTH + WEIGHT_TRUNK + WEIGHT_KNEES + WEIGHT_SYMMETRY
         assert total == pytest.approx(1.0)
 
 
 class TestSetScoreSummary:
     def test_best_and_worst_identification(self):
-        good_rep = _make_rep(rep_number=2, depth_class_int=4, trunk_pitch_at_bottom=30.0,
-                             knee_valgus_l=0.0, knee_valgus_r=0.0)
-        bad_rep = _make_rep(rep_number=3, depth_class_int=0, trunk_pitch_at_bottom=55.0,
-                            knee_valgus_l=14.0, knee_valgus_r=12.0,
-                            hip_y_l_at_bottom=60.0, hip_y_r_at_bottom=60.0)
+        good_rep = _make_rep(
+            rep_number=2, trunk_pitch_at_bottom=30.0,
+            knee_valgus_l=0.0, knee_valgus_r=0.0,
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=40.0, hip_y_r_at_bottom=40.0,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
+        bad_rep = _make_rep(
+            rep_number=3, trunk_pitch_at_bottom=55.0,
+            knee_valgus_l=14.0, knee_valgus_r=12.0,
+            hip_y_l_at_top=80.0, hip_y_r_at_top=80.0,
+            hip_y_l_at_bottom=70.0, hip_y_r_at_bottom=70.0,
+            knee_y_l_at_bottom=45.0, knee_y_r_at_bottom=45.0,
+        )
         result = score_set([good_rep, bad_rep], _default_anthro(), _default_rom())
         assert result.best_rep_number == 2
         assert result.worst_rep_number == 3
@@ -223,9 +242,12 @@ class TestSetScoreSummary:
 
     def test_degrading_trend_negative_slope(self):
         reps = [
-            _make_rep(rep_number=2, depth_class_int=4, trunk_pitch_at_bottom=30.0),
-            _make_rep(rep_number=3, depth_class_int=3, trunk_pitch_at_bottom=35.0),
-            _make_rep(rep_number=4, depth_class_int=1, trunk_pitch_at_bottom=50.0,
+            _make_rep(rep_number=2, trunk_pitch_at_bottom=30.0,
+                      hip_y_l_at_bottom=40.0, hip_y_r_at_bottom=40.0),
+            _make_rep(rep_number=3, trunk_pitch_at_bottom=35.0,
+                      hip_y_l_at_bottom=55.0, hip_y_r_at_bottom=55.0),
+            _make_rep(rep_number=4, trunk_pitch_at_bottom=50.0,
+                      hip_y_l_at_bottom=70.0, hip_y_r_at_bottom=70.0,
                       knee_valgus_l=12.0),
         ]
         result = score_set(reps, _default_anthro(), _default_rom())

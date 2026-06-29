@@ -33,9 +33,9 @@ class KneeValgusRule(FaultRule):
 
     def __init__(
         self,
-        mild_threshold: float = 5.0,
-        moderate_threshold: float = 10.0,
-        severe_threshold: float = 15.0,
+        mild_threshold: float = 12.0,
+        moderate_threshold: float = 17.0,
+        severe_threshold: float = 24.0,
     ):
         self.mild_threshold = mild_threshold
         self.moderate_threshold = moderate_threshold
@@ -64,7 +64,7 @@ class KneeValgusRule(FaultRule):
 
         Only fires during reps and when valgus exceeds the mild threshold.
         """
-        if not in_rep:
+        if not in_rep or self._phase != "bottom":
             return None
 
         # Cooldown between fault reports

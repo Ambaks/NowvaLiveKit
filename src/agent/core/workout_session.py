@@ -347,6 +347,55 @@ class WorkoutSession:
         }
 
     @classmethod
+    def create_quick_session(
+        cls,
+        user_id: str,
+        exercise_name: str,
+        sets: int,
+        reps: int,
+        weight: float = 0.0,
+        rest_seconds: int = 120,
+    ) -> 'WorkoutSession':
+        set_list = [
+            SetProgress(
+                set_id=None,
+                set_number=i + 1,
+                target_reps=reps,
+                target_weight=weight,
+                intensity_percent=None,
+                rpe_target=None,
+                rest_seconds=rest_seconds,
+                velocity_threshold=None,
+            )
+            for i in range(sets)
+        ]
+
+        exercise = ExerciseProgress(
+            workout_exercise_id=None,
+            exercise_id=None,
+            exercise_name=exercise_name,
+            muscle_group=None,
+            category="Strength",
+            order_number=1,
+            notes=None,
+            sets=set_list,
+        )
+
+        session = cls(
+            user_id=user_id,
+            schedule_id=None,
+            workout_data={
+                "workout_id": None,
+                "workout_name": f"Quick {exercise_name}",
+                "description": f"Ad-hoc {exercise_name} session",
+                "exercises": [],
+            },
+            is_quick_exercise=True,
+        )
+        session.exercises = [exercise]
+        return session
+
+    @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'WorkoutSession':
         """
         Deserialize a session from a dictionary (e.g., loaded from AgentState).

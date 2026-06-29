@@ -15,6 +15,7 @@ import signal
 import sys
 import os
 import time
+import webbrowser
 from pathlib import Path
 
 # Add src/ to path
@@ -42,6 +43,7 @@ from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
 from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen, DemoChoreographer
+from biomechanics.viz.demo_ws_bridge import DemoWSBridge, DEMO_WS_PORT
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
 from biomechanics.viz.html_dashboard import generate_session_dashboard
@@ -180,7 +182,6 @@ def _serialize_diagnosis(diagnosis_result, score_summary) -> tuple[dict, dict]:
             "trunk_control": round(sum(r.trunk_control_score for r in per_rep) / n, 3) if n else 0,
             "knee_tracking": round(sum(r.knee_tracking_score for r in per_rep) / n, 3) if n else 0,
             "symmetry": round(sum(r.symmetry_score for r in per_rep) / n, 3) if n else 0,
-            "ankle": round(sum(r.ankle_utilization_score for r in per_rep) / n, 3) if n else 0,
         },
         "best_rep": score_summary.best_rep_number,
         "worst_rep": score_summary.worst_rep_number,
@@ -408,59 +409,66 @@ def run_biomechanics_pipeline(
 
         def _run_demo_phase(demo_data) -> bool:
             """Drive the choreographed demo from agent messages. Returns False if user quit."""
-            choreographer = DemoChoreographer()
-            live_skeleton_px = None
+            bridge = DemoWSBridge()
+            bridge.start()
+            time.sleep(0.3)
+            webbrowser.open(f"http://localhost:{DEMO_WS_PORT}")
+            time.sleep(1.0)
+            bridge.send_init(demo_data)
+
             phase_start = time.time()
             last_message_time = phase_start
             finishing = False
+            demo_started = False
 
-            while True:
-                result = pipeline.process_frame()
+            try:
+                while True:
+                    result = pipeline.process_frame()
 
-                incoming = _poll_incoming_message(ipc_client)
-                if incoming is not None:
-                    last_message_time = time.time()
-                    msg_type = incoming.get("type")
-                    if msg_type == "demo_start":
-                        choreographer.start(demo_data, live_skeleton_px)
-                    elif msg_type == "demo_cue":
-                        choreographer.advance_cue(int(incoming.get("cue_index", 0)))
-                    elif msg_type == "demo_end":
-                        choreographer.finish()
-                        finishing = True
+                    incoming = _poll_incoming_message(ipc_client)
+                    if incoming is not None:
+                        last_message_time = time.time()
+                        msg_type = incoming.get("type")
+                        if msg_type == "demo_start":
+                            bridge.send_event({"type": "demo_start"})
+                            demo_started = True
+                        elif msg_type == "demo_cue":
+                            bridge.send_event({
+                                "type": "demo_cue",
+                                "cue_index": int(incoming.get("cue_index", 0)),
+                            })
+                        elif msg_type == "demo_end":
+                            bridge.send_event({"type": "demo_end"})
+                            finishing = True
 
-                now = time.time()
-                if not choreographer.is_active:
-                    if finishing:
+                    now = time.time()
+                    if finishing and bridge.wait_done(timeout=0):
                         return True
-                    if now - phase_start > DEMO_START_TIMEOUT_S:
+                    if not demo_started and now - phase_start > DEMO_START_TIMEOUT_S:
                         print("  [DEMO] No demo_start received — skipping demo")
                         return True
-                elif not finishing and now - last_message_time > DEMO_INACTIVITY_TIMEOUT_S:
-                    print("  [DEMO] Agent went silent mid-demo — ending demo")
-                    choreographer.finish()
-                    finishing = True
+                    if demo_started and not finishing and now - last_message_time > DEMO_INACTIVITY_TIMEOUT_S:
+                        print("  [DEMO] Agent went silent mid-demo — ending demo")
+                        bridge.send_event({"type": "demo_end"})
+                        finishing = True
 
-                frame = pipeline.last_frame
-                if frame is not None:
-                    if choreographer.is_active:
-                        display = choreographer.render(frame)
-                    else:
-                        if result.skeleton_2d is not None:
-                            live_skeleton_px = _skeleton_pixels(result.skeleton_2d)
+                    frame = pipeline.last_frame
+                    if frame is not None:
                         display = frame.copy()
                         if result.skeleton_2d is not None:
                             draw_skeleton(display, result.skeleton_2d)
-                    fps_counter.update()
-                    cv2.imshow(window_name, display)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        print("\nDemo stopped early by user")
-                        return False
+                        fps_counter.update()
+                        cv2.imshow(window_name, display)
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            print("\nDemo stopped early by user")
+                            return False
 
-                total_ms = sum(result.latency_ms.values())
-                target_ms = 1000.0 / config.target_fps
-                if total_ms < target_ms:
-                    time.sleep((target_ms - total_ms) / 1000.0)
+                    total_ms = sum(result.latency_ms.values())
+                    target_ms = 1000.0 / config.target_fps
+                    if total_ms < target_ms:
+                        time.sleep((target_ms - total_ms) / 1000.0)
+            finally:
+                bridge.stop()
 
         # Assessment loop: collect reps, diagnose, repeat until no immediate causes
         assessment_passed = False
@@ -489,13 +497,17 @@ def run_biomechanics_pipeline(
                         if result.rep_data is not None:
                             bottom_kpts = None
                             bottom_angles = None
+                            standing_kpts = None
                             if hasattr(pipeline, 'consume_bottom_frame'):
                                 bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
+                            if hasattr(pipeline, 'consume_standing_frame'):
+                                standing_kpts = pipeline.consume_standing_frame()
 
                             session_tracker.on_rep_complete(
                                 result.rep_data,
                                 bottom_kpts=bottom_kpts,
                                 bottom_angles=bottom_angles,
+                                standing_kpts=standing_kpts,
                             )
                             assessment_reps_done += 1
 
@@ -990,10 +1002,12 @@ def run_biomechanics_pipeline(
 
                 if result.rep_data:
                     bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
+                    standing_kpts = pipeline.consume_standing_frame()
                     session_tracker.on_rep_complete(
                         result.rep_data,
                         bottom_kpts=bottom_kpts,
                         bottom_angles=bottom_angles,
+                        standing_kpts=standing_kpts,
                     )
 
                 if session_tracker.check_set_timeout(time.time()):

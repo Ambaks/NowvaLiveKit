@@ -10,7 +10,7 @@ from livekit.agents import function_tool, AgentTask
 from agent.agents.shared.helpers import check_calibration, start_calibration_mode
 from agent.agents.calibration_agent import CalibrationAgent
 from agent.agents.workout_agent import WorkoutAgent
-from agent.core.workout_session import WorkoutSession, ExerciseProgress, SetProgress
+from agent.core.workout_session import WorkoutSession
 
 
 logger = logging.getLogger(__name__)
@@ -83,43 +83,14 @@ class CollectExerciseInfoTask(AgentTask):
             })
             logger.info(f"[CALIBRATION] No calibration for {exercise_name} — entering calibration mode")
 
-        set_list = [
-            SetProgress(
-                set_id=None,
-                set_number=i + 1,
-                target_reps=reps,
-                target_weight=weight,
-                intensity_percent=None,
-                rpe_target=None,
-                rest_seconds=rest_seconds,
-                velocity_threshold=None,
-            )
-            for i in range(sets)
-        ]
-
-        exercise = ExerciseProgress(
-            workout_exercise_id=None,
-            exercise_id=None,
-            exercise_name=exercise_name,
-            muscle_group=None,
-            category="Strength",
-            order_number=1,
-            notes=None,
-            sets=set_list,
-        )
-
-        session = WorkoutSession(
+        session = WorkoutSession.create_quick_session(
             user_id=self.user_id,
-            schedule_id=None,
-            workout_data={
-                "workout_id": None,
-                "workout_name": f"Quick {exercise_name}",
-                "description": f"Ad-hoc {exercise_name} session",
-                "exercises": [],
-            },
-            is_quick_exercise=True,
+            exercise_name=exercise_name,
+            sets=sets,
+            reps=reps,
+            weight=weight,
+            rest_seconds=rest_seconds,
         )
-        session.exercises = [exercise]
 
         self.state.set("workout.current_session", session.to_dict())
         self.state.set("workout.exercise_name", exercise_name)

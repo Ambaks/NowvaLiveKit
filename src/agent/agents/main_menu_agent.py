@@ -8,7 +8,7 @@ import re
 from livekit.agents import RunContext
 from livekit.agents.llm import function_tool
 
-from agent.agents.StartQuickExerciseAgent import CollectExerciseInfoTask
+from agent.agents.quickExerciseAgent import CollectExerciseInfoTask
 from agent.agents.prompts import get_main_menu_prompt
 from agent.agents.shared.base_agent import BaseNovaAgent
 from agent.agents.shared.helpers import check_calibration, start_calibration_mode

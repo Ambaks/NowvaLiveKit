@@ -287,7 +287,9 @@ class TestKneeValgusRule:
 
     @pytest.fixture
     def knee_valgus_rule(self):
-        return KneeValgusRule()
+        rule = KneeValgusRule()
+        rule.set_frame_context(phase="bottom")
+        return rule
 
     @pytest.fixture
     def history(self):
@@ -562,7 +564,7 @@ class TestRuleEngine:
             hip_flexion_l=80.0,  # Asymmetry
             hip_flexion_r=65.0,
         )
-        faults = engine.evaluate(angles, in_rep=True)
+        faults = engine.evaluate(angles, in_rep=True, phase="bottom")
 
         fault_types = {f.fault_type for f in faults}
         # Should detect at least forward lean and one other

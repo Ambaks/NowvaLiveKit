@@ -385,6 +385,7 @@ class KeypointCorrector:
         diagnosis: DiagnosisResult,
         anthro: dict | None = None,
         rom: dict | None = None,
+        bone_lengths: tuple[float, float, float, float] | None = None,
     ) -> list[list[float]] | None:
         """Apply tier-1 corrections. Returns corrected kpts or None if no fixes needed."""
         tier1_causes = {
@@ -397,10 +398,13 @@ class KeypointCorrector:
 
         kpts = np.array(observed_kpts, dtype=float)
 
-        original_thigh_l = np.linalg.norm(kpts[KNEE_L] - kpts[HIP_L])
-        original_shin_l = np.linalg.norm(kpts[ANKLE_L] - kpts[KNEE_L])
-        original_thigh_r = np.linalg.norm(kpts[KNEE_R] - kpts[HIP_R])
-        original_shin_r = np.linalg.norm(kpts[ANKLE_R] - kpts[KNEE_R])
+        if bone_lengths is not None:
+            original_thigh_l, original_shin_l, original_thigh_r, original_shin_r = bone_lengths
+        else:
+            original_thigh_l = np.linalg.norm(kpts[KNEE_L] - kpts[HIP_L])
+            original_shin_l = np.linalg.norm(kpts[ANKLE_L] - kpts[KNEE_L])
+            original_thigh_r = np.linalg.norm(kpts[KNEE_R] - kpts[HIP_R])
+            original_shin_r = np.linalg.norm(kpts[ANKLE_R] - kpts[KNEE_R])
 
         # Stance width + toe-out via delta-FK (same as sandbox sliders)
         has_stance = "narrow_stance" in tier1_causes
@@ -685,8 +689,7 @@ class KeypointCorrector:
 
             min_ank_y = min(trial[ANKLE_L][1], trial[ANKLE_R][1])
             if min_ank_y < 0:
-                for idx in range(HIP_L, FOOT_R + 1):
-                    trial[idx][1] -= min_ank_y
+                trial[:, 1] -= min_ank_y
 
             for _ in range(8):
                 hy = (trial[HIP_L][1] + trial[HIP_R][1]) / 2.0
@@ -792,8 +795,7 @@ class KeypointCorrector:
         """Ensure ankles don't go below ground (Y=0 in viewer coords)."""
         min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
         if min_ankle_y < 0:
-            for idx in range(HIP_L, FOOT_R + 1):
-                kpts[idx][1] -= min_ankle_y
+            kpts[:, 1] -= min_ankle_y
 
     def _enforce_symmetry(
         self,
@@ -885,8 +887,7 @@ class KeypointCorrector:
         # Reground
         min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
         if min_ankle_y < 0:
-            for idx in range(HIP_L, FOOT_R + 1):
-                kpts[idx][1] -= min_ankle_y
+            kpts[:, 1] -= min_ankle_y
 
 
 def build_morph_frames(

@@ -84,9 +84,9 @@ class ForwardLeanConfig(BaseModel):
 
 class KneeValgusConfig(BaseModel):
     """Knee valgus fault thresholds."""
-    mild: float = 8.0
-    moderate: float = 13.0
-    severe: float = 18.0
+    mild: float = 12.0
+    moderate: float = 17.0
+    severe: float = 24.0
 
 
 class FaultsConfig(BaseModel):

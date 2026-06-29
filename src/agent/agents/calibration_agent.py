@@ -19,7 +19,7 @@ before the real workout starts.
 # How Calibration Works
 The system runs two phases automatically:
 
-1. **Form Assessment** (2 reps): The user does 2 bodyweight reps. The system
+1. **Form Assessment** (1 rep): The user does 1 bodyweight rep. The system
    analyzes form and either asks for corrections or moves on.
 2. **Calibration** (5 reps): The user does 5 deep bodyweight reps to set
    personalized thresholds.

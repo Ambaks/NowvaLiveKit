@@ -253,6 +253,10 @@ class BiomechanicsPipeline:
         self._bottom_kpts: Optional[List[List[float]]] = None
         self._bottom_angles: Optional[dict] = None
 
+        # Standing-frame buffer: last skeleton before in_rep becomes True.
+        self._standing_kpts: Optional[List[List[float]]] = None
+        self._standing_captured: bool = False
+
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
 
@@ -315,6 +319,8 @@ class BiomechanicsPipeline:
         self._bottom_max_knee_flex = 0.0
         self._bottom_kpts = None
         self._bottom_angles = None
+        self._standing_kpts = None
+        self._standing_captured = False
 
         if self._preik_enabled:
             self._confidence_blender.reset()
@@ -333,6 +339,12 @@ class BiomechanicsPipeline:
         self._bottom_kpts = None
         self._bottom_angles = None
         return kpts, angles
+
+    def consume_standing_frame(self) -> Optional[List[List[float]]]:
+        """Return the standing keypoints captured just before the rep started."""
+        kpts = self._standing_kpts
+        self._standing_captured = False
+        return kpts
 
     def _capture_loop(self) -> None:
         """Continuously read frames from the camera in a background thread."""
@@ -479,6 +491,13 @@ class BiomechanicsPipeline:
 
         # --- Compute rep signal (exercise-specific, from profile) ---
         rep_signal = self._profile.get_rep_signal(skeleton_3d, angles)
+
+        # --- Buffer standing frame: last skeleton before rep starts ---
+        if not self._rep_counter.in_rep:
+            self._standing_kpts = skeleton_3d.to_numpy().tolist()
+            self._standing_captured = False
+        elif not self._standing_captured:
+            self._standing_captured = True
 
         # --- Buffer bottom-of-rep frame for diagnosis engine ---
         if self._rep_counter.in_rep:

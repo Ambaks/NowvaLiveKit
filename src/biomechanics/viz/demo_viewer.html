@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nowva Coaching Demo</title>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #0a0a1a; color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden; height: 100vh; display: flex;
+    justify-content: center; align-items: center;
+}
+#scene-container { width: 100%; height: 100%; position: relative; }
+#three-canvas { display: block; width: 100%; height: 100%; }
+#caption {
+    position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%);
+    font-size: 22px; font-weight: 600; color: #fff;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+    pointer-events: none; text-align: center;
+    opacity: 0; transition: opacity 0.3s;
+}
+#caption.visible { opacity: 1; }
+#status {
+    position: absolute; top: 16px; left: 16px;
+    font-size: 13px; color: #666;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    pointer-events: none;
+}
+#camera-info {
+    position: absolute; top: 16px; right: 16px;
+    font-size: 12px; color: #8a8aaa; line-height: 1.6;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    pointer-events: none; text-align: right;
+    user-select: all;
+}
+</style>
+</head>
+<body>
+<div id="scene-container">
+    <canvas id="three-canvas"></canvas>
+    <div id="caption"></div>
+    <div id="status">connecting…</div>
+    <div id="camera-info"></div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const BONE_CONNECTIONS = [
+    [0,1],[0,2],[1,3],[2,4],
+    [0,5],[0,6],
+    [5,6],[5,7],[7,9],[6,8],[8,10],
+    [5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],
+    [15,17],[16,18],
+];
+// ======== THREE.JS SETUP ========
+const canvas = document.getElementById('three-canvas');
+const container = document.getElementById('scene-container');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x0a0a1a);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 50);
+camera.position.set(2.0, 1.0, 2.0);
+camera.lookAt(0, 0.7, 0);
+const orbitCtrl = new OrbitControls(camera, canvas);
+orbitCtrl.target.set(0, 0.7, 0);
+orbitCtrl.enableDamping = true;
+orbitCtrl.dampingFactor = 0.08;
+scene.add(new THREE.AmbientLight(0x404060, 0.6));
+const dl = new THREE.DirectionalLight(0xffffff, 0.8);
+dl.position.set(3, 5, 3);
+scene.add(dl);
+scene.add(new THREE.GridHelper(4, 20, 0x222244, 0x1a1a30));
+
+// ======== SKELETON MESHES ========
+const matJointNormal = new THREE.MeshPhongMaterial({ color: 0x40e0a0, emissive: 0x103020, transparent: true });
+const matJointHighlight = new THREE.MeshPhongMaterial({ color: 0x00b4ff, emissive: 0x003050, transparent: true });
+const matBoneNormal = new THREE.MeshPhongMaterial({ color: 0x3090d0, emissive: 0x102030, transparent: true });
+const matBoneHighlight = new THREE.MeshPhongMaterial({ color: 0x00b4ff, emissive: 0x002040, transparent: true });
+
+const jointGeo = new THREE.SphereGeometry(0.018, 12, 8);
+const jointHighGeo = new THREE.SphereGeometry(0.024, 12, 8);
+const joints = [];
+for (let i = 0; i < 19; i++) {
+    const m = new THREE.Mesh(jointGeo, matJointNormal.clone());
+    m.visible = false;
+    scene.add(m);
+    joints.push(m);
+}
+
+const bones = [];
+for (const [a, b] of BONE_CONNECTIONS) {
+    const g = new THREE.CylinderGeometry(0.006, 0.006, 1, 6);
+    g.translate(0, 0.5, 0);
+    const m = new THREE.Mesh(g, matBoneNormal.clone());
+    m.visible = false;
+    scene.add(m);
+    bones.push({ mesh: m, a, b });
+}
+
+// ======== PER-FAULT CAMERA ANGLES ========
+const DEFAULT_CAMERA = {
+    pos: new THREE.Vector3(2.0, 1.0, 2.0),
+    target: new THREE.Vector3(0, 0.7, 0),
+};
+const FAULT_CAMERAS = {
+    narrow_stance:        { pos: new THREE.Vector3(-2.82, 0.38, -0.21), target: new THREE.Vector3(0.00, 0.70, 0.00) },
+    narrow_foot_angle:    null,
+    knee_track_cue:       null,
+    weight_shift_cue:     null,
+    depth_cue_unfamiliar: null,
+};
+const CAMERA_LERP_SECONDS = 1.0;
+
+let cameraLerping = false;
+let cameraLerpStart = 0;
+let cameraFromPos = new THREE.Vector3();
+let cameraFromTarget = new THREE.Vector3();
+let cameraToPos = new THREE.Vector3();
+let cameraToTarget = new THREE.Vector3();
+
+function lerpCameraTo(camCfg) {
+    if (!camCfg) return;
+    cameraFromPos.copy(camera.position);
+    cameraFromTarget.copy(orbitCtrl.target);
+    cameraToPos.copy(camCfg.pos);
+    cameraToTarget.copy(camCfg.target);
+    cameraLerpStart = performance.now() / 1000;
+    cameraLerping = true;
+}
+
+function tickCameraLerp() {
+    if (!cameraLerping) return;
+    const elapsed = performance.now() / 1000 - cameraLerpStart;
+    const t = easeInOut(Math.min(elapsed / CAMERA_LERP_SECONDS, 1));
+    camera.position.lerpVectors(cameraFromPos, cameraToPos, t);
+    orbitCtrl.target.lerpVectors(cameraFromTarget, cameraToTarget, t);
+    if (t >= 1) cameraLerping = false;
+}
+
+function cameraForCue(causeId) {
+    const cfg = FAULT_CAMERAS[causeId];
+    return cfg || DEFAULT_CAMERA;
+}
+
+// ======== CHOREOGRAPHER STATE MACHINE ========
+const IDLE = 'idle';
+const MORPH_IN = 'morph_in';
+const CUE_LOOP = 'cue_loop';
+const SETTLE = 'settle';
+const FINAL_HOLD = 'final_hold';
+const MORPH_OUT = 'morph_out';
+
+let timing = {
+    morphIn: 0.8,
+    morphOut: 0.8,
+    yoyoTravel: 1.2,
+    yoyoHold: 0.25,
+    settle: 0.4,
+    finalHold: 1.0,
+};
+
+let state = IDLE;
+let stateStart = 0;
+let poseStack = null;
+let cues = [];
+let highlightMap = {};
+let cueIndex = 0;
+let pendingCue = null;
+let settleFrom = null;
+let settleTo = null;
+let afterSettleCue = null;
+let currentPoints = new Float64Array(19 * 3);
+let pointsBuffer = new Float64Array(19 * 3);
+
+const captionEl = document.getElementById('caption');
+const statusEl = document.getElementById('status');
+const cameraInfoEl = document.getElementById('camera-info');
+
+function easeInOut(t) {
+    t = Math.min(1, Math.max(0, t));
+    return t * t * (3 - 2 * t);
+}
+
+function yoyoWeight(elapsed, travel, hold) {
+    const period = 2 * (travel + hold);
+    let phase = elapsed % period;
+    if (phase < hold) return 0;
+    phase -= hold;
+    if (phase < travel) return easeInOut(phase / travel);
+    phase -= travel;
+    if (phase < hold) return 1;
+    return 1 - easeInOut((phase - hold) / travel);
+}
+
+function getPose(stackIndex) {
+    const n = 19 * 3;
+    const offset = stackIndex * n;
+    return poseStack.slice(offset, offset + n);
+}
+
+function lerpPose(a, b, w, out) {
+    for (let i = 0; i < a.length; i++) {
+        out[i] = a[i] + (b[i] - a[i]) * w;
+    }
+    return out;
+}
+
+function setCaption(text) {
+    if (text) {
+        captionEl.textContent = text;
+        captionEl.classList.add('visible');
+    } else {
+        captionEl.classList.remove('visible');
+    }
+}
+
+function beginSettle(target, nextCue) {
+    settleFrom = new Float64Array(currentPoints);
+    settleTo = target;
+    afterSettleCue = nextCue;
+    state = SETTLE;
+    stateStart = performance.now() / 1000;
+}
+
+function onStart() {
+    if (!poseStack) return;
+    pendingCue = null;
+    cueIndex = 0;
+    state = MORPH_IN;
+    stateStart = performance.now() / 1000;
+    currentPoints.set(getPose(0));
+    setCaption(null);
+    showSkeleton();
+    if (cues.length > 0) {
+        lerpCameraTo(cameraForCue(cues[0].cause_id));
+    }
+}
+
+function onAdvanceCue(idx) {
+    if (!poseStack || idx >= cues.length) return;
+    const now = performance.now() / 1000;
+    const morphing = state === MORPH_IN && (now - stateStart) < timing.morphIn;
+    if (morphing) {
+        pendingCue = idx;
+        return;
+    }
+    beginSettle(getPose(idx), idx);
+    lerpCameraTo(cameraForCue(cues[idx].cause_id));
+}
+
+function onFinish() {
+    if (!poseStack) {
+        state = IDLE;
+        return;
+    }
+    const lastIdx = Math.floor(poseStack.length / (19 * 3)) - 1;
+    beginSettle(getPose(lastIdx), null);
+    setCaption(null);
+}
+
+function showSkeleton() {
+    for (const j of joints) j.visible = true;
+    for (const b of bones) b.mesh.visible = true;
+}
+
+function hideSkeleton() {
+    for (const j of joints) j.visible = false;
+    for (const b of bones) b.mesh.visible = false;
+}
+
+function setSkeletonOpacity(opacity) {
+    for (const j of joints) j.material.opacity = opacity;
+    for (const b of bones) b.mesh.material.opacity = opacity;
+}
+
+function updateSkeletonFromPoints(pts, highlight) {
+    const hl = new Set(highlight || []);
+
+    for (let i = 0; i < 19; i++) {
+        joints[i].position.set(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]);
+        joints[i].visible = true;
+
+        const isHl = hl.has(i);
+        const targetMat = isHl ? matJointHighlight : matJointNormal;
+        if (joints[i].userData.hl !== isHl) {
+            joints[i].geometry = isHl ? jointHighGeo : jointGeo;
+            joints[i].material.color.copy(targetMat.color);
+            joints[i].material.emissive.copy(targetMat.emissive);
+            joints[i].userData.hl = isHl;
+        }
+    }
+
+    for (let bi = 0; bi < BONE_CONNECTIONS.length; bi++) {
+        const [ai, bIdx] = BONE_CONNECTIONS[bi];
+        const pa = joints[ai].position;
+        const pb = joints[bIdx].position;
+        const dir = new THREE.Vector3().subVectors(pb, pa);
+        const len = dir.length();
+        dir.normalize();
+        bones[bi].mesh.position.copy(pa);
+        bones[bi].mesh.scale.set(1, len, 1);
+        bones[bi].mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        bones[bi].mesh.visible = true;
+
+        const isHl = hl.has(ai) && hl.has(bIdx);
+        const targetMat = isHl ? matBoneHighlight : matBoneNormal;
+        if (bones[bi].mesh.userData.hl !== isHl) {
+            bones[bi].mesh.material.color.copy(targetMat.color);
+            bones[bi].mesh.material.emissive.copy(targetMat.emissive);
+            bones[bi].mesh.userData.hl = isHl;
+        }
+    }
+}
+
+function tick(now) {
+    if (state === IDLE || !poseStack) return;
+    const nowS = now / 1000;
+    const elapsed = nowS - stateStart;
+
+    if (state === SETTLE && elapsed >= timing.settle) {
+        if (afterSettleCue !== null) {
+            cueIndex = afterSettleCue;
+            state = CUE_LOOP;
+        } else {
+            state = FINAL_HOLD;
+        }
+        stateStart = nowS;
+        tick(now);
+        return;
+    }
+
+    if (state === FINAL_HOLD && elapsed >= timing.finalHold) {
+        state = MORPH_OUT;
+        stateStart = nowS;
+        tick(now);
+        return;
+    }
+
+    if (state === MORPH_OUT && elapsed >= timing.morphOut) {
+        state = IDLE;
+        hideSkeleton();
+        setCaption(null);
+        sendDone();
+        return;
+    }
+
+    if (state === MORPH_IN && pendingCue !== null && elapsed >= timing.morphIn) {
+        const idx = pendingCue;
+        pendingCue = null;
+        beginSettle(getPose(idx), idx);
+        tick(now);
+        return;
+    }
+
+    let highlight = [];
+
+    if (state === MORPH_IN) {
+        const w = easeInOut(Math.min(elapsed / timing.morphIn, 1));
+        setSkeletonOpacity(w);
+        currentPoints.set(getPose(0));
+        updateSkeletonFromPoints(currentPoints, []);
+    } else if (state === MORPH_OUT) {
+        const w = 1 - easeInOut(Math.min(elapsed / timing.morphOut, 1));
+        setSkeletonOpacity(w);
+        const lastIdx = Math.floor(poseStack.length / (19 * 3)) - 1;
+        currentPoints.set(getPose(lastIdx));
+        updateSkeletonFromPoints(currentPoints, []);
+    } else {
+        setSkeletonOpacity(1);
+
+        if (state === CUE_LOOP) {
+            const cue = cues[cueIndex];
+            const w = yoyoWeight(elapsed, timing.yoyoTravel, timing.yoyoHold);
+            lerpPose(getPose(cueIndex), getPose(cueIndex + 1), w, currentPoints);
+            highlight = highlightMap[cue.cause_id] || [];
+            setCaption(cue.magnitude_text);
+        } else if (state === SETTLE) {
+            const w = easeInOut(elapsed / timing.settle);
+            lerpPose(settleFrom, settleTo, w, currentPoints);
+            setCaption(null);
+        } else if (state === FINAL_HOLD) {
+            const lastIdx = Math.floor(poseStack.length / (19 * 3)) - 1;
+            currentPoints.set(getPose(lastIdx));
+            setCaption(null);
+        }
+
+        updateSkeletonFromPoints(currentPoints, highlight);
+    }
+}
+
+// ======== WEBSOCKET ========
+let ws = null;
+
+function sendDone() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'done' }));
+    }
+}
+
+function connect() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+    ws.onopen = () => {
+        statusEl.textContent = 'connected — waiting for demo';
+    };
+
+    ws.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
+
+        if (msg.type === 'init') {
+            const stack = msg.pose_stack;
+            const numPoses = stack.length;
+            poseStack = new Float64Array(numPoses * 19 * 3);
+            for (let p = 0; p < numPoses; p++) {
+                for (let j = 0; j < 19; j++) {
+                    poseStack[p * 19 * 3 + j * 3 + 0] = stack[p][j][0];
+                    poseStack[p * 19 * 3 + j * 3 + 1] = stack[p][j][1];
+                    poseStack[p * 19 * 3 + j * 3 + 2] = stack[p][j][2];
+                }
+            }
+            cues = msg.cues || [];
+            highlightMap = msg.highlight_map || {};
+            if (msg.timing) {
+                timing = { ...timing, ...msg.timing };
+            }
+            statusEl.textContent = `loaded ${cues.length} cue(s) — waiting for start`;
+        } else if (msg.type === 'demo_start') {
+            onStart();
+            statusEl.textContent = 'demo playing';
+        } else if (msg.type === 'demo_cue') {
+            onAdvanceCue(msg.cue_index);
+        } else if (msg.type === 'demo_end') {
+            onFinish();
+        }
+    };
+
+    ws.onclose = () => {
+        statusEl.textContent = 'disconnected';
+        setTimeout(connect, 2000);
+    };
+
+    ws.onerror = () => {
+        ws.close();
+    };
+}
+
+connect();
+
+// ======== RESIZE + ANIMATE ========
+function resize() {
+    const w = container.clientWidth, h = container.clientHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+function updateCameraInfo() {
+    const p = camera.position;
+    const t = orbitCtrl.target;
+    cameraInfoEl.innerHTML =
+        `pos: (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})<br>` +
+        `target: (${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)})`;
+}
+
+function animate(now) {
+    requestAnimationFrame(animate);
+    tick(now);
+    tickCameraLerp();
+    orbitCtrl.update();
+    updateCameraInfo();
+    renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

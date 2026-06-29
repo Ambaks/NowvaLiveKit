@@ -75,6 +75,7 @@ class SessionTracker:
         rep: RepData,
         bottom_kpts: Optional[List] = None,
         bottom_angles: Optional[Dict[str, float]] = None,
+        standing_kpts: Optional[List] = None,
     ) -> None:
         """
         Process a completed rep. Detects set boundaries and forwards
@@ -98,7 +99,9 @@ class SessionTracker:
         )
 
         if self._athlete_params is not None and bottom_kpts is not None and bottom_angles is not None:
-            frame = build_frame_from_live_pipeline(bottom_kpts, bottom_angles)
+            frame = build_frame_from_live_pipeline(
+                bottom_kpts, bottom_angles, standing_kpts=standing_kpts,
+            )
             summary = build_rep_kinematic_summary(frame, self._athlete_params, rep.rep_number)
             self._rep_kinematic_buffer.append(summary)
             self._bottom_frame_buffer.append((rep.rep_number, frame["kpts"]))

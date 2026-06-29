@@ -8,7 +8,10 @@ from dataclasses import dataclass
 import numpy as np
 from pydantic import BaseModel
 
-from .keypoint_corrector import KeypointCorrector
+from .keypoint_corrector import (
+    KeypointCorrector,
+    HIP_L, HIP_R, KNEE_L, KNEE_R, ANKLE_L, ANKLE_R,
+)
 from .types import DiagnosisResult, HypothesizedCause
 
 CORRECTOR_CAUSE_ORDER: tuple[str, ...] = (
@@ -100,29 +103,67 @@ def summarize_cue_magnitude(cause_id: str, parameter_delta: dict | None) -> str:
     return text if text is not None else GENERIC_MAGNITUDE_TEXT
 
 
+def _prepare_observed_kpts(kpts: list[list[float]]) -> list[list[float]]:
+    """Ground, center, and flatten feet — match visualize_video_squats preprocessing."""
+    arr = np.array(kpts, dtype=np.float64)
+    # Feet parallel to ground: project foot_index Y to ankle Y
+    arr[17, 1] = arr[15, 1]
+    arr[18, 1] = arr[16, 1]
+    # Ground feet to Y=0
+    ankle_y = min(arr[15, 1], arr[16, 1])
+    arr[:, 1] -= ankle_y
+    # Center hips at origin
+    hip_mid_x = (arr[11, 0] + arr[12, 0]) / 2
+    hip_mid_z = (arr[11, 2] + arr[12, 2]) / 2
+    arr[:, 0] -= hip_mid_x
+    arr[:, 2] -= hip_mid_z
+    return arr.tolist()
+
+
 def build_pose_stack(
     observed_kpts: list[list[float]],
     diagnosis: DiagnosisResult,
     anthro: dict | None = None,
     rom: dict | None = None,
 ) -> np.ndarray | None:
-    """Per-prefix corrected poses: stack[k] has the first k corrections applied via full FK."""
+    """Incremental corrected poses: stack[k] applies cause k on top of stack[k-1]."""
     ordered = order_demo_causes(diagnosis)
     if not ordered:
         return None
 
+    prepared = _prepare_observed_kpts(observed_kpts)
+
+    prep_arr = np.asarray(prepared, dtype=np.float64)
+    bone_lengths = (
+        float(np.linalg.norm(prep_arr[KNEE_L] - prep_arr[HIP_L])),
+        float(np.linalg.norm(prep_arr[ANKLE_L] - prep_arr[KNEE_L])),
+        float(np.linalg.norm(prep_arr[KNEE_R] - prep_arr[HIP_R])),
+        float(np.linalg.norm(prep_arr[ANKLE_R] - prep_arr[KNEE_R])),
+    )
+
     corrector = KeypointCorrector()
     pose_stack = np.empty((len(ordered) + 1, 19, 3), dtype=np.float32)
-    pose_stack[0] = np.asarray(observed_kpts, dtype=np.float32)
+    pose_stack[0] = np.asarray(prepared, dtype=np.float32)
 
-    for prefix_len in range(1, len(ordered) + 1):
+    current = prepared
+    for i, cause in enumerate(ordered):
         filtered = diagnosis.model_copy(
-            update={"immediate_causes": ordered[:prefix_len]}
+            update={"immediate_causes": [cause]}
         )
-        corrected = corrector.correct(observed_kpts, filtered, anthro=anthro, rom=rom)
+        corrected = corrector.correct(
+            current, filtered, anthro=anthro, rom=rom, bone_lengths=bone_lengths,
+        )
         if corrected is None:
             return None
-        pose_stack[prefix_len] = np.asarray(corrected, dtype=np.float32)
+        pose_stack[i + 1] = np.asarray(corrected, dtype=np.float32)
+        current = corrected
+
+    # Final pose: single all-causes call matching VVS --diagnose exactly
+    full_corrected = corrector.correct(
+        prepared, diagnosis, anthro=anthro, rom=rom, bone_lengths=bone_lengths,
+    )
+    if full_corrected is not None:
+        pose_stack[-1] = np.asarray(full_corrected, dtype=np.float32)
 
     return pose_stack
 
