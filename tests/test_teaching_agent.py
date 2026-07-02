@@ -1,12 +1,9 @@
 """
-Tests for TeachingAgent state machine logic.
+Tests for TeachingAgent assessment flow.
 
-Covers: clean/fault rep counting, handoff trigger, fault deduplication,
-phase gating, height threshold, fault list clearing, and independent
-ascent/descent fault tracking.
-
-All tests mock _say() and _truncate_context_for_handoff() to avoid
-requiring a live LiveKit AgentSession.
+Covers: assessment result handling (pass/fail/demo), handoff to
+CalibrationAgent, correction prompt building, height threshold,
+on_exit cleanup, and assessment logging integration.
 """
 
 import asyncio
@@ -17,9 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from agent.agents.teaching_agent import TeachingAgent, _TALL_THRESHOLD_CM
-from agent.agents.teaching_phases import TeachingPhase
-from biomechanics.utils.types import RepPhase
-from agent.services.teaching_cues import CLEAN_REP_CUE_KEYS
 
 
 # =============================================================================
@@ -28,7 +22,6 @@ from agent.services.teaching_cues import CLEAN_REP_CUE_KEYS
 
 
 def _make_state(height_cm=170):
-    """Create a mock AgentState with a user dict."""
     state = MagicMock()
     state.get_user.return_value = {
         "id": "test-user",
@@ -39,263 +32,46 @@ def _make_state(height_cm=170):
 
 
 def _make_userdata():
-    """Create a mock userdata namespace with a stubbed AudioCueService."""
     ud = MagicMock()
     ud.audio_cue_service = MagicMock()
     ud.audio_cue_service.play_cue = AsyncMock()
     ud.audio_cue_service.cache_cues = AsyncMock()
+    # No coaching_service by default — TeachingAgent creates it in on_enter
+    ud.coaching_service = None
     return ud
 
 
 def _make_agent(height_cm=170, exercise="squat"):
-    """Construct a TeachingAgent with all external deps mocked.
-
-    Patches _say and _truncate_context_for_handoff so tests never
-    reach into the real LiveKit session.
-    """
     state = _make_state(height_cm)
     userdata = _make_userdata()
     agent = TeachingAgent(state=state, userdata=userdata, exercise=exercise)
 
-    # Replace _say with an async no-op that records calls.
     agent._say = AsyncMock()
-
-    # Replace _truncate_context_for_handoff with an async no-op.
     agent._truncate_context_for_handoff = AsyncMock()
 
-    # Mock the session property for update_agent (handoff).
     mock_session = MagicMock()
     mock_session.update_agent = MagicMock()
-    # Patch the property on the instance by setting _session and
-    # monkey-patching the class-level property to return it.
     agent._mock_session = mock_session
 
     return agent
 
 
-def _event(squat_phase="descending", knee_fault=False, chest_fault=False):
-    """Build a minimal biomechanics event dict."""
+def _assessment_result(passed=False, round_num=1, immediate_causes=None, scoring=None):
     return {
-        "squat_phase": squat_phase,
-        "knee_fault": knee_fault,
-        "chest_fault": chest_fault,
+        "passed": passed,
+        "round": round_num,
+        "diagnosis": {
+            "immediate_causes": immediate_causes or [],
+            "session_causes": [],
+            "contextual_notes": [],
+        },
+        "scoring": scoring or {"mean_score": 0.75},
+        "demo": {"available": False, "cues": []},
     }
 
 
 # =============================================================================
-# 1. Clean rep increments consecutive_correct_reps
-# =============================================================================
-
-
-class TestCleanRepIncrement:
-    def test_clean_rep_increments(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.REP_COMPLETE
-            agent.current_rep_faults = []
-
-            await agent._complete_rep()
-
-            assert agent.consecutive_correct_reps == 1
-        asyncio.run(_run())
-
-    def test_multiple_clean_reps_accumulate(self):
-        async def _run():
-            agent = _make_agent()
-            agent.current_rep_faults = []
-
-            for _ in range(3):
-                agent.phase = TeachingPhase.REP_COMPLETE
-                await agent._complete_rep()
-
-            assert agent.consecutive_correct_reps == 3
-        asyncio.run(_run())
-
-
-# =============================================================================
-# 2. Fault rep resets consecutive_correct_reps to 0
-# =============================================================================
-
-
-class TestFaultRepReset:
-    def test_fault_resets_streak(self):
-        async def _run():
-            agent = _make_agent()
-            agent.consecutive_correct_reps = 3
-            agent.current_rep_faults = ["knee"]
-
-            await agent._complete_rep()
-
-            assert agent.consecutive_correct_reps == 0
-        asyncio.run(_run())
-
-    def test_fault_after_clean_reps_resets(self):
-        async def _run():
-            agent = _make_agent()
-
-            # Two clean reps
-            for _ in range(2):
-                agent.current_rep_faults = []
-                agent.phase = TeachingPhase.REP_COMPLETE
-                await agent._complete_rep()
-            assert agent.consecutive_correct_reps == 2
-
-            # One fault rep
-            agent.current_rep_faults = ["chest"]
-            agent.phase = TeachingPhase.REP_COMPLETE
-            await agent._complete_rep()
-            assert agent.consecutive_correct_reps == 0
-        asyncio.run(_run())
-
-
-# =============================================================================
-# 3. Four consecutive clean reps trigger _handoff()
-# =============================================================================
-
-
-class TestHandoffTrigger:
-    def test_four_clean_reps_trigger_handoff(self):
-        async def _run():
-            agent = _make_agent()
-            agent.consecutive_correct_reps = 3
-            agent.current_rep_faults = []
-
-            with patch.object(agent, '_handoff', new_callable=AsyncMock) as mock_handoff:
-                await agent._complete_rep()
-                mock_handoff.assert_awaited_once()
-        asyncio.run(_run())
-
-    def test_three_clean_reps_no_handoff(self):
-        async def _run():
-            agent = _make_agent()
-            agent.consecutive_correct_reps = 2
-            agent.current_rep_faults = []
-
-            with patch.object(agent, '_handoff', new_callable=AsyncMock) as mock_handoff:
-                await agent._complete_rep()
-                mock_handoff.assert_not_awaited()
-            assert agent.consecutive_correct_reps == 3
-        asyncio.run(_run())
-
-    def test_handoff_sets_phase_and_calls_say(self):
-        async def _run():
-            agent = _make_agent()
-
-            # Patch session property to avoid LiveKit internals.
-            with patch.object(
-                type(agent), 'session',
-                new_callable=lambda: property(lambda self: self._mock_session),
-            ):
-                await agent._handoff()
-
-            assert agent.phase == TeachingPhase.HANDOFF
-            agent._say.assert_awaited_once()
-            agent._truncate_context_for_handoff.assert_awaited_once()
-            agent._mock_session.update_agent.assert_called_once()
-        asyncio.run(_run())
-
-
-# =============================================================================
-# 4. Fault deduplication — same fault does not fire cue twice in one rep
-# =============================================================================
-
-
-class TestFaultDeduplication:
-    def test_knee_fault_fires_once_per_rep(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-            audio = agent.userdata.audio_cue_service
-
-            # First knee fault
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-            assert audio.play_cue.await_count == 1
-
-            # Second knee fault in same rep — should NOT fire
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-            assert audio.play_cue.await_count == 1
-        asyncio.run(_run())
-
-    def test_different_faults_both_fire(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-            audio = agent.userdata.audio_cue_service
-
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-            await agent.on_biomechanics_event(_event(chest_fault=True))
-
-            assert audio.play_cue.await_count == 2
-            calls = [c[0][0] for c in audio.play_cue.call_args_list]
-            assert "knees_out" in calls
-            assert "chest_up" in calls
-        asyncio.run(_run())
-
-
-# =============================================================================
-# 5. Phase only re-opens to DESCENDING after speech resolves
-# =============================================================================
-
-
-class TestPhaseGating:
-    def test_phase_descending_after_clean_rep(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.REP_COMPLETE
-            agent.current_rep_faults = []
-
-            await agent._complete_rep()
-
-            assert agent.phase == TeachingPhase.DESCENDING
-        asyncio.run(_run())
-
-    def test_phase_descending_after_fault_rep(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.REP_COMPLETE
-            agent.current_rep_faults = ["knee"]
-
-            await agent._complete_rep()
-
-            assert agent.phase == TeachingPhase.DESCENDING
-        asyncio.run(_run())
-
-    def test_events_ignored_in_setup_phase(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.SETUP
-            audio = agent.userdata.audio_cue_service
-
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-
-            audio.play_cue.assert_not_awaited()
-        asyncio.run(_run())
-
-    def test_events_ignored_in_rep_complete_phase(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.REP_COMPLETE
-            audio = agent.userdata.audio_cue_service
-
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-
-            audio.play_cue.assert_not_awaited()
-        asyncio.run(_run())
-
-    def test_events_ignored_in_handoff_phase(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.HANDOFF
-            audio = agent.userdata.audio_cue_service
-
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-
-            audio.play_cue.assert_not_awaited()
-        asyncio.run(_run())
-
-
-# =============================================================================
-# 6. is_tall flag set correctly at height boundary (185cm)
+# 1. Height threshold
 # =============================================================================
 
 
@@ -325,185 +101,322 @@ class TestHeightThreshold:
 
 
 # =============================================================================
-# 7. current_rep_faults cleared at start of _complete_rep
+# 2. Assessment result — fail triggers correction speech
 # =============================================================================
 
 
-class TestFaultListClearing:
-    def test_faults_cleared_after_complete_rep(self):
+class TestAssessmentFail:
+    def test_fail_triggers_say(self):
         async def _run():
             agent = _make_agent()
-            agent.current_rep_faults = ["knee", "chest"]
-
-            await agent._complete_rep()
-
-            assert agent.current_rep_faults == []
-        asyncio.run(_run())
-
-    def test_faults_cleared_even_on_clean_rep(self):
-        async def _run():
-            agent = _make_agent()
-            agent.current_rep_faults = []
-
-            await agent._complete_rep()
-
-            assert agent.current_rep_faults == []
-        asyncio.run(_run())
-
-    def test_faults_copied_before_clearing(self):
-        """Ensure the fault feedback uses the original faults, not the cleared list."""
-        async def _run():
-            agent = _make_agent()
-            agent.current_rep_faults = ["knee", "chest_ascent"]
-
-            # Track what _say is called with.
-            captured_instructions = []
-            original_mock = agent._say
-
-            async def capture_say(instructions, **kwargs):
-                captured_instructions.append(instructions)
-
-            agent._say = AsyncMock(side_effect=capture_say)
-
-            await agent._complete_rep()
-
-            # The LLM instruction should mention the faults
-            assert len(captured_instructions) == 1
-            assert "knee" in captured_instructions[0]
-            assert "chest_ascent" in captured_instructions[0]
-            # But the fault list should be cleared
-            assert agent.current_rep_faults == []
-        asyncio.run(_run())
-
-
-# =============================================================================
-# 8. Ascent fault tracked independently from descent fault
-# =============================================================================
-
-
-class TestAscentDescentIndependence:
-    def test_knee_tracked_independently(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-            audio = agent.userdata.audio_cue_service
-
-            # Knee fault on descent
-            await agent.on_biomechanics_event(_event(knee_fault=True))
-            assert "knee" in agent.current_rep_faults
-            assert audio.play_cue.await_count == 1
-
-            # Transition to bottom then ascending
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.BOTTOM.value))
-            assert agent.phase == TeachingPhase.ASCENDING
-
-            # Knee fault on ascent — should fire again (separate key)
-            await agent.on_biomechanics_event(
-                _event(squat_phase=RepPhase.ASCENDING.value, knee_fault=True)
+            msg = _assessment_result(
+                passed=False,
+                immediate_causes=[{
+                    "cause_id": "knee_valgus",
+                    "explanation": "Knees caving inward",
+                    "parameter_delta": {"stance_width": "+5cm"},
+                }],
             )
-            assert "knee_ascent" in agent.current_rep_faults
-            # play_cue called: knees_out (descent) + up (bottom) + knees_out (ascent) = 3
-            assert audio.play_cue.await_count == 3
+            await agent._on_assessment_result(msg, demo_was_played=False)
+
+            agent._say.assert_awaited_once()
+            prompt = agent._say.call_args[0][0]
+            assert "Knees caving inward" in prompt
+
         asyncio.run(_run())
 
-    def test_chest_tracked_independently(self):
+    def test_fail_does_not_handoff(self):
         async def _run():
             agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-            audio = agent.userdata.audio_cue_service
+            msg = _assessment_result(passed=False)
+            await agent._on_assessment_result(msg, demo_was_played=False)
 
-            # Chest fault on descent
-            await agent.on_biomechanics_event(_event(chest_fault=True))
-            assert "chest" in agent.current_rep_faults
+            assert agent._handed_off is False
 
-            # Transition to ascending
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.BOTTOM.value))
-            assert agent.phase == TeachingPhase.ASCENDING
-
-            # Chest fault on ascent
-            await agent.on_biomechanics_event(
-                _event(squat_phase=RepPhase.ASCENDING.value, chest_fault=True)
-            )
-            assert "chest_ascent" in agent.current_rep_faults
-            # chest_up (descent) + up (bottom) + chest_up (ascent) = 3
-            assert audio.play_cue.await_count == 3
-        asyncio.run(_run())
-
-    def test_all_four_fault_keys_can_coexist(self):
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-            audio = agent.userdata.audio_cue_service
-
-            # Both faults on descent
-            await agent.on_biomechanics_event(_event(knee_fault=True, chest_fault=True))
-
-            # Transition to ascending
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.BOTTOM.value))
-
-            # Both faults on ascent
-            await agent.on_biomechanics_event(
-                _event(squat_phase=RepPhase.ASCENDING.value, knee_fault=True, chest_fault=True)
-            )
-
-            assert set(agent.current_rep_faults) == {"knee", "chest", "knee_ascent", "chest_ascent"}
         asyncio.run(_run())
 
 
 # =============================================================================
-# ADDITIONAL: Full rep cycle integration test
+# 3. Assessment result — pass triggers handoff to CalibrationAgent
 # =============================================================================
 
 
-class TestFullRepCycle:
-    def test_clean_rep_full_cycle(self):
-        """Simulate a full clean rep: descending -> bottom -> ascending -> standing."""
+class TestAssessmentPass:
+    def test_pass_hands_off(self):
         async def _run():
             agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-            audio = agent.userdata.audio_cue_service
+            msg = _assessment_result(passed=True)
 
-            # Descending (no faults)
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.DESCENDING.value))
-            assert agent.phase == TeachingPhase.DESCENDING
-
-            # Bottom
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.BOTTOM.value))
-            assert agent.phase == TeachingPhase.ASCENDING
-
-            # Ascending (no faults)
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.ASCENDING.value))
-            assert agent.phase == TeachingPhase.ASCENDING
-
-            # Standing — triggers rep completion
-            await agent.on_biomechanics_event(_event(squat_phase=RepPhase.STANDING.value))
-
-            assert agent.consecutive_correct_reps == 1
-            assert agent.phase == TeachingPhase.DESCENDING
-            assert agent.current_rep_faults == []
-
-            # "up" cue + one random clean rep cue
-            assert audio.play_cue.await_count == 2
-            cue_calls = [c[0][0] for c in audio.play_cue.call_args_list]
-            assert cue_calls[0] == "up"
-            assert cue_calls[1] in CLEAN_REP_CUE_KEYS
-        asyncio.run(_run())
-
-    def test_four_clean_reps_trigger_handoff_full_cycle(self):
-        """Simulate 4 clean reps end-to-end and verify handoff."""
-        async def _run():
-            agent = _make_agent()
-            agent.phase = TeachingPhase.DESCENDING
-
-            # Patch session property for the handoff call.
             with patch.object(
                 type(agent), 'session',
                 new_callable=lambda: property(lambda self: self._mock_session),
             ):
-                for _ in range(4):
-                    await agent.on_biomechanics_event(_event(squat_phase=RepPhase.BOTTOM.value))
-                    await agent.on_biomechanics_event(_event(squat_phase=RepPhase.STANDING.value))
+                await agent._on_assessment_result(msg, demo_was_played=False)
 
-            assert agent.phase == TeachingPhase.HANDOFF
+            assert agent._handed_off is True
+            agent._say.assert_awaited_once()
             agent._mock_session.update_agent.assert_called_once()
+
+            from agent.agents.calibration_agent import CalibrationAgent
+            new_agent = agent._mock_session.update_agent.call_args[0][0]
+            assert isinstance(new_agent, CalibrationAgent)
+
+        asyncio.run(_run())
+
+    def test_pass_prompt_includes_score(self):
+        async def _run():
+            agent = _make_agent()
+            msg = _assessment_result(passed=True, scoring={"mean_score": 0.92})
+
+            with patch.object(
+                type(agent), 'session',
+                new_callable=lambda: property(lambda self: self._mock_session),
+            ):
+                await agent._on_assessment_result(msg, demo_was_played=False)
+
+            prompt = agent._say.call_args[0][0]
+            assert "92" in prompt
+
+        asyncio.run(_run())
+
+
+# =============================================================================
+# 4. Demo acknowledgment
+# =============================================================================
+
+
+class TestDemoAcknowledgment:
+    def test_demo_played_gets_encouragement(self):
+        async def _run():
+            agent = _make_agent()
+            msg = _assessment_result(passed=False)
+            await agent._on_assessment_result(msg, demo_was_played=True)
+
+            agent._say.assert_awaited_once()
+            prompt = agent._say.call_args[0][0]
+            assert "demo" in prompt.lower() or "difference" in prompt.lower()
+
+        asyncio.run(_run())
+
+    def test_demo_not_played_gets_correction(self):
+        async def _run():
+            agent = _make_agent()
+            msg = _assessment_result(
+                passed=False,
+                immediate_causes=[{
+                    "cause_id": "trunk_lean",
+                    "explanation": "Excessive forward lean",
+                    "parameter_delta": None,
+                }],
+            )
+            await agent._on_assessment_result(msg, demo_was_played=False)
+
+            prompt = agent._say.call_args[0][0]
+            assert "Excessive forward lean" in prompt
+
+        asyncio.run(_run())
+
+
+# =============================================================================
+# 5. on_exit cleanup
+# =============================================================================
+
+
+class TestOnExit:
+    def test_exit_without_handoff_stops_assessment(self):
+        async def _run():
+            agent = _make_agent()
+            mock_coaching = MagicMock()
+            agent.userdata.coaching_service = mock_coaching
+
+            await agent.on_exit()
+
+            mock_coaching.stop_assessment.assert_called_once_with(False)
+
+        asyncio.run(_run())
+
+    def test_exit_after_handoff_does_not_double_stop(self):
+        async def _run():
+            agent = _make_agent()
+            agent._handed_off = True
+            mock_coaching = MagicMock()
+            agent.userdata.coaching_service = mock_coaching
+
+            await agent.on_exit()
+
+            mock_coaching.stop_assessment.assert_not_called()
+
+        asyncio.run(_run())
+
+
+# =============================================================================
+# 6. Correction prompt building
+# =============================================================================
+
+
+class TestCorrectionPrompt:
+    def test_includes_main_issue(self):
+        agent = _make_agent()
+        diagnosis = {
+            "immediate_causes": [{
+                "cause_id": "ankle_mobility",
+                "explanation": "Limited ankle dorsiflexion",
+                "parameter_delta": {"heel_lift": "consider"},
+            }],
+        }
+        prompt = agent._build_correction_prompt(diagnosis, {"mean_score": 0.6}, 2)
+
+        assert "Limited ankle dorsiflexion" in prompt
+        assert "heel_lift" in prompt
+
+    def test_includes_secondary_issue(self):
+        agent = _make_agent()
+        diagnosis = {
+            "immediate_causes": [
+                {"cause_id": "a", "explanation": "Primary issue", "parameter_delta": None},
+                {"cause_id": "b", "explanation": "Secondary issue", "parameter_delta": None},
+            ],
+        }
+        prompt = agent._build_correction_prompt(diagnosis, {"mean_score": 0.5}, 1)
+
+        assert "Primary issue" in prompt
+        assert "Secondary issue" in prompt
+
+    def test_empty_causes_still_builds_prompt(self):
+        agent = _make_agent()
+        prompt = agent._build_correction_prompt(
+            {"immediate_causes": []}, {"mean_score": 0.0}, 1,
+        )
+        assert "exercise" in prompt.lower() or "adjustment" in prompt.lower()
+
+    def test_no_assessment_word_in_prompt(self):
+        agent = _make_agent()
+        prompt = agent._build_correction_prompt(
+            {"immediate_causes": [{"cause_id": "x", "explanation": "test", "parameter_delta": None}]},
+            {"mean_score": 0.5},
+            1,
+        )
+        assert "assessment" not in prompt.lower() or "Do NOT say" in prompt
+
+
+# =============================================================================
+# 7. Assessment logging integration
+# =============================================================================
+
+
+class TestAssessmentLogging:
+    def test_start_logging_on_enter_with_session_dir(self):
+        async def _run():
+            agent = _make_agent()
+            mock_coaching = MagicMock()
+            agent.userdata.coaching_service = mock_coaching
+
+            with patch.dict("os.environ", {"NOWVA_SESSION_OUTPUT_DIR": "/tmp/test_session"}):
+                agent._start_assessment_logging()
+
+            mock_coaching.start_assessment.assert_called_once()
+            call_kwargs = mock_coaching.start_assessment.call_args[1]
+            assert call_kwargs["session_dir"] == "/tmp/test_session"
+            assert call_kwargs["user_height_cm"] == 170.0
+
+        asyncio.run(_run())
+
+    def test_no_logging_without_session_dir(self):
+        async def _run():
+            agent = _make_agent()
+            mock_coaching = MagicMock()
+            agent.userdata.coaching_service = mock_coaching
+
+            with patch.dict("os.environ", {}, clear=True):
+                agent._start_assessment_logging()
+
+            mock_coaching.start_assessment.assert_not_called()
+
+        asyncio.run(_run())
+
+    def test_recommendations_logged_on_fail(self):
+        async def _run():
+            agent = _make_agent()
+            mock_logger = MagicMock()
+            mock_coaching = MagicMock()
+            mock_coaching.assessment_logger = mock_logger
+            agent.userdata.coaching_service = mock_coaching
+
+            msg = _assessment_result(
+                passed=False,
+                immediate_causes=[{
+                    "cause_id": "knee_valgus",
+                    "explanation": "Knees caving",
+                    "parameter_delta": None,
+                }],
+            )
+            await agent._on_assessment_result(msg, demo_was_played=False)
+
+            mock_logger.set_outgoing_recommendations_latest.assert_called_once()
+            recs = mock_logger.set_outgoing_recommendations_latest.call_args[0][0]
+            assert len(recs) == 1
+            assert recs[0].fault_type == "knee_valgus"
+
+        asyncio.run(_run())
+
+    def test_no_recommendations_logged_on_pass(self):
+        async def _run():
+            agent = _make_agent()
+            mock_logger = MagicMock()
+            mock_coaching = MagicMock()
+            mock_coaching.assessment_logger = mock_logger
+            agent.userdata.coaching_service = mock_coaching
+
+            msg = _assessment_result(passed=True)
+
+            with patch.object(
+                type(agent), 'session',
+                new_callable=lambda: property(lambda self: self._mock_session),
+            ):
+                await agent._on_assessment_result(msg, demo_was_played=False)
+
+            mock_logger.set_outgoing_recommendations_latest.assert_not_called()
+
+        asyncio.run(_run())
+
+
+# =============================================================================
+# 8. CoachingService reuse in on_enter
+# =============================================================================
+
+
+class TestCoachingServiceReuse:
+    def test_on_enter_reuses_existing_service(self):
+        async def _run():
+            agent = _make_agent()
+            mock_coaching = MagicMock()
+            agent.userdata.coaching_service = mock_coaching
+
+            with patch.dict("os.environ", {}, clear=True):
+                await agent.on_enter()
+
+            mock_coaching.set_assessment_result_callback.assert_called_once_with(
+                agent._on_assessment_result
+            )
+            assert agent.userdata.coaching_service is mock_coaching
+
+        asyncio.run(_run())
+
+    def test_on_enter_creates_service_when_absent(self):
+        async def _run():
+            agent = _make_agent()  # userdata.coaching_service is None
+
+            with patch.dict("os.environ", {}, clear=True), patch(
+                "agent.services.coaching_service.CoachingService"
+            ) as mock_service_cls:
+                mock_service_cls.return_value.start = AsyncMock()
+                with patch.object(
+                    type(agent), 'session',
+                    new_callable=lambda: property(lambda self: self._mock_session),
+                ):
+                    await agent.on_enter()
+
+            mock_service_cls.assert_called_once()
+            assert agent.userdata.coaching_service is mock_service_cls.return_value
+
         asyncio.run(_run())

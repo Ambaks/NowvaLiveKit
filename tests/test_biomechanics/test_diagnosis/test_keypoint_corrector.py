@@ -1,6 +1,8 @@
-"""Tests for keypoint corrector symmetry enforcement."""
+"""Tests for keypoint corrector symmetry enforcement and balance lean."""
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -14,7 +16,10 @@ from biomechanics.diagnosis.keypoint_corrector import (
     HIP_R,
     KNEE_L,
     KNEE_R,
+    UPPER_BODY_INDICES,
     KeypointCorrector,
+    apply_lean_to_upper_body,
+    solve_balance_lean,
 )
 from biomechanics.diagnosis.types import (
     DiagnosisResult,
@@ -248,3 +253,52 @@ class TestCorrectIntegrationSymmetry:
         assert out[HIP_L][1] == pytest.approx(out[HIP_R][1], abs=1e-4)
         assert out[ANKLE_L][1] == pytest.approx(out[ANKLE_R][1], abs=1e-4)
         assert out[KNEE_L][1] == pytest.approx(out[KNEE_R][1], abs=1e-3)
+
+
+class TestBalanceLean:
+
+    def test_rotation_preserves_relative_distances(self) -> None:
+        kpts = _make_19pt_skeleton()
+        lean_rad = math.radians(15.0)
+
+        before_dists = []
+        for i in UPPER_BODY_INDICES:
+            for j in UPPER_BODY_INDICES:
+                if i < j:
+                    before_dists.append(np.linalg.norm(kpts[i] - kpts[j]))
+
+        result = apply_lean_to_upper_body(kpts, lean_rad)
+
+        after_dists = []
+        for i in UPPER_BODY_INDICES:
+            for j in UPPER_BODY_INDICES:
+                if i < j:
+                    after_dists.append(np.linalg.norm(result[i] - result[j]))
+
+        np.testing.assert_allclose(before_dists, after_dists, atol=1e-10)
+
+    def test_rotation_tilts_head_forward(self) -> None:
+        kpts = _make_19pt_skeleton()
+        hip_mid_x = (kpts[HIP_L][0] + kpts[HIP_R][0]) / 2.0
+        hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
+        nose_dy_before = kpts[0][1] - hip_mid_y
+
+        lean_rad = math.radians(10.0)
+        result = apply_lean_to_upper_body(kpts, lean_rad)
+
+        nose_dx_after = result[0][0] - hip_mid_x
+        nose_dy_after = result[0][1] - hip_mid_y
+        nose_dx_before = kpts[0][0] - hip_mid_x
+
+        assert nose_dx_after > nose_dx_before
+        assert nose_dy_after < nose_dy_before
+
+    def test_balance_solve_converges(self) -> None:
+        kpts = _make_19pt_skeleton()
+        foot_len = 0.29
+
+        lean = solve_balance_lean(kpts, foot_len)
+
+        assert lean is not None
+        assert math.isfinite(lean)
+        assert abs(math.degrees(lean)) < 30.0

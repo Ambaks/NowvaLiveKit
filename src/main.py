@@ -80,6 +80,7 @@ class NowvaApp:
         self.current_user = None
         self.state = None  # Track state for cleanup
         self._recording_process = None
+        self._recording_log = None
         self._session_dir: Path | None = None
 
         # Setup signal handlers for graceful shutdown
@@ -169,7 +170,7 @@ class NowvaApp:
 
         return {"screen": screen_idx, "mic": mic_idx, "blackhole": blackhole_idx}
 
-    def _start_screen_recording(self, session_dir: Path) -> None:
+    async def _start_screen_recording(self, session_dir: Path) -> None:
         """Launch ffmpeg to record screen + audio into session_dir."""
         devices = self._detect_avfoundation_devices()
 
@@ -186,10 +187,8 @@ class NowvaApp:
                 "ffmpeg", "-y",
                 "-f", "avfoundation", "-framerate", "30",
                 "-capture_cursor", "1",
-                "-sample_rate", "48000",
                 "-i", f"{screen_idx}:{mic_idx}",
                 "-f", "avfoundation",
-                "-sample_rate", "48000",
                 "-i", f":{blackhole_idx}",
                 "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first",
                 "-c:v", "h264_videotoolbox", "-b:v", "5M",
@@ -202,7 +201,6 @@ class NowvaApp:
                 "ffmpeg", "-y",
                 "-f", "avfoundation", "-framerate", "30",
                 "-capture_cursor", "1",
-                "-sample_rate", "48000",
                 "-i", f"{screen_idx}:{mic_idx}",
                 "-c:v", "h264_videotoolbox", "-b:v", "5M",
                 "-c:a", "aac", "-ar", "48000", "-b:a", "128k",
@@ -220,18 +218,26 @@ class NowvaApp:
             ]
             print("[RECORDING] Screen only (no audio devices detected)")
 
+        self._recording_log = open(session_dir / "ffmpeg_recording.log", "w")
         self._recording_process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=self._recording_log,
         )
         print(f"[RECORDING] Started (PID: {self._recording_process.pid})")
+
+        await asyncio.sleep(1)
+        if self._recording_process.poll() is not None:
+            self._recording_log.close()
+            log_content = (session_dir / "ffmpeg_recording.log").read_text()
+            print(f"[RECORDING] ffmpeg exited immediately! stderr:\n{log_content}")
 
     def _stop_screen_recording(self) -> None:
         """Gracefully stop ffmpeg recording."""
         proc = getattr(self, "_recording_process", None)
         if proc is None or proc.poll() is not None:
+            self._close_recording_log()
             return
 
         print("[RECORDING] Stopping screen recording...")
@@ -246,6 +252,12 @@ class NowvaApp:
         except subprocess.TimeoutExpired:
             proc.terminate()
             proc.wait(timeout=5)
+        self._close_recording_log()
+
+    def _close_recording_log(self) -> None:
+        log = getattr(self, "_recording_log", None)
+        if log and not log.closed:
+            log.close()
 
     def check_session(self):
         """Check if user has an existing session"""
@@ -451,7 +463,7 @@ class NowvaApp:
             self._session_dir.mkdir(parents=True, exist_ok=True)
             os.environ["NOWVA_SESSION_OUTPUT_DIR"] = str(self._session_dir)
             self.session_logger.start_session(log_dir=str(self._session_dir))
-            self._start_screen_recording(self._session_dir)
+            await self._start_screen_recording(self._session_dir)
         else:
             self.session_logger.start_session()
 

@@ -10,7 +10,10 @@ generate_reply() calls directly for all coaching speech.
 import asyncio
 import logging
 import threading
+from pathlib import Path
 from typing import Optional, Callable, Dict, Any
+
+from agent.services.assessment_logger import AssessmentLogger
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,7 @@ class CoachingService:
         room=None,        # rtc.Room — for publishing separate audio tracks
         on_workout_complete: Optional[Callable] = None,
         on_calibration_complete: Optional[Callable] = None,
+        on_assessment_result: Callable | None = None,
         audio_cue_service=None,  # Prewarmed AudioCueService (optional)
     ):
         self._session = session
@@ -43,6 +47,7 @@ class CoachingService:
         self._room = room
         self._on_workout_complete_callback = on_workout_complete
         self._on_calibration_complete_callback = on_calibration_complete
+        self._on_assessment_result_callback = on_assessment_result
 
         # Owned components
         self._coaching_ipc = None
@@ -63,8 +68,17 @@ class CoachingService:
         # Orchestrator is dormant until assessment+calibration finish
         self._workout_active: bool = False
 
+        # Assessment data persistence
+        self._assessment_logger: AssessmentLogger | None = None
+
     def set_workout_complete_callback(self, callback: Callable) -> None:
         self._on_workout_complete_callback = callback
+
+    def set_calibration_complete_callback(self, callback: Callable) -> None:
+        self._on_calibration_complete_callback = callback
+
+    def set_assessment_result_callback(self, callback: Callable | None) -> None:
+        self._on_assessment_result_callback = callback
 
     # ------------------------------------------------------------------
     # Lifecycle API
@@ -238,6 +252,8 @@ class CoachingService:
                     f"[COACHING SERVICE] REP COMPLETE received: rep={rep} depth={depth} "
                     f"is_clean={is_clean} faults={faults}"
                 )
+                if self._assessment_logger is not None:
+                    self._assessment_logger.on_rep_complete(message)
                 if not self._workout_active:
                     logger.debug("[COACHING SERVICE] rep_complete ignored — workout not active yet")
                 elif self._coaching_orchestrator:
@@ -251,6 +267,13 @@ class CoachingService:
                     )
                 else:
                     logger.warning("[COACHING SERVICE] No orchestrator — rep_complete dropped")
+            elif msg_type == "rep_diagnosis":
+                if self._assessment_logger is not None:
+                    self._assessment_logger.on_rep_diagnosis(
+                        message.get("rep_number", 0),
+                        message.get("diagnosis", {}),
+                        rep_score=message.get("rep_score"),
+                    )
             elif msg_type == "frame_data":
                 if self._workout_active and self._coaching_orchestrator:
                     self._coaching_orchestrator.record_angle_sample(
@@ -365,22 +388,31 @@ class CoachingService:
         scoring = message.get("scoring", {})
         demo = message.get("demo", {})
 
+        demo_was_played = False
         if not passed and demo.get("available") and not self._assessment_demo_played:
             self._assessment_demo_played = True
             if await self._run_assessment_demo(demo.get("cues", [])):
-                return
-            logger.warning(
-                "[COACHING SERVICE] Demo failed — falling back to spoken correction"
-            )
+                demo_was_played = True
 
-        if not passed:
+        if self._on_assessment_result_callback is not None:
+            try:
+                ret = self._on_assessment_result_callback(message, demo_was_played)
+                if asyncio.iscoroutine(ret):
+                    await ret
+            except Exception as e:
+                logger.error(f"[ASSESSMENT] on_assessment_result callback error: {e}", exc_info=True)
+            return
+
+        if not passed and not demo_was_played:
             instructions = self._build_assessment_correction_prompt(
                 diagnosis, scoring, round_num,
             )
-        else:
+        elif passed:
             instructions = self._build_assessment_pass_prompt(
                 diagnosis, scoring, round_num,
             )
+        else:
+            return
 
         logger.info(f"[ASSESSMENT] LLM prompt: {instructions[:150]}...")
         await self._coaching_llm_reply(instructions)
@@ -423,6 +455,37 @@ class CoachingService:
             self._coaching_ipc.send_message(message)
         except Exception as e:
             logger.error(f"[COACHING SERVICE] Failed to send {message.get('type')}: {e}")
+
+    # ------------------------------------------------------------------
+    # Assessment logging
+    # ------------------------------------------------------------------
+
+    def start_assessment(
+        self,
+        session_dir: str | Path,
+        session_id: str,
+        user_height_cm: float,
+        target_reps: int = 1,
+    ) -> None:
+        self._assessment_logger = AssessmentLogger(
+            session_dir=Path(session_dir),
+            session_id=session_id,
+            user_height_cm=user_height_cm,
+            target_reps=target_reps,
+        )
+        self._send_to_pipeline({"type": "assessment_mode", "enabled": True})
+        logger.info("[COACHING SERVICE] Assessment logging started")
+
+    def stop_assessment(self, passed: bool) -> None:
+        if self._assessment_logger is not None:
+            self._assessment_logger.finalize(passed)
+            self._send_to_pipeline({"type": "assessment_mode", "enabled": False})
+            logger.info(f"[COACHING SERVICE] Assessment logging finalized (passed={passed})")
+            self._assessment_logger = None
+
+    @property
+    def assessment_logger(self) -> AssessmentLogger | None:
+        return self._assessment_logger
 
     def _build_assessment_correction_prompt(
         self, diagnosis: dict, scoring: dict, round_num: int,

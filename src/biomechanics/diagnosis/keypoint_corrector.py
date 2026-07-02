@@ -299,29 +299,19 @@ def compute_balance_target_ground(kpts: np.ndarray, foot_len: float) -> np.ndarr
 
 
 def apply_lean_to_upper_body(kpts: np.ndarray, lean_delta_rad: float) -> np.ndarray:
-    """Rotate upper body (0-10) about hip midpoint in the sagittal X-Y plane."""
+    """Rotate upper body (0-10) as a rigid body about hip midpoint in the X-Y plane."""
     out = kpts.copy()
     hip_mid_x = (kpts[HIP_L][0] + kpts[HIP_R][0]) / 2.0
     hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
 
-    shoulder_mid_x = (kpts[5][0] + kpts[6][0]) / 2.0
-    shoulder_mid_y = (kpts[5][1] + kpts[6][1]) / 2.0
-
-    trunk_dx = shoulder_mid_x - hip_mid_x
-    trunk_dy = shoulder_mid_y - hip_mid_y
-    torso_len = math.sqrt(trunk_dx ** 2 + trunk_dy ** 2)
-    if torso_len < 1e-9:
-        return out
-
-    current_lean = math.atan2(trunk_dx, trunk_dy)
-    new_lean = current_lean + lean_delta_rad
-
-    offset_x = hip_mid_x + torso_len * math.sin(new_lean) - shoulder_mid_x
-    offset_y = hip_mid_y + torso_len * math.cos(new_lean) - shoulder_mid_y
+    cos_a = math.cos(lean_delta_rad)
+    sin_a = math.sin(lean_delta_rad)
 
     for idx in UPPER_BODY_INDICES:
-        out[idx][0] += offset_x
-        out[idx][1] += offset_y
+        dx = kpts[idx][0] - hip_mid_x
+        dy = kpts[idx][1] - hip_mid_y
+        out[idx][0] = hip_mid_x + cos_a * dx + sin_a * dy
+        out[idx][1] = hip_mid_y - sin_a * dx + cos_a * dy
 
     return out
 
@@ -406,11 +396,14 @@ class KeypointCorrector:
             original_thigh_r = np.linalg.norm(kpts[KNEE_R] - kpts[HIP_R])
             original_shin_r = np.linalg.norm(kpts[ANKLE_R] - kpts[KNEE_R])
 
-        # Stance width + toe-out via delta-FK (same as sandbox sliders)
         has_stance = "narrow_stance" in tier1_causes
         has_toe_out = "narrow_foot_angle" in tier1_causes
         if has_stance or has_toe_out:
+            pre_hip_mid = (kpts[HIP_L] + kpts[HIP_R]).copy() / 2.0
             self._apply_stance_toe_out_delta_fk(kpts, tier1_causes)
+            stance_pelvis_shift = (kpts[HIP_L] + kpts[HIP_R]) / 2.0 - pre_hip_mid
+        else:
+            stance_pelvis_shift = None
 
         if "knee_track_cue" in tier1_causes:
             self._push_knees_out(kpts, tier1_causes["knee_track_cue"])
@@ -444,7 +437,7 @@ class KeypointCorrector:
         self._enforce_symmetry(kpts, max_dorsi_deg=max_dorsi_deg)
 
         foot_len = anthro.get("foot_length", DEFAULT_FOOT_LEN_M) if anthro else DEFAULT_FOOT_LEN_M
-        self._solve_and_apply_balance(kpts, foot_len)
+        self._solve_and_apply_balance(kpts, foot_len, stance_pelvis_shift)
 
         return kpts.tolist()
 
@@ -505,13 +498,6 @@ class KeypointCorrector:
             kpts[HIP_R], kpts[ANKLE_R], thigh_r, shin_r, kpts[KNEE_R],
         )
 
-        # Upper body rides rigidly with the pelvis shift
-        cap_hip_mid = (captured[HIP_L] + captured[HIP_R]) / 2.0
-        new_hip_mid = (kpts[HIP_L] + kpts[HIP_R]) / 2.0
-        pelvis_shift = new_hip_mid - cap_hip_mid
-
-        for idx in UPPER_BODY_INDICES:
-            kpts[idx] += pelvis_shift
 
     def _push_knees_out(self, kpts: np.ndarray, cause) -> None:
         """Nudge knees laterally along the hip-lateral axis."""
@@ -546,30 +532,29 @@ class KeypointCorrector:
         for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
             kpts[idx] += shift_vec
 
-    def _solve_and_apply_balance(self, kpts: np.ndarray, foot_len: float) -> None:
-        """Solve trunk lean for COM-over-midfoot balance and apply it in-place."""
+    def _solve_and_apply_balance(
+        self, kpts: np.ndarray, foot_len: float,
+        pelvis_shift: np.ndarray | None = None,
+    ) -> None:
+        """Translate upper body to follow pelvis, then rotate for balance."""
+        if pelvis_shift is not None:
+            for idx in UPPER_BODY_INDICES:
+                kpts[idx] += pelvis_shift
+
         lean_rad = solve_balance_lean(kpts, foot_len)
         if lean_rad is None or abs(lean_rad) < 1e-6:
             return
 
-        hip_mid = (kpts[HIP_L] + kpts[HIP_R]) / 2.0
-        shoulder_mid = (kpts[5] + kpts[6]) / 2.0
-
-        trunk_dx = shoulder_mid[0] - hip_mid[0]
-        trunk_dy = shoulder_mid[1] - hip_mid[1]
-        torso_len = math.sqrt(trunk_dx ** 2 + trunk_dy ** 2)
-        if torso_len < 1e-9:
-            return
-
-        current_lean = math.atan2(trunk_dx, trunk_dy)
-        new_lean = current_lean + lean_rad
-
-        offset_x = hip_mid[0] + torso_len * math.sin(new_lean) - shoulder_mid[0]
-        offset_y = hip_mid[1] + torso_len * math.cos(new_lean) - shoulder_mid[1]
+        hip_mid_x = (kpts[HIP_L][0] + kpts[HIP_R][0]) / 2.0
+        hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
+        cos_a = math.cos(lean_rad)
+        sin_a = math.sin(lean_rad)
 
         for idx in UPPER_BODY_INDICES:
-            kpts[idx][0] += offset_x
-            kpts[idx][1] += offset_y
+            dx = kpts[idx][0] - hip_mid_x
+            dy = kpts[idx][1] - hip_mid_y
+            kpts[idx][0] = hip_mid_x + cos_a * dx + sin_a * dy
+            kpts[idx][1] = hip_mid_y - sin_a * dx + cos_a * dy
 
     def _lower_to_depth(
         self,

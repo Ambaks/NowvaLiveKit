@@ -15,6 +15,9 @@ from pydantic import BaseModel
 
 from biomechanics.utils.types import RepData, DEPTH_CLASS_NAMES
 
+# Depth class required to enter DOWN during assessment (any descent counts).
+ASSESSMENT_MIN_DEPTH_CLASS = 1
+
 
 class BiLSTMCounterConfig(BaseModel):
     """Configuration for the 5-class BiLSTM-based rep counter."""
@@ -53,6 +56,11 @@ class BiLSTMRepCounter:
         self._max_depth_seen: int = 0
         self._rep_start_time: float = 0.0
         self._rep_start_frame: int = 0
+        self._assessment_mode: bool = False
+
+    def set_assessment_mode(self, enabled: bool) -> None:
+        """Lower the DOWN-entry threshold so any descent counts as a rep."""
+        self._assessment_mode = enabled
 
     @property
     def in_rep(self) -> bool:
@@ -99,7 +107,8 @@ class BiLSTMRepCounter:
         predicted_class = int(np.argmax(self._smoothed_probs))
 
         if self.state == BiLSTMCounterState.UP:
-            if predicted_class >= self.config.min_depth_class:
+            entry_threshold = ASSESSMENT_MIN_DEPTH_CLASS if self._assessment_mode else self.config.min_depth_class
+            if predicted_class >= entry_threshold:
                 self.state = BiLSTMCounterState.DOWN
                 self._frames_in_down = 0
                 self._max_depth_seen = predicted_class

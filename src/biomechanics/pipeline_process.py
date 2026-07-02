@@ -480,6 +480,9 @@ def run_biomechanics_pipeline(
                 assessment_round += 1
                 assessment_reps_done = 0
                 pipeline.rep_counter.reset()
+                pipeline.rep_counter.set_assessment_mode(True)
+                if pipeline._bilstm is not None:
+                    pipeline._bilstm.set_assessment_mode(True)
                 session_tracker.reset_rep_buffers()
                 session_tracker.current_set_reps = []
                 session_tracker.set_active = False
@@ -674,8 +677,10 @@ def run_biomechanics_pipeline(
         # Reset pipeline state for calibration
         pipeline.reset_readiness_gate()
         pipeline.rep_counter.reset()
+        pipeline.rep_counter.set_assessment_mode(False)
         if pipeline._bilstm is not None:
             pipeline._bilstm.reset()
+            pipeline._bilstm.set_assessment_mode(False)
         session_tracker.reset_rep_buffers()
         session_tracker.current_set_reps = []
         session_tracker.set_active = False
@@ -941,6 +946,9 @@ def run_biomechanics_pipeline(
                         set_collector.reset()
 
                     print(f"[REST] Starting {rest_seconds}s rest timer")
+                elif incoming.get("type") == "assessment_mode":
+                    session_tracker.set_assessment_mode(incoming.get("enabled", False))
+                    print(f"[PIPELINE] Assessment mode {'enabled' if incoming.get('enabled') else 'disabled'}")
                 elif incoming.get("type") == "workout_complete":
                     workout_finished = True
                     print("[PIPELINE] Workout complete — stopping rep counting")

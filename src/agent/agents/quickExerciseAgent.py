@@ -7,8 +7,9 @@ import logging
 
 from livekit.agents import function_tool, AgentTask
 
+from agent.agents.prompts import BASE_PROMPT
 from agent.agents.shared.helpers import check_calibration, start_calibration_mode
-from agent.agents.calibration_agent import CalibrationAgent
+from agent.agents.teaching_agent import TeachingAgent
 from agent.agents.workout_agent import WorkoutAgent
 from agent.core.workout_session import WorkoutSession
 
@@ -25,13 +26,13 @@ class CollectExerciseInfoTask(AgentTask):
         userdata,
         chat_ctx=None,
     ):
+        task_instructions = """
+Conversationally collect the amount of sets, reps, rest and weight
+the user wants to use for their quick exercise.
+Once that is done, call the start_workout tool.
+""".strip()
         super().__init__(
-            instructions=("""
-                Conversationally collect the amount of sets, reps, rest and weight
-                the user wants to use for their quick exercise. 
-                Once that is done, call the start_workout tool.
-                """
-            ),
+            instructions=f"{BASE_PROMPT}\n\n{task_instructions}",
             chat_ctx=chat_ctx,
         )
 
@@ -103,7 +104,7 @@ class CollectExerciseInfoTask(AgentTask):
         if calibration_profile:
             return WorkoutAgent(state=self.state, userdata=self.userdata)
         else:
-            return CalibrationAgent(state=self.state, userdata=self.userdata)
+            return TeachingAgent(state=self.state, userdata=self.userdata)
 
 
 

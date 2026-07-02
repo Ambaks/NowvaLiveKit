@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from biomechanics.coaching.cue_cache import CueCache
 from biomechanics.config import CoachingConfig, IPCConfig
-from biomechanics.diagnosis.types import DiagnosisResult, SetScoreSummary
+from biomechanics.diagnosis.types import DiagnosisResult, RepKinematicSummary, RepScore, SetScoreSummary
 from biomechanics.utils.types import FaultEvent, PipelineFrame, RepData, depth_category
 
 
@@ -112,6 +112,8 @@ class IPCBridge:
         rep: RepData,
         bottom_kpts: Optional[List] = None,
         bottom_angles: Optional[Dict[str, float]] = None,
+        standing_kpts: list | None = None,
+        rep_kinematic_summary: RepKinematicSummary | None = None,
     ) -> None:
         """Send rep data and legacy rep_count.
 
@@ -127,11 +129,29 @@ class IPCBridge:
             "faults_in_rep": [f.fault_type for f in rep.faults],
             "rep_duration_ms": round(rep.duration * 1000),
             "is_clean": rep.is_clean,
+            "descent_time_s": round(rep.descent_time, 3),
+            "ascent_time_s": round(rep.ascent_time, 3),
+            "depth_class_int": rep.depth_class,
+            "depth_class_name": rep.depth_class_name,
+            "faults_detailed": [
+                {
+                    "fault_type": f.fault_type,
+                    "severity": f.severity.value,
+                    "severity_score": round(f.severity_score, 2),
+                    "message": f.message,
+                    "details": f.details,
+                }
+                for f in rep.faults
+            ],
         }
         if bottom_kpts is not None:
             msg["bottom_kpts"] = bottom_kpts
         if bottom_angles is not None:
             msg["bottom_angles"] = bottom_angles
+        if standing_kpts is not None:
+            msg["standing_kpts"] = standing_kpts
+        if rep_kinematic_summary is not None:
+            msg["rep_kinematic_summary"] = rep_kinematic_summary.model_dump()
         self.ipc_client.send_message(msg)
 
         # Backward compatibility
@@ -139,6 +159,42 @@ class IPCBridge:
             "type": "rep_count",
             "value": rep.rep_number,
         })
+
+    def send_rep_diagnosis(
+        self,
+        rep_number: int,
+        diagnosis_result: DiagnosisResult,
+        rep_score: RepScore | None = None,
+    ) -> None:
+        """Send per-rep rolling-window diagnosis during assessment mode."""
+        msg: dict[str, Any] = {
+            "type": "rep_diagnosis",
+            "rep_number": rep_number,
+            "diagnosis": {
+                "confidence": diagnosis_result.confidence,
+                "detected_symptoms": [
+                    {
+                        "symptom_id": s.symptom_id,
+                        "severity": s.severity,
+                        "contributing_reps": s.contributing_reps,
+                    }
+                    for s in diagnosis_result.detected_symptoms
+                ],
+                "immediate_causes": [
+                    {
+                        "cause_id": c.cause_id,
+                        "score": c.score,
+                        "explanation": c.explanation,
+                        "parameter_delta": c.parameter_delta,
+                        "implicated_by": c.implicated_by,
+                    }
+                    for c in diagnosis_result.immediate_causes
+                ],
+            },
+        }
+        if rep_score is not None:
+            msg["rep_score"] = rep_score.model_dump()
+        self.ipc_client.send_message(msg)
 
     # ------------------------------------------------------------------
     # Set completion

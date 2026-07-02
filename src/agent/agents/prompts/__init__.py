@@ -2,7 +2,8 @@
 Nova voice agent prompts module
 """
 
-from .onboarding_prompt import ONBOARDING_PROMPT
+from .base_prompt import BASE_PROMPT
+from .onboarding_prompt import ONBOARDING_TASK_INSTRUCTIONS
 from .main_menu_prompt import get_main_menu_prompt
 from .workout_prompt import get_workout_prompt
 from .program_creation_prompt import get_program_creation_prompt
@@ -16,7 +17,8 @@ from .website_step_prompts import (
 )
 
 __all__ = [
-    "ONBOARDING_PROMPT",
+    "BASE_PROMPT",
+    "ONBOARDING_TASK_INSTRUCTIONS",
     "get_main_menu_prompt",
     "get_workout_prompt",
     "get_program_creation_prompt",
