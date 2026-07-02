@@ -186,3 +186,5 @@ deprecated/*
 
 # PNG files (if any)
 *.png
+# Screen recordings
+*.mov
