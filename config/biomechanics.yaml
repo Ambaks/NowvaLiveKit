@@ -35,9 +35,9 @@ faults:
     moderate: 135.0
     severe: 125.0
   knee_valgus:
-    mild: 8.0
-    moderate: 13.0
-    severe: 18.0
+    mild: 12.0
+    moderate: 17.0
+    severe: 24.0
 
 rep_detection:
   entry_threshold: 30.0

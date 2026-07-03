@@ -234,9 +234,9 @@ class TestRuleEngineProportionScaling:
         valgus_rule = engine.get_rule(
             __import__("biomechanics.faults.fault_types", fromlist=["FaultType"]).FaultType.KNEE_VALGUS
         )
-        assert valgus_rule.mild_threshold == pytest.approx(8.0 * 1.2, abs=0.1)
-        assert valgus_rule.moderate_threshold == pytest.approx(13.0 * 1.2, abs=0.1)
-        assert valgus_rule.severe_threshold == pytest.approx(18.0 * 1.2, abs=0.1)
+        assert valgus_rule.mild_threshold == pytest.approx(12.0 * 1.2, abs=0.1)
+        assert valgus_rule.moderate_threshold == pytest.approx(17.0 * 1.2, abs=0.1)
+        assert valgus_rule.severe_threshold == pytest.approx(24.0 * 1.2, abs=0.1)
 
     def test_heel_rise_threshold_scaled(self):
         engine = _make_engine_with_squat_rules()
