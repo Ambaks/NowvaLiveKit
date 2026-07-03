@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from biomechanics.diagnosis.bridge import (
     build_frame_from_live_pipeline,
     build_rep_kinematic_summary,
+    build_set_features,
+    find_bottom_frame,
 )
+from biomechanics.diagnosis.rep_scoring import score_depth
 
 
 def _standing_kpts_mediapipe() -> list[list[float]]:
@@ -137,28 +141,35 @@ class TestBuildFrameFromLivePipeline:
         assert frame["angles"]["knee_flex"] == 110.0
 
     def test_coordinate_transform(self):
+        """Axis swap preserves relative geometry; translation is grounding."""
         kpts_mp = _squat_bottom_kpts_mediapipe()
         angles = _squat_bottom_angles()
         frame = build_frame_from_live_pipeline(kpts_mp, angles)
-        kpts_vis = frame["kpts"]
+        kpts_vis = np.array(frame["kpts"])
 
-        assert len(kpts_vis) == 19
+        assert kpts_vis.shape == (19, 3)
 
-        # vis_x = mp_z, vis_y = -mp_y, vis_z = -mp_x
-        for i in range(19):
-            assert kpts_vis[i][0] == pytest.approx(kpts_mp[i][2], abs=1e-9)
-            assert kpts_vis[i][1] == pytest.approx(-kpts_mp[i][1], abs=1e-9)
-            assert kpts_vis[i][2] == pytest.approx(-kpts_mp[i][0], abs=1e-9)
+        # vis_x = mp_z, vis_y = -mp_y, vis_z = -mp_x (up to a uniform shift)
+        swapped = np.array([[p[2], -p[1], -p[0]] for p in kpts_mp])
+        relative_vis = kpts_vis - kpts_vis[11]
+        relative_swapped = swapped - swapped[11]
+        np.testing.assert_allclose(relative_vis, relative_swapped, atol=1e-9)
 
-    def test_hip_y_positive_in_vis_coords(self):
-        """Hip vis_y should be positive (above origin) since mp_y=0 at hip."""
+    def test_hip_y_grounded_above_ankles(self):
+        """Hip vis_y is ankle-relative height, not hip-centered zero.
+
+        MediaPipe world coords put the origin at the hip midpoint; the
+        bridge must re-ground so hip height is measured from the floor.
+        """
         kpts_mp = _squat_bottom_kpts_mediapipe()
         angles = _squat_bottom_angles()
         frame = build_frame_from_live_pipeline(kpts_mp, angles)
 
-        # Hip mp_y is 0.0, so vis_y = -0.0 = 0.0
-        assert frame["kpts"][11][1] == pytest.approx(0.0, abs=1e-9)
-        assert frame["kpts"][12][1] == pytest.approx(0.0, abs=1e-9)
+        # mp hips at y=0, ankles at y=0.38 → grounded hip height = 0.38 m
+        assert frame["kpts"][11][1] == pytest.approx(0.38, abs=1e-9)
+        assert frame["kpts"][12][1] == pytest.approx(0.38, abs=1e-9)
+        min_ankle_y = min(frame["kpts"][15][1], frame["kpts"][16][1])
+        assert min_ankle_y == pytest.approx(0.0, abs=1e-9)
 
 
 class TestEndToEndBridgeToSummary:
@@ -237,3 +248,86 @@ class TestEndToEndBridgeToSummary:
 
         assert summary.foot_direction_angle_l >= 0.0
         assert summary.foot_direction_angle_r >= 0.0
+
+
+class TestLiveFrameGrounding:
+
+    def test_standing_frame_grounded_independently(self):
+        """Each frame grounds to its own ankle Y, so hip heights compare across frames."""
+        frame = build_frame_from_live_pipeline(
+            _squat_bottom_kpts_mediapipe(),
+            _squat_bottom_angles(),
+            standing_kpts=_standing_kpts_mediapipe(),
+        )
+        standing_vis = frame["standing_kpts"]
+
+        min_ankle_y = min(standing_vis[15][1], standing_vis[16][1])
+        assert min_ankle_y == pytest.approx(0.0, abs=1e-9)
+        # mp standing: hips at y=0, ankles at y=0.82 → hip height 0.82 m
+        assert standing_vis[11][1] == pytest.approx(0.82, abs=1e-9)
+
+    def test_hip_mid_centered_in_xz(self):
+        """A global XZ offset in camera coords must not survive the transform."""
+        kpts_offset = [
+            [x + 0.3, y, z + 0.5] for x, y, z in _squat_bottom_kpts_mediapipe()
+        ]
+        frame = build_frame_from_live_pipeline(kpts_offset, _squat_bottom_angles())
+        kpts_vis = frame["kpts"]
+
+        hip_mid_x = (kpts_vis[11][0] + kpts_vis[12][0]) / 2.0
+        hip_mid_z = (kpts_vis[11][2] + kpts_vis[12][2]) / 2.0
+        assert hip_mid_x == pytest.approx(0.0, abs=1e-9)
+        assert hip_mid_z == pytest.approx(0.0, abs=1e-9)
+
+    def test_depth_score_meaningful_from_live_frames(self):
+        """Standing hip 0.82 m, bottom hip 0.38 m, bottom knee 0.36 m
+        → depth = (82 - 38) / (82 - 36). Was ~0 before grounding."""
+        frame = build_frame_from_live_pipeline(
+            _squat_bottom_kpts_mediapipe(),
+            _squat_bottom_angles(),
+            standing_kpts=_standing_kpts_mediapipe(),
+        )
+        summary = build_rep_kinematic_summary(
+            frame, _default_athlete_params(), rep_number=1,
+        )
+
+        depth = score_depth(summary, {}, {})
+        assert depth == pytest.approx((82.0 - 38.0) / (82.0 - 36.0), abs=0.01)
+
+
+def _valid_frame() -> dict:
+    return build_frame_from_live_pipeline(
+        _squat_bottom_kpts_mediapipe(), _squat_bottom_angles(),
+    )
+
+
+class TestFindBottomFrame:
+
+    def test_skips_none_frames(self):
+        valid = _valid_frame()
+        assert find_bottom_frame([None, valid, None]) is valid
+
+    def test_all_none_returns_none(self):
+        assert find_bottom_frame([None, None]) is None
+
+    def test_empty_returns_none(self):
+        assert find_bottom_frame([]) is None
+
+
+class TestBuildSetFeaturesEdgeCases:
+
+    def test_degenerate_reps_skipped(self):
+        replay_reps = [[], [None, None], [_valid_frame()]]
+        features = build_set_features(
+            replay_reps, _default_athlete_params(),
+            baseline={"peakDorsi": 35.0, "peakKneeFlex": 120.0},
+        )
+        assert len(features.per_rep_kinematics) == 1
+
+    def test_does_not_mutate_caller_frames(self):
+        frame = _valid_frame()
+        build_set_features(
+            [[frame]], _default_athlete_params(),
+            baseline={"peakDorsi": 35.0, "peakKneeFlex": 120.0},
+        )
+        assert "standing_kpts" not in frame

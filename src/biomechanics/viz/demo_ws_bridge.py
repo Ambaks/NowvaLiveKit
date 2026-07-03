@@ -73,9 +73,11 @@ class DemoWSBridge:
         self._done_event = threading.Event()
         self._html_bytes: bytes | None = None
         self._init_payload: str | None = None
+        self._event_backlog: list[str] = []
 
     def start(self) -> None:
         self._done_event.clear()
+        self._event_backlog.clear()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -113,6 +115,10 @@ class DemoWSBridge:
         try:
             if self._init_payload is not None:
                 await ws.send(self._init_payload)
+                # Replay events sent before this client connected, so a
+                # slow-loading browser doesn't miss demo_start/demo_cue.
+                for payload in list(self._event_backlog):
+                    await ws.send(payload)
             async for raw in ws:
                 msg = json.loads(raw)
                 if msg.get("type") == "done":
@@ -126,7 +132,9 @@ class DemoWSBridge:
         self._broadcast(payload)
 
     def send_event(self, event: dict[str, Any]) -> None:
-        self._broadcast(json.dumps(event))
+        payload = json.dumps(event)
+        self._event_backlog.append(payload)
+        self._broadcast(payload)
 
     def wait_done(self, timeout: float | None = None) -> bool:
         return self._done_event.wait(timeout=timeout)

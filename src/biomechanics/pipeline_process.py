@@ -54,6 +54,8 @@ logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
 
 DEMO_START_TIMEOUT_S = 10.0
 DEMO_INACTIVITY_TIMEOUT_S = 45.0
+# Covers settle + final hold + morph-out (~2.2s) plus browser latency.
+DEMO_FINISH_TIMEOUT_S = 6.0
 
 
 def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir: str):
@@ -419,6 +421,7 @@ def run_biomechanics_pipeline(
             phase_start = time.time()
             last_message_time = phase_start
             finishing = False
+            finish_deadline = 0.0
             demo_started = False
 
             try:
@@ -440,10 +443,15 @@ def run_biomechanics_pipeline(
                         elif msg_type == "demo_end":
                             bridge.send_event({"type": "demo_end"})
                             finishing = True
+                            finish_deadline = time.time() + DEMO_FINISH_TIMEOUT_S
 
                     now = time.time()
-                    if finishing and bridge.wait_done(timeout=0):
-                        return True
+                    if finishing:
+                        if bridge.wait_done(timeout=0):
+                            return True
+                        if now > finish_deadline:
+                            print("  [DEMO] Viewer never confirmed done — ending demo")
+                            return True
                     if not demo_started and now - phase_start > DEMO_START_TIMEOUT_S:
                         print("  [DEMO] No demo_start received — skipping demo")
                         return True
@@ -451,6 +459,7 @@ def run_biomechanics_pipeline(
                         print("  [DEMO] Agent went silent mid-demo — ending demo")
                         bridge.send_event({"type": "demo_end"})
                         finishing = True
+                        finish_deadline = now + DEMO_FINISH_TIMEOUT_S
 
                     frame = pipeline.last_frame
                     if frame is not None:

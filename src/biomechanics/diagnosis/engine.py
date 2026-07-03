@@ -293,8 +293,9 @@ class HypothesisEngine:
             return reps[0]
         if anthro is not None and rom is not None:
             summary = score_set(reps, anthro, rom)
-            worst_idx = max(0, min(summary.worst_rep_number - 2, len(reps) - 1))
-            return reps[worst_idx]
+            for rep in reps:
+                if rep.rep_number == summary.worst_rep_number:
+                    return rep
         sorted_reps = sorted(reps, key=lambda r: r.trunk_pitch_at_bottom)
         return sorted_reps[len(sorted_reps) // 2]
 
