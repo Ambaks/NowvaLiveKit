@@ -200,7 +200,8 @@ class CompactionService:
             except Exception:
                 pass
 
-        # Write final metadata
+        # Flush whatever never aged out of the pipeline, then write final metadata
+        await self._flush_remaining_context()
         self._write_final_metadata()
 
         logger.info(
@@ -465,6 +466,52 @@ class CompactionService:
             )
         except Exception as e:
             logger.error(f"[COMPACTION:ERROR] Failed to flush cold to memory.md: {e}")
+
+    async def _flush_remaining_context(self) -> None:
+        """Write any un-flushed HOT/WARM/COLD context to memory.md on stop.
+
+        Compressed via the LLM when possible; raw on failure or timeout so
+        session memory is never silently lost.
+        """
+        if not self._memory_path:
+            return
+
+        parts = []
+        if self._cold:
+            parts.append(self._cold)
+        if self._warm:
+            parts.append(self._warm)
+        if self._event_buffer:
+            parts.append(self._format_events(self._event_buffer))
+        if not parts:
+            return
+        remaining = "\n".join(parts)
+
+        compressed = None
+        if self._client is not None:
+            try:
+                compressed = await asyncio.wait_for(
+                    self._compress(_COLD_TO_MEMORY_PROMPT, remaining, "final_flush"),
+                    timeout=10.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[COMPACTION:FLUSH] Final compression timed out — writing raw context"
+                )
+
+        flush_timestamp = datetime.now(timezone.utc).isoformat()
+        try:
+            with open(self._memory_path, "a") as f:
+                f.write(f"\n## Session end flush at {flush_timestamp}\n\n")
+                f.write(compressed if compressed is not None else remaining)
+                f.write("\n")
+            self._event_buffer = []
+            self._warm = ""
+            self._cold = ""
+            self._cold_flush_count += 1
+            logger.info("[COMPACTION:FLUSH] Final context flushed to memory.md on stop")
+        except Exception as e:
+            logger.error(f"[COMPACTION:ERROR] Final flush failed: {e}")
 
     # ------------------------------------------------------------------
     # Audit
