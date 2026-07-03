@@ -578,7 +578,7 @@ class NowvaApp:
                         print("[COACHING IPC] Forwarded workout_complete to pose process")
                     except Exception as e:
                         print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
-            elif msg_type in ("demo_start", "demo_cue", "demo_end"):
+            elif msg_type in ("demo_start", "demo_cue", "demo_end", "assessment_mode"):
                 if self.ipc_server and self.ipc_server.client_socket:
                     try:
                         self.ipc_server.send_message(message)

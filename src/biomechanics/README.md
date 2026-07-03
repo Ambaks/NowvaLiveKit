@@ -192,9 +192,17 @@ Visualization and debugging.
 - `window_anim.py` -- window pre-creation and native macOS fullscreen animation
   helpers. Pre-creates the OpenCV window before the pipeline starts so the
   transition to fullscreen is instant (uses PyObjC `NSApplication` on macOS).
-- `demo_renderer.py` -- choreographed coaching-demo rendering. Plays yoyo-style
-  pose correction animations in the live cv2 window, synchronized with voice
-  narration cues from the agent.
+- `demo_ws_bridge.py` -- serves the Three.js choreography viewer over HTTP and
+  bridges demo events (start/cue/end) plus live skeleton frames to it over
+  WebSocket. Owns the demo timing constants and per-fault joint highlight map
+  sent in the init payload; relays the viewer's started/done acks back.
+- `choreographer.mjs` -- the choreographer state machine (morph-in, per-cue
+  yoyo loops with a "before" ghost pose, settle, final hold, morph-out to the
+  live skeleton). Pure logic with injected render callbacks so it runs both in
+  the browser and under `node --test tests/js/*.test.mjs`.
+- `demo_viewer.html` -- Three.js viewer page. Renders the main and ghost
+  skeletons, per-fault camera angles, and captions, driven by the
+  choreographer, synchronized with voice narration cues from the agent.
 
 ## Key Entry Points
 

@@ -64,6 +64,7 @@ class CoachingService:
 
         # Choreographed assessment demo fires once per session
         self._assessment_demo_played: bool = False
+        self._demo_start_ack = None
 
         # Orchestrator is dormant until assessment+calibration finish
         self._workout_active: bool = False
@@ -334,6 +335,9 @@ class CoachingService:
                 logger.warning(
                     f"[COACHING SERVICE] Demo visuals aborted: {message.get('reason')}"
                 )
+            elif msg_type == "demo_started":
+                if self._demo_start_ack is not None:
+                    self._demo_start_ack.set()
             elif msg_type == "calibration_rep":
                 rep = message.get("rep_number", 0)
                 total = message.get("total_required", 5)
@@ -419,7 +423,7 @@ class CoachingService:
 
     async def _run_assessment_demo(self, demo_cues: list) -> bool:
         """Run the choreographed demo task. Returns False if it failed to run."""
-        from agent.agents.coaching_demo_task import CoachingDemoTask
+        from agent.agents.coaching_demo_task import CoachingDemoTask, DemoStartAck
         from agent.services.demo_narration import generate_demo_lines
         from agent.services.inline_task_runner import start_inline_agent_task
 
@@ -431,11 +435,13 @@ class CoachingService:
             generate_demo_lines(self._session.llm, demo_cues)
         )
         self.is_coaching_speaking = True
+        self._demo_start_ack = DemoStartAck()
         try:
             demo_task = CoachingDemoTask(
                 cues=demo_cues,
                 lines_task=lines_task,
                 send_to_pipeline_fn=self._send_to_pipeline,
+                started_ack=self._demo_start_ack,
             )
             runner = start_inline_agent_task(self._session, demo_task)
             await runner
@@ -447,6 +453,7 @@ class CoachingService:
             return False
         finally:
             self.is_coaching_speaking = False
+            self._demo_start_ack = None
 
     def _send_to_pipeline(self, message: dict) -> None:
         if not self._coaching_ipc:

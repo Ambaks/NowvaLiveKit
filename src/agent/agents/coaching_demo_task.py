@@ -16,8 +16,29 @@ from agent.services.demo_narration import (
 logger = logging.getLogger(__name__)
 
 MORPH_IN_WAIT_SECONDS = 0.9
+STARTED_ACK_TIMEOUT_SECONDS = 4.0
 INTER_CUE_PAUSE_SECONDS = 0.4
 MAX_LINE_REPLAYS = 2
+
+
+class DemoStartAck:
+    """Signal that the viewer actually began the morph-in, with the ack time."""
+
+    def __init__(self) -> None:
+        self._event = asyncio.Event()
+        self.acked_at: float | None = None
+
+    def set(self) -> None:
+        if self.acked_at is None:
+            self.acked_at = asyncio.get_running_loop().time()
+        self._event.set()
+
+    async def wait(self, timeout: float) -> bool:
+        try:
+            await asyncio.wait_for(self._event.wait(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
 _DEMO_INSTRUCTIONS_TEMPLATE = (
     "You are Nova, an energetic fitness coach, mid-demonstration of squat-form "
@@ -35,6 +56,7 @@ class CoachingDemoTask(AgentTask):
         cues: list[dict],
         lines_task: asyncio.Task | None,
         send_to_pipeline_fn: Callable[[dict], None],
+        started_ack: DemoStartAck | None = None,
         chat_ctx=None,
     ) -> None:
         cue_summary = "\n".join(
@@ -49,6 +71,7 @@ class CoachingDemoTask(AgentTask):
         self._cues = cues
         self._lines_task = lines_task
         self._send = send_to_pipeline_fn
+        self._started_ack = started_ack
 
     async def on_enter(self) -> None:
         try:
@@ -75,7 +98,17 @@ class CoachingDemoTask(AgentTask):
         if script is None:
             script = build_fallback_script(self._cues)
 
-        morph_remaining = MORPH_IN_WAIT_SECONDS - (loop.time() - start_time)
+        # Hold the intro until the viewer confirms the morph-in actually began;
+        # fall back to dead-reckoning from demo_start if no ack arrives.
+        morph_started_at = start_time
+        if self._started_ack is not None:
+            ack_remaining = STARTED_ACK_TIMEOUT_SECONDS - (loop.time() - start_time)
+            if await self._started_ack.wait(max(0.0, ack_remaining)):
+                morph_started_at = self._started_ack.acked_at
+            else:
+                logger.warning("[DEMO TASK] No viewer started-ack — dead-reckoning intro")
+
+        morph_remaining = MORPH_IN_WAIT_SECONDS - (loop.time() - morph_started_at)
         if morph_remaining > 0:
             await asyncio.sleep(morph_remaining)
 

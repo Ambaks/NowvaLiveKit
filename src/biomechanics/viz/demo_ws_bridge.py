@@ -13,19 +13,27 @@ import websockets
 from websockets.http11 import Request, Response
 
 from biomechanics.diagnosis.demo_builder import DemoData
-from biomechanics.viz.demo_renderer import (
-    FINAL_HOLD_SECONDS,
-    HIGHLIGHT_JOINTS,
-    MORPH_IN_SECONDS,
-    MORPH_OUT_SECONDS,
-    SETTLE_SECONDS,
-    YOYO_HOLD_SECONDS,
-    YOYO_TRAVEL_SECONDS,
-)
 
 _VIEWER_HTML = Path(__file__).with_name("demo_viewer.html")
+_CHOREOGRAPHER_JS = Path(__file__).with_name("choreographer.mjs")
 
 DEMO_WS_PORT = 8767
+LIVE_POSE_JOINT_COUNT = 19
+
+MORPH_IN_SECONDS = 0.8
+MORPH_OUT_SECONDS = 0.8
+YOYO_TRAVEL_SECONDS = 1.2
+YOYO_HOLD_SECONDS = 0.25
+SETTLE_SECONDS = 0.4
+FINAL_HOLD_SECONDS = 1.0
+
+HIGHLIGHT_JOINTS: dict[str, tuple[int, ...]] = {
+    "narrow_stance": (13, 14, 15, 16, 17, 18),
+    "narrow_foot_angle": (15, 16, 17, 18),
+    "knee_track_cue": (13, 14),
+    "weight_shift_cue": (5, 6, 11, 12),
+    "depth_cue_unfamiliar": (11, 12, 13, 14),
+}
 
 
 def _ground_and_center_stack(pose_stack: np.ndarray) -> np.ndarray:
@@ -71,13 +79,18 @@ class DemoWSBridge:
         self._server: Any = None
         self._clients: set[websockets.WebSocketServerProtocol] = set()
         self._done_event = threading.Event()
+        self._started_event = threading.Event()
         self._html_bytes: bytes | None = None
+        self._js_bytes: bytes | None = None
         self._init_payload: str | None = None
         self._event_backlog: list[str] = []
+        self._latest_live_payload: str | None = None
 
     def start(self) -> None:
         self._done_event.clear()
+        self._started_event.clear()
         self._event_backlog.clear()
+        self._latest_live_payload = None
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -88,6 +101,7 @@ class DemoWSBridge:
 
     async def _serve(self) -> None:
         self._html_bytes = _VIEWER_HTML.read_bytes()
+        self._js_bytes = _CHOREOGRAPHER_JS.read_bytes()
         self._server = await websockets.serve(
             self._ws_handler,
             "0.0.0.0",
@@ -106,6 +120,13 @@ class DemoWSBridge:
                 websockets.Headers({"Content-Type": "text/html; charset=utf-8"}),
                 self._html_bytes,
             )
+        if request.path == "/choreographer.mjs":
+            return Response(
+                200,
+                "OK",
+                websockets.Headers({"Content-Type": "text/javascript; charset=utf-8"}),
+                self._js_bytes,
+            )
         if request.path == "/ws":
             return None
         return Response(404, "Not Found", websockets.Headers(), b"not found")
@@ -119,9 +140,13 @@ class DemoWSBridge:
                 # slow-loading browser doesn't miss demo_start/demo_cue.
                 for payload in list(self._event_backlog):
                     await ws.send(payload)
+            if self._latest_live_payload is not None:
+                await ws.send(self._latest_live_payload)
             async for raw in ws:
                 msg = json.loads(raw)
-                if msg.get("type") == "done":
+                if msg.get("type") == "started":
+                    self._started_event.set()
+                elif msg.get("type") == "done":
                     self._done_event.set()
         finally:
             self._clients.discard(ws)
@@ -135,6 +160,20 @@ class DemoWSBridge:
         payload = json.dumps(event)
         self._event_backlog.append(payload)
         self._broadcast(payload)
+
+    def send_live_pose(self, points: np.ndarray) -> None:
+        """Stream one live skeleton frame; kept out of the event backlog."""
+        if points.shape[0] < LIVE_POSE_JOINT_COUNT:
+            return
+        grounded = _ground_and_center_stack(
+            points[np.newaxis, :LIVE_POSE_JOINT_COUNT].astype(np.float64)
+        )
+        payload = json.dumps({"type": "live_pose", "points": grounded[0].tolist()})
+        self._latest_live_payload = payload
+        self._broadcast(payload)
+
+    def wait_started(self, timeout: float | None = None) -> bool:
+        return self._started_event.wait(timeout=timeout)
 
     def wait_done(self, timeout: float | None = None) -> bool:
         return self._done_event.wait(timeout=timeout)

@@ -14,6 +14,7 @@ from biomechanics.viz.demo_ws_bridge import DemoWSBridge
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.incoming: list[str] = []
 
     async def send(self, payload: str) -> None:
         self.sent.append(payload)
@@ -22,6 +23,8 @@ class _FakeWebSocket:
         return self
 
     async def __anext__(self):
+        if self.incoming:
+            return self.incoming.pop(0)
         raise StopAsyncIteration
 
 
@@ -55,3 +58,35 @@ class TestEventBacklogReplay:
         fake_ws = _FakeWebSocket()
         asyncio.run(bridge._ws_handler(fake_ws))
         assert fake_ws.sent == []
+
+    def test_late_client_receives_latest_live_pose_only(self):
+        """Live poses are not backlogged; only the most recent one is replayed."""
+        bridge = DemoWSBridge()
+        bridge.send_init(_make_demo_data())
+        bridge.send_live_pose(np.zeros((19, 3)))
+        bridge.send_live_pose(np.ones((19, 3)))
+
+        fake_ws = _FakeWebSocket()
+        asyncio.run(bridge._ws_handler(fake_ws))
+
+        types = [json.loads(payload)["type"] for payload in fake_ws.sent]
+        assert types == ["init", "live_pose"]
+
+    def test_short_skeleton_live_pose_is_dropped(self):
+        bridge = DemoWSBridge()
+        bridge.send_live_pose(np.zeros((17, 3)))
+        assert bridge._latest_live_payload is None
+
+
+class TestStartedAck:
+
+    def test_started_message_sets_event(self):
+        bridge = DemoWSBridge()
+        fake_ws = _FakeWebSocket()
+        fake_ws.incoming = [json.dumps({"type": "started"})]
+        asyncio.run(bridge._ws_handler(fake_ws))
+        assert bridge.wait_started(timeout=0)
+
+    def test_not_started_before_any_message(self):
+        bridge = DemoWSBridge()
+        assert not bridge.wait_started(timeout=0)

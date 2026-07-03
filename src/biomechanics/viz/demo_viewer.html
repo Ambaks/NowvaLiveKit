@@ -55,6 +55,7 @@ body {
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createChoreographer, easeInOut } from './choreographer.mjs';
 
 const BONE_CONNECTIONS = [
     [0,1],[0,2],[1,3],[2,4],
@@ -109,6 +110,30 @@ for (const [a, b] of BONE_CONNECTIONS) {
     bones.push({ mesh: m, a, b });
 }
 
+// Ghost skeleton: static translucent reference (the "before" pose)
+const matGhostJoint = new THREE.MeshPhongMaterial({
+    color: 0xa0a0c0, emissive: 0x181828, transparent: true, opacity: 0.22, depthWrite: false,
+});
+const matGhostBone = new THREE.MeshPhongMaterial({
+    color: 0x9090b0, emissive: 0x141420, transparent: true, opacity: 0.22, depthWrite: false,
+});
+const ghostJoints = [];
+for (let i = 0; i < 19; i++) {
+    const m = new THREE.Mesh(jointGeo, matGhostJoint);
+    m.visible = false;
+    scene.add(m);
+    ghostJoints.push(m);
+}
+const ghostBones = [];
+for (const [a, b] of BONE_CONNECTIONS) {
+    const g = new THREE.CylinderGeometry(0.005, 0.005, 1, 6);
+    g.translate(0, 0.5, 0);
+    const m = new THREE.Mesh(g, matGhostBone);
+    m.visible = false;
+    scene.add(m);
+    ghostBones.push({ mesh: m, a, b });
+}
+
 // ======== PER-FAULT CAMERA ANGLES ========
 const DEFAULT_CAMERA = {
     pos: new THREE.Vector3(2.0, 1.0, 2.0),
@@ -154,68 +179,10 @@ function cameraForCue(causeId) {
     return cfg || DEFAULT_CAMERA;
 }
 
-// ======== CHOREOGRAPHER STATE MACHINE ========
-const IDLE = 'idle';
-const MORPH_IN = 'morph_in';
-const CUE_LOOP = 'cue_loop';
-const SETTLE = 'settle';
-const FINAL_HOLD = 'final_hold';
-const MORPH_OUT = 'morph_out';
-
-let timing = {
-    morphIn: 0.8,
-    morphOut: 0.8,
-    yoyoTravel: 1.2,
-    yoyoHold: 0.25,
-    settle: 0.4,
-    finalHold: 1.0,
-};
-
-let state = IDLE;
-let stateStart = 0;
-let poseStack = null;
-let cues = [];
-let highlightMap = {};
-let cueIndex = 0;
-let pendingCue = null;
-let settleFrom = null;
-let settleTo = null;
-let afterSettleCue = null;
-let currentPoints = new Float64Array(19 * 3);
-let pointsBuffer = new Float64Array(19 * 3);
-
+// ======== CHOREOGRAPHER WIRING ========
 const captionEl = document.getElementById('caption');
 const statusEl = document.getElementById('status');
 const cameraInfoEl = document.getElementById('camera-info');
-
-function easeInOut(t) {
-    t = Math.min(1, Math.max(0, t));
-    return t * t * (3 - 2 * t);
-}
-
-function yoyoWeight(elapsed, travel, hold) {
-    const period = 2 * (travel + hold);
-    let phase = elapsed % period;
-    if (phase < hold) return 0;
-    phase -= hold;
-    if (phase < travel) return easeInOut(phase / travel);
-    phase -= travel;
-    if (phase < hold) return 1;
-    return 1 - easeInOut((phase - hold) / travel);
-}
-
-function getPose(stackIndex) {
-    const n = 19 * 3;
-    const offset = stackIndex * n;
-    return poseStack.slice(offset, offset + n);
-}
-
-function lerpPose(a, b, w, out) {
-    for (let i = 0; i < a.length; i++) {
-        out[i] = a[i] + (b[i] - a[i]) * w;
-    }
-    return out;
-}
 
 function setCaption(text) {
     if (text) {
@@ -226,55 +193,6 @@ function setCaption(text) {
     }
 }
 
-function beginSettle(target, nextCue) {
-    settleFrom = new Float64Array(currentPoints);
-    settleTo = target;
-    afterSettleCue = nextCue;
-    state = SETTLE;
-    stateStart = performance.now() / 1000;
-}
-
-function onStart() {
-    if (!poseStack) return;
-    pendingCue = null;
-    cueIndex = 0;
-    state = MORPH_IN;
-    stateStart = performance.now() / 1000;
-    currentPoints.set(getPose(0));
-    setCaption(null);
-    showSkeleton();
-    if (cues.length > 0) {
-        lerpCameraTo(cameraForCue(cues[0].cause_id));
-    }
-}
-
-function onAdvanceCue(idx) {
-    if (!poseStack || idx >= cues.length) return;
-    const now = performance.now() / 1000;
-    const morphing = state === MORPH_IN && (now - stateStart) < timing.morphIn;
-    if (morphing) {
-        pendingCue = idx;
-        return;
-    }
-    beginSettle(getPose(idx), idx);
-    lerpCameraTo(cameraForCue(cues[idx].cause_id));
-}
-
-function onFinish() {
-    if (!poseStack) {
-        state = IDLE;
-        return;
-    }
-    const lastIdx = Math.floor(poseStack.length / (19 * 3)) - 1;
-    beginSettle(getPose(lastIdx), null);
-    setCaption(null);
-}
-
-function showSkeleton() {
-    for (const j of joints) j.visible = true;
-    for (const b of bones) b.mesh.visible = true;
-}
-
 function hideSkeleton() {
     for (const j of joints) j.visible = false;
     for (const b of bones) b.mesh.visible = false;
@@ -283,6 +201,18 @@ function hideSkeleton() {
 function setSkeletonOpacity(opacity) {
     for (const j of joints) j.material.opacity = opacity;
     for (const b of bones) b.mesh.material.opacity = opacity;
+}
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+const boneDir = new THREE.Vector3();
+
+function positionBone(mesh, pa, pb) {
+    boneDir.subVectors(pb, pa);
+    const len = boneDir.length();
+    boneDir.normalize();
+    mesh.position.copy(pa);
+    mesh.scale.set(1, len, 1);
+    mesh.quaternion.setFromUnitVectors(UP_AXIS, boneDir);
 }
 
 function updateSkeletonFromPoints(pts, highlight) {
@@ -304,14 +234,7 @@ function updateSkeletonFromPoints(pts, highlight) {
 
     for (let bi = 0; bi < BONE_CONNECTIONS.length; bi++) {
         const [ai, bIdx] = BONE_CONNECTIONS[bi];
-        const pa = joints[ai].position;
-        const pb = joints[bIdx].position;
-        const dir = new THREE.Vector3().subVectors(pb, pa);
-        const len = dir.length();
-        dir.normalize();
-        bones[bi].mesh.position.copy(pa);
-        bones[bi].mesh.scale.set(1, len, 1);
-        bones[bi].mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        positionBone(bones[bi].mesh, joints[ai].position, joints[bIdx].position);
         bones[bi].mesh.visible = true;
 
         const isHl = hl.has(ai) && hl.has(bIdx);
@@ -324,89 +247,45 @@ function updateSkeletonFromPoints(pts, highlight) {
     }
 }
 
-function tick(now) {
-    if (state === IDLE || !poseStack) return;
-    const nowS = now / 1000;
-    const elapsed = nowS - stateStart;
-
-    if (state === SETTLE && elapsed >= timing.settle) {
-        if (afterSettleCue !== null) {
-            cueIndex = afterSettleCue;
-            state = CUE_LOOP;
-        } else {
-            state = FINAL_HOLD;
-        }
-        stateStart = nowS;
-        tick(now);
+function updateGhost(pts) {
+    if (!pts) {
+        for (const j of ghostJoints) j.visible = false;
+        for (const b of ghostBones) b.mesh.visible = false;
         return;
     }
-
-    if (state === FINAL_HOLD && elapsed >= timing.finalHold) {
-        state = MORPH_OUT;
-        stateStart = nowS;
-        tick(now);
-        return;
+    for (let i = 0; i < 19; i++) {
+        ghostJoints[i].position.set(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]);
+        ghostJoints[i].visible = true;
     }
-
-    if (state === MORPH_OUT && elapsed >= timing.morphOut) {
-        state = IDLE;
-        hideSkeleton();
-        setCaption(null);
-        sendDone();
-        return;
-    }
-
-    if (state === MORPH_IN && pendingCue !== null && elapsed >= timing.morphIn) {
-        const idx = pendingCue;
-        pendingCue = null;
-        beginSettle(getPose(idx), idx);
-        tick(now);
-        return;
-    }
-
-    let highlight = [];
-
-    if (state === MORPH_IN) {
-        const w = easeInOut(Math.min(elapsed / timing.morphIn, 1));
-        setSkeletonOpacity(w);
-        currentPoints.set(getPose(0));
-        updateSkeletonFromPoints(currentPoints, []);
-    } else if (state === MORPH_OUT) {
-        const w = 1 - easeInOut(Math.min(elapsed / timing.morphOut, 1));
-        setSkeletonOpacity(w);
-        const lastIdx = Math.floor(poseStack.length / (19 * 3)) - 1;
-        currentPoints.set(getPose(lastIdx));
-        updateSkeletonFromPoints(currentPoints, []);
-    } else {
-        setSkeletonOpacity(1);
-
-        if (state === CUE_LOOP) {
-            const cue = cues[cueIndex];
-            const w = yoyoWeight(elapsed, timing.yoyoTravel, timing.yoyoHold);
-            lerpPose(getPose(cueIndex), getPose(cueIndex + 1), w, currentPoints);
-            highlight = highlightMap[cue.cause_id] || [];
-            setCaption(cue.magnitude_text);
-        } else if (state === SETTLE) {
-            const w = easeInOut(elapsed / timing.settle);
-            lerpPose(settleFrom, settleTo, w, currentPoints);
-            setCaption(null);
-        } else if (state === FINAL_HOLD) {
-            const lastIdx = Math.floor(poseStack.length / (19 * 3)) - 1;
-            currentPoints.set(getPose(lastIdx));
-            setCaption(null);
-        }
-
-        updateSkeletonFromPoints(currentPoints, highlight);
+    for (let bi = 0; bi < BONE_CONNECTIONS.length; bi++) {
+        const [ai, bIdx] = BONE_CONNECTIONS[bi];
+        positionBone(ghostBones[bi].mesh, ghostJoints[ai].position, ghostJoints[bIdx].position);
+        ghostBones[bi].mesh.visible = true;
     }
 }
+
+const choreo = createChoreographer({
+    render: updateSkeletonFromPoints,
+    setOpacity: setSkeletonOpacity,
+    setCaption,
+    setGhost: updateGhost,
+    hideSkeleton,
+    onCueCamera: (causeId) => lerpCameraTo(cameraForCue(causeId)),
+    onStarted: () => sendMsg('started'),
+    onDone: () => sendMsg('done'),
+});
 
 // ======== WEBSOCKET ========
 let ws = null;
 
-function sendDone() {
+function sendMsg(type) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'done' }));
+        ws.send(JSON.stringify({ type }));
     }
+}
+
+function nowSeconds() {
+    return performance.now() / 1000;
 }
 
 function connect() {
@@ -421,29 +300,24 @@ function connect() {
         const msg = JSON.parse(evt.data);
 
         if (msg.type === 'init') {
-            const stack = msg.pose_stack;
-            const numPoses = stack.length;
-            poseStack = new Float64Array(numPoses * 19 * 3);
-            for (let p = 0; p < numPoses; p++) {
-                for (let j = 0; j < 19; j++) {
-                    poseStack[p * 19 * 3 + j * 3 + 0] = stack[p][j][0];
-                    poseStack[p * 19 * 3 + j * 3 + 1] = stack[p][j][1];
-                    poseStack[p * 19 * 3 + j * 3 + 2] = stack[p][j][2];
-                }
+            choreo.init(msg);
+            statusEl.textContent = `loaded ${choreo.cueCount} cue(s) — waiting for start`;
+        } else if (msg.type === 'live_pose') {
+            const pts = msg.points;
+            const flat = new Float64Array(pts.length * 3);
+            for (let j = 0; j < pts.length; j++) {
+                flat[j * 3 + 0] = pts[j][0];
+                flat[j * 3 + 1] = pts[j][1];
+                flat[j * 3 + 2] = pts[j][2];
             }
-            cues = msg.cues || [];
-            highlightMap = msg.highlight_map || {};
-            if (msg.timing) {
-                timing = { ...timing, ...msg.timing };
-            }
-            statusEl.textContent = `loaded ${cues.length} cue(s) — waiting for start`;
+            choreo.setLivePose(flat);
         } else if (msg.type === 'demo_start') {
-            onStart();
+            choreo.start(nowSeconds());
             statusEl.textContent = 'demo playing';
         } else if (msg.type === 'demo_cue') {
-            onAdvanceCue(msg.cue_index);
+            choreo.advanceCue(msg.cue_index, nowSeconds());
         } else if (msg.type === 'demo_end') {
-            onFinish();
+            choreo.finish(nowSeconds());
         }
     };
 
@@ -479,7 +353,7 @@ function updateCameraInfo() {
 
 function animate(now) {
     requestAnimationFrame(animate);
-    tick(now);
+    choreo.tick(now / 1000);
     tickCameraLerp();
     orbitCtrl.update();
     updateCameraInfo();

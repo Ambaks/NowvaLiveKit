@@ -42,7 +42,7 @@ from biomechanics.diagnosis.demo_builder import build_demo_data
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
-from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen, DemoChoreographer
+from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
 from biomechanics.viz.demo_ws_bridge import DemoWSBridge, DEMO_WS_PORT
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
@@ -423,10 +423,18 @@ def run_biomechanics_pipeline(
             finishing = False
             finish_deadline = 0.0
             demo_started = False
+            started_ack_sent = False
 
             try:
                 while True:
                     result = pipeline.process_frame()
+
+                    if result.skeleton_3d is not None:
+                        bridge.send_live_pose(result.skeleton_3d.to_numpy())
+
+                    if not started_ack_sent and bridge.wait_started(timeout=0):
+                        ipc_client.send_message({"type": "demo_started"})
+                        started_ack_sent = True
 
                     incoming = _poll_incoming_message(ipc_client)
                     if incoming is not None:
@@ -492,6 +500,7 @@ def run_biomechanics_pipeline(
                 pipeline.rep_counter.set_assessment_mode(True)
                 if pipeline._bilstm is not None:
                     pipeline._bilstm.set_assessment_mode(True)
+                session_tracker.set_assessment_mode(True)
                 session_tracker.reset_rep_buffers()
                 session_tracker.current_set_reps = []
                 session_tracker.set_active = False
@@ -690,6 +699,7 @@ def run_biomechanics_pipeline(
         if pipeline._bilstm is not None:
             pipeline._bilstm.reset()
             pipeline._bilstm.set_assessment_mode(False)
+        session_tracker.set_assessment_mode(False)
         session_tracker.reset_rep_buffers()
         session_tracker.current_set_reps = []
         session_tracker.set_active = False

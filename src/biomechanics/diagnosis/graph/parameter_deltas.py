@@ -1,8 +1,12 @@
 """Parameter-delta functions for tier-1 (cue-correctable) causes.
 
-Each function returns a dict. The KeypointCorrector uses the cause_id
+Each delta function returns a dict. The KeypointCorrector uses the cause_id
 to decide what geometric correction to apply; these deltas serve as
 structured metadata about what the engine thinks should change.
+
+Each delta function is paired with a magnitude function that renders its
+delta as a short spoken phrase, so the key names stay defined and consumed
+in one file. Magnitude functions return None when no phrase is derivable.
 """
 
 from __future__ import annotations
@@ -72,6 +76,16 @@ def delta_widen_stance(
     }
 
 
+def magnitude_widen_stance(parameter_delta: dict) -> str | None:
+    target = parameter_delta.get("__foot_target_delta")
+    if not target or len(target) < 6:
+        return None
+    per_side_cm = round(abs(float(target[5])) * 100.0)
+    if per_side_cm <= 0:
+        return None
+    return f"about {per_side_cm} centimeters wider on each side"
+
+
 def delta_widen_foot_angle(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> dict[str, float]:
@@ -90,6 +104,16 @@ def delta_widen_foot_angle(
         "L_ankle.ry": delta_radians,
         "R_ankle.ry": -delta_radians,
     }
+
+
+def magnitude_widen_foot_angle(parameter_delta: dict) -> str | None:
+    radians = parameter_delta.get("L_ankle.ry")
+    if radians is None:
+        return None
+    degrees = round(math.degrees(abs(float(radians))))
+    if degrees <= 0:
+        return None
+    return f"toes turned out about {degrees} more degrees"
 
 
 def delta_brace_trunk(
@@ -119,6 +143,16 @@ def delta_knees_out(
     }
 
 
+def magnitude_knees_out(parameter_delta: dict) -> str | None:
+    radians = parameter_delta.get("R_hip.ry")
+    if radians is None:
+        return None
+    degrees = round(math.degrees(abs(float(radians))))
+    if degrees <= 0:
+        return None
+    return f"knees pushed out about {degrees} degrees more"
+
+
 def delta_center_weight(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> dict[str, float]:
@@ -129,6 +163,16 @@ def delta_center_weight(
     return {
         "pelvis.tx": shift_meters,
     }
+
+
+def magnitude_center_weight(parameter_delta: dict) -> str | None:
+    shift_m = parameter_delta.get("pelvis.tx")
+    if shift_m is None:
+        return None
+    shift_cm = round(abs(float(shift_m)) * 100.0)
+    if shift_cm <= 0:
+        return None
+    return f"weight centered by about {shift_cm} centimeters"
 
 
 def delta_increase_depth(

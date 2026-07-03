@@ -13,8 +13,8 @@ Tests mirror the source layout:
 | Test file/dir | Tests for |
 |---------------|-----------|
 | `test_biomechanics/` | Biomechanics engine — faults, rep counting, kinematics, filters, diagnosis |
-| `test_biomechanics/test_demo_renderer.py` | Choreographed coaching-demo pose animation rendering |
 | `test_biomechanics/test_diagnosis/test_demo_builder.py` | Demo data builder from diagnosis results |
+| `js/choreographer.test.mjs` | Demo choreographer state machine (run: `node --test tests/js/*.test.mjs`) |
 | `test_coaching_orchestrator.py` | Coaching cue priority queue and event ordering |
 | `test_coaching_llm.py` | LLM-based coaching response generation |
 | `test_demo_narration.py` | LLM script generation for choreographed coaching demos |

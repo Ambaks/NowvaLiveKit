@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
 from pydantic import BaseModel
 
+from .graph.parameter_deltas import (
+    magnitude_center_weight,
+    magnitude_knees_out,
+    magnitude_widen_foot_angle,
+    magnitude_widen_stance,
+)
 from .keypoint_corrector import (
     KeypointCorrector,
     HIP_L, HIP_R, KNEE_L, KNEE_R, ANKLE_L, ANKLE_R,
@@ -38,51 +43,12 @@ class DemoData:
     cues: list[DemoCue]
 
 
-def _magnitude_narrow_stance(parameter_delta: dict) -> str | None:
-    target = parameter_delta.get("__foot_target_delta")
-    if not target or len(target) < 6:
-        return None
-    per_side_cm = round(abs(float(target[5])) * 100.0)
-    if per_side_cm <= 0:
-        return None
-    return f"about {per_side_cm} centimeters wider on each side"
-
-
-def _magnitude_narrow_foot_angle(parameter_delta: dict) -> str | None:
-    radians = parameter_delta.get("L_ankle.ry")
-    if radians is None:
-        return None
-    degrees = round(math.degrees(abs(float(radians))))
-    if degrees <= 0:
-        return None
-    return f"toes turned out about {degrees} more degrees"
-
-
-def _magnitude_knee_track(parameter_delta: dict) -> str | None:
-    radians = parameter_delta.get("R_hip.ry")
-    if radians is None:
-        return None
-    degrees = round(math.degrees(abs(float(radians))))
-    if degrees <= 0:
-        return None
-    return f"knees pushed out about {degrees} degrees more"
-
-
-def _magnitude_weight_shift(parameter_delta: dict) -> str | None:
-    shift_m = parameter_delta.get("pelvis.tx")
-    if shift_m is None:
-        return None
-    shift_cm = round(abs(float(shift_m)) * 100.0)
-    if shift_cm <= 0:
-        return None
-    return f"weight centered by about {shift_cm} centimeters"
-
-
+# Mirrors the cause_id -> parameter_delta_fn pairing in graph/causes.yaml
 _MAGNITUDE_FN_BY_CAUSE = {
-    "narrow_stance": _magnitude_narrow_stance,
-    "narrow_foot_angle": _magnitude_narrow_foot_angle,
-    "knee_track_cue": _magnitude_knee_track,
-    "weight_shift_cue": _magnitude_weight_shift,
+    "narrow_stance": magnitude_widen_stance,
+    "narrow_foot_angle": magnitude_widen_foot_angle,
+    "knee_track_cue": magnitude_knees_out,
+    "weight_shift_cue": magnitude_center_weight,
 }
 
 
