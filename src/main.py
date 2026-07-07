@@ -259,6 +259,23 @@ class NowvaApp:
         if log and not log.closed:
             log.close()
 
+    def _stop_pose_process(self) -> None:
+        """SIGTERM the pose process and wait for its data-saving finally block.
+
+        The pose subprocess writes set plots and the session dashboard on
+        shutdown — give it time to finish before force-killing.
+        """
+        if not self.pose_process:
+            return
+        self.pose_process.terminate()
+        try:
+            self.pose_process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            print("[POSE] Did not exit within 30s — force killing")
+            self.pose_process.kill()
+            self.pose_process.wait()
+        self.pose_process = None
+
     def check_session(self):
         """Check if user has an existing session"""
         return self.session_manager.session_exists()
@@ -814,9 +831,7 @@ class NowvaApp:
                     print("\n" + "="*50)
                     print("ENDING WORKOUT SESSION")
                     print("="*50)
-                    if self.pose_process:
-                        self.pose_process.terminate()
-                        self.pose_process.wait()
+                    self._stop_pose_process()
                     if self.coaching_ipc:
                         self.coaching_ipc.stop()
                         self.coaching_ipc = None
@@ -866,8 +881,7 @@ class NowvaApp:
 
         if self.pose_process:
             print("Stopping pose estimation...")
-            self.pose_process.terminate()
-            self.pose_process.wait()
+            self._stop_pose_process()
 
         if self.coaching_ipc:
             print("Stopping coaching IPC server...")

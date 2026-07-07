@@ -7,6 +7,10 @@ structured metadata about what the engine thinks should change.
 Each delta function is paired with a magnitude function that renders its
 delta as a short spoken phrase, so the key names stay defined and consumed
 in one file. Magnitude functions return None when no phrase is derivable.
+
+Shared anthropometry-driven target functions also live here so the geometric
+corrections and the spoken explanation templates derive from the same
+computation and cannot disagree.
 """
 
 from __future__ import annotations
@@ -18,6 +22,11 @@ from ..types import RepKinematicSummary
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
+
+
+def expected_trunk_lean_geometric(anthro: dict) -> float:
+    femur_torso_ratio = anthro.get("femur_torso_ratio", 1.0)
+    return 30.0 + (femur_torso_ratio - 1.0) * 120.0
 
 
 def dorsi_driven_targets(
@@ -51,22 +60,33 @@ def dorsi_driven_targets(
     return (max(1.1, target_stance), max(15.0, min(40.0, target_toe_out)))
 
 
+def stance_target_ratio(current_ratio: float, anthro: dict, rom: dict) -> float:
+    """Single source of truth for the stance-width target — used by both the
+    geometric correction and the spoken explanation."""
+    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    dorsi_target_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
+    target_ratio = max(dorsi_target_ratio, current_ratio + 0.15, 1.0)
+    return min(target_ratio, 2.5)
+
+
+def foot_angle_target_deg(anthro: dict, rom: dict) -> float:
+    """Single source of truth for the toe-out target — used by both the
+    geometric correction and the spoken explanation."""
+    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    _, dorsi_target_angle = dorsi_driven_targets(dorsi_capacity, anthro)
+    return max(22.0, dorsi_target_angle)
+
+
 def delta_widen_stance(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> dict[str, float]:
     current_ratio = features.stance_width_ratio
     shoulder_width = anthro.get("shoulder_width", 0.40)
 
-    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
-    dorsi_target_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
-
-    fixed_target = current_ratio + 0.15
-    target_ratio = max(dorsi_target_ratio, fixed_target)
-    target_ratio = max(1.0, target_ratio)
-
-    width_increase_per_side = (target_ratio - current_ratio) * shoulder_width / 2.0
-    max_increase = max(0.0, 2.5 * shoulder_width / 2.0 - current_ratio * shoulder_width / 2.0)
-    width_increase_per_side = max(0.0, min(width_increase_per_side, max_increase))
+    target_ratio = stance_target_ratio(current_ratio, anthro, rom)
+    width_increase_per_side = max(
+        0.0, (target_ratio - current_ratio) * shoulder_width / 2.0
+    )
 
     return {
         "__foot_target_delta": [
@@ -93,10 +113,7 @@ def delta_widen_foot_angle(
         features.foot_direction_angle_l + features.foot_direction_angle_r
     ) / 2.0
 
-    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
-    _, dorsi_target_angle = dorsi_driven_targets(dorsi_capacity, anthro)
-
-    target_angle = max(22.0, dorsi_target_angle)
+    target_angle = foot_angle_target_deg(anthro, rom)
     delta_degrees = max(0.0, min(target_angle - avg_current, 50.0))
     delta_radians = math.radians(delta_degrees)
 
@@ -119,7 +136,7 @@ def magnitude_widen_foot_angle(parameter_delta: dict) -> str | None:
 def delta_brace_trunk(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> dict[str, float]:
-    expected_lean = 30.0 + (anthro.get("femur_torso_ratio", 1.0) - 1.0) * 120.0
+    expected_lean = expected_trunk_lean_geometric(anthro)
     excess_lean = features.trunk_pitch_at_bottom - expected_lean
     correction_degrees = min(excess_lean * 0.4, 8.0)
     correction_degrees = max(correction_degrees, 3.0)

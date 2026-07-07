@@ -13,48 +13,322 @@
 }
 </script>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Spline+Sans+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg-deep: #030309;
+    --bg-navy: #050510;
+    --bg-raised: #0a0a1e;
+    --cyan: #00e5ff;
+    --violet: #8b5cf6;
+    --ink: #f2f4ff;
+    --ink-dim: rgba(226, 232, 255, 0.55);
+    --font-ui: 'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
+    --font-mono: 'Spline Sans Mono', 'SF Mono', monospace;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { height: 100%; }
+
 body {
-    background: #0a0a1a; color: #e0e0e0;
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    overflow: hidden; height: 100vh; display: flex;
-    justify-content: center; align-items: center;
+    background: var(--bg-deep);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
-#scene-container { width: 100%; height: 100%; position: relative; }
-#three-canvas { display: block; width: 100%; height: 100%; }
+
+/* Layered gradient environment behind the 3D canvas */
+#scene-container {
+    width: 100%; height: 100%;
+    position: relative;
+    isolation: isolate;
+    background:
+        radial-gradient(ellipse 90% 65% at 50% 108%, rgba(0, 229, 255, 0.10) 0%, rgba(0, 229, 255, 0.03) 45%, transparent 70%),
+        radial-gradient(ellipse 70% 50% at 12% 18%, rgba(139, 92, 246, 0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 55% 45% at 88% 12%, rgba(0, 180, 216, 0.06) 0%, transparent 55%),
+        linear-gradient(160deg, #08081a 0%, var(--bg-navy) 45%, var(--bg-deep) 100%);
+}
+
+/* Slow-drifting aurora blobs */
+.aurora {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    pointer-events: none;
+    z-index: 0;
+    will-change: transform;
+}
+.aurora-a {
+    width: 55vw; height: 55vw; left: -12vw; top: -18vw;
+    background: radial-gradient(circle, rgba(0, 229, 255, 0.13), transparent 65%);
+    animation: drift-a 52s ease-in-out infinite alternate;
+}
+.aurora-b {
+    width: 48vw; height: 48vw; right: -14vw; bottom: -16vw;
+    background: radial-gradient(circle, rgba(139, 92, 246, 0.13), transparent 65%);
+    animation: drift-b 64s ease-in-out infinite alternate;
+}
+.aurora-c {
+    width: 36vw; height: 36vw; left: 30vw; top: 55vh;
+    background: radial-gradient(circle, rgba(0, 140, 255, 0.10), transparent 65%);
+    animation: drift-c 47s ease-in-out infinite alternate;
+}
+@keyframes drift-a {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to   { transform: translate3d(9vw, 6vh, 0) scale(1.25); }
+}
+@keyframes drift-b {
+    from { transform: translate3d(0, 0, 0) scale(1.15); }
+    to   { transform: translate3d(-8vw, -7vh, 0) scale(0.9); }
+}
+@keyframes drift-c {
+    from { transform: translate3d(0, 0, 0) scale(0.95); }
+    to   { transform: translate3d(-6vw, -10vh, 0) scale(1.2); }
+}
+
+#three-canvas {
+    display: block;
+    width: 100%; height: 100%;
+    position: relative;
+    z-index: 1;
+}
+
+/* Film grain — kills gradient banding, adds texture */
+#grain {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    pointer-events: none;
+    opacity: 0.05;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    background-size: 180px 180px;
+}
+
+/* Caption bar — glass pill with gradient border */
 #caption {
-    position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%);
-    font-size: 22px; font-weight: 600; color: #fff;
-    text-shadow: 0 2px 8px rgba(0,0,0,0.7);
-    pointer-events: none; text-align: center;
-    opacity: 0; transition: opacity 0.3s;
+    position: absolute;
+    bottom: 52px;
+    left: 50%;
+    z-index: 8;
+    transform: translateX(-50%) translateY(12px);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    pointer-events: none;
+    text-align: center;
+    opacity: 0;
+    filter: blur(6px);
+    transition:
+        opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+        transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+        filter 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+
+    background: linear-gradient(150deg, rgba(16, 18, 38, 0.82), rgba(8, 9, 24, 0.66));
+    backdrop-filter: blur(28px) saturate(1.4);
+    -webkit-backdrop-filter: blur(28px) saturate(1.4);
+    border-radius: 18px;
+    padding: 15px 36px;
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.5),
+        0 0 24px rgba(0, 229, 255, 0.05),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    text-shadow: 0 0 18px rgba(0, 229, 255, 0.35);
 }
-#caption.visible { opacity: 1; }
-#status {
-    position: absolute; top: 16px; left: 16px;
-    font-size: 13px; color: #666;
-    font-family: 'SF Mono', 'Fira Code', monospace;
+#caption::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(120deg,
+        rgba(0, 229, 255, 0.55),
+        rgba(139, 92, 246, 0.45) 55%,
+        rgba(0, 229, 255, 0.15));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
     pointer-events: none;
 }
+#caption.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    filter: blur(0);
+}
+
+/* Cue progress dots — top center */
+#cue-dots {
+    position: absolute;
+    top: 26px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 12px;
+    z-index: 8;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+}
+#cue-dots.visible { opacity: 1; }
+#cue-dots .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.14);
+    transition: background 0.4s, box-shadow 0.4s, transform 0.4s;
+}
+#cue-dots .dot.active {
+    background: var(--cyan);
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.8), 0 0 26px rgba(0, 229, 255, 0.35);
+    transform: scale(1.45);
+}
+#cue-dots .dot.done { background: rgba(139, 92, 246, 0.55); }
+
+/* Status chip — top left */
+#status {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 8;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(0, 229, 255, 0.55);
+    font-family: var(--font-mono);
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: rgba(8, 9, 24, 0.55);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(0, 229, 255, 0.10);
+    border-radius: 9px;
+    padding: 8px 14px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* Pulsing gradient dot before status text */
+#status::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--cyan), var(--violet));
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+    animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 0.4; transform: scale(0.9); }
+    50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* Camera debug info — hidden by default, toggle with 'D' key */
 #camera-info {
-    position: absolute; top: 16px; right: 16px;
-    font-size: 12px; color: #8a8aaa; line-height: 1.6;
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    pointer-events: none; text-align: right;
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    z-index: 8;
+    font-size: 11px;
+    color: rgba(138, 138, 170, 0.55);
+    line-height: 1.6;
+    font-family: var(--font-mono);
+    pointer-events: none;
+    text-align: right;
     user-select: all;
+    display: none;
+    background: rgba(8, 9, 24, 0.5);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+#camera-info.visible { display: block; }
+
+/* Nowva wordmark — bottom left, gradient shimmer */
+#brand {
+    position: absolute;
+    bottom: 22px;
+    left: 24px;
+    z-index: 8;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.42em;
+    text-transform: uppercase;
+    pointer-events: none;
+    background: linear-gradient(100deg,
+        rgba(0, 229, 255, 0.65),
+        rgba(139, 92, 246, 0.60) 40%,
+        rgba(0, 229, 255, 0.65) 80%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    opacity: 0.5;
+    animation: shimmer 9s linear infinite;
+}
+@keyframes shimmer {
+    from { background-position: 0% 0; }
+    to   { background-position: 220% 0; }
+}
+
+/* Gradient border accent — top edge */
+#scene-container::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(0, 229, 255, 0.35) 30%,
+        rgba(139, 92, 246, 0.25) 70%,
+        transparent 100%
+    );
+    z-index: 10;
+}
+
+/* Vignette overlay */
+#scene-container::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse 72% 72% at 50% 48%, transparent 42%, rgba(3, 3, 9, 0.55) 100%);
+    z-index: 5;
 }
 </style>
 </head>
 <body>
 <div id="scene-container">
+    <div class="aurora aurora-a"></div>
+    <div class="aurora aurora-b"></div>
+    <div class="aurora aurora-c"></div>
     <canvas id="three-canvas"></canvas>
+    <div id="grain"></div>
+    <div id="cue-dots"></div>
     <div id="caption"></div>
-    <div id="status">connecting…</div>
+    <div id="status">connecting</div>
     <div id="camera-info"></div>
+    <div id="brand">Nowva</div>
 </div>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 import { createChoreographer, easeInOut } from './choreographer.mjs';
 
 const BONE_CONNECTIONS = [
@@ -64,71 +338,261 @@ const BONE_CONNECTIONS = [
     [5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],
     [15,17],[16,18],
 ];
+
 // ======== THREE.JS SETUP ========
 const canvas = document.getElementById('three-canvas');
 const container = document.getElementById('scene-container');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setClearColor(0x0a0a1a);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x050510, 0);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 50);
+scene.fog = new THREE.FogExp2(0x050510, 0.16);
+
+// Environment map — gives the physical materials their polished reflections
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
 camera.position.set(2.0, 1.0, 2.0);
 camera.lookAt(0, 0.7, 0);
+
 const orbitCtrl = new OrbitControls(camera, canvas);
 orbitCtrl.target.set(0, 0.7, 0);
 orbitCtrl.enableDamping = true;
-orbitCtrl.dampingFactor = 0.08;
-scene.add(new THREE.AmbientLight(0x404060, 0.6));
-const dl = new THREE.DirectionalLight(0xffffff, 0.8);
-dl.position.set(3, 5, 3);
-scene.add(dl);
-scene.add(new THREE.GridHelper(4, 20, 0x222244, 0x1a1a30));
+orbitCtrl.dampingFactor = 0.06;
+orbitCtrl.minDistance = 1.0;
+orbitCtrl.maxDistance = 6.0;
+orbitCtrl.maxPolarAngle = Math.PI * 0.85;
 
-// ======== SKELETON MESHES ========
-const matJointNormal = new THREE.MeshPhongMaterial({ color: 0x40e0a0, emissive: 0x103020, transparent: true });
-const matJointHighlight = new THREE.MeshPhongMaterial({ color: 0x00b4ff, emissive: 0x003050, transparent: true });
-const matBoneNormal = new THREE.MeshPhongMaterial({ color: 0x3090d0, emissive: 0x102030, transparent: true });
-const matBoneHighlight = new THREE.MeshPhongMaterial({ color: 0x00b4ff, emissive: 0x002040, transparent: true });
+// ======== LIGHTING ========
+const ambientLight = new THREE.AmbientLight(0x1a1a3a, 0.25);
+scene.add(ambientLight);
 
-const jointGeo = new THREE.SphereGeometry(0.018, 12, 8);
-const jointHighGeo = new THREE.SphereGeometry(0.024, 12, 8);
+// Key light — warm white from upper right
+const keyLight = new THREE.DirectionalLight(0xfff0e0, 1.1);
+keyLight.position.set(3, 5, 3);
+scene.add(keyLight);
+
+// Fill light — cool blue from left
+const fillLight = new THREE.DirectionalLight(0x4488cc, 0.4);
+fillLight.position.set(-3, 2, -1);
+scene.add(fillLight);
+
+// Rim light — cyan accent from behind
+const rimLight = new THREE.PointLight(0x00e5ff, 2.2, 12);
+rimLight.position.set(0, 2, -3);
+scene.add(rimLight);
+
+// Subtle ground bounce
+const bounceLight = new THREE.PointLight(0x00e5ff, 0.5, 5);
+bounceLight.position.set(0, -0.2, 0);
+scene.add(bounceLight);
+
+// ======== FLOOR — polished reflection + glow pool ========
+const reflector = new Reflector(new THREE.CircleGeometry(3.5, 64), {
+    clipBias: 0.003,
+    textureWidth: 1024,
+    textureHeight: 1024,
+    color: 0x151528,
+});
+reflector.rotation.x = -Math.PI / 2;
+reflector.position.y = -0.003;
+scene.add(reflector);
+
+// Dark glass overlay dimming the mirror to a subtle sheen
+const floorDim = new THREE.Mesh(
+    new THREE.CircleGeometry(3.5, 64),
+    new THREE.MeshBasicMaterial({ color: 0x050510, transparent: true, opacity: 0.78, depthWrite: false }),
+);
+floorDim.rotation.x = -Math.PI / 2;
+floorDim.position.y = -0.001;
+floorDim.renderOrder = 1;
+scene.add(floorDim);
+
+function makeGlowTexture() {
+    const c = document.createElement('canvas');
+    c.width = c.height = 512;
+    const ctx = c.getContext('2d');
+    const grad = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
+    grad.addColorStop(0, 'rgba(0,190,255,0.20)');
+    grad.addColorStop(0.35, 'rgba(0,170,255,0.07)');
+    grad.addColorStop(0.7, 'rgba(139,92,246,0.025)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 512);
+    return new THREE.CanvasTexture(c);
+}
+const glowDisc = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.4, 4.4),
+    new THREE.MeshBasicMaterial({
+        map: makeGlowTexture(),
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+    }),
+);
+glowDisc.rotation.x = -Math.PI / 2;
+glowDisc.position.y = 0.0005;
+glowDisc.renderOrder = 2;
+scene.add(glowDisc);
+
+// Radial grid rings — thinner, fading outward
+const gridGroup = new THREE.Group();
+for (let r = 0.5; r <= 3.0; r += 0.5) {
+    const ringGeo = new THREE.RingGeometry(r - 0.002, r + 0.002, 96);
+    const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+        color: 0x14395c,
+        transparent: true,
+        opacity: 0.30 * (1 - r / 3.8),
+        depthWrite: false,
+    }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.002;
+    ring.renderOrder = 3;
+    gridGroup.add(ring);
+}
+// Cross lines
+const crossMat = new THREE.LineBasicMaterial({ color: 0x0e2440, transparent: true, opacity: 0.18 });
+for (let angle = 0; angle < Math.PI; angle += Math.PI / 6) {
+    const points = [
+        new THREE.Vector3(Math.cos(angle) * 3, 0.002, Math.sin(angle) * 3),
+        new THREE.Vector3(-Math.cos(angle) * 3, 0.002, -Math.sin(angle) * 3),
+    ];
+    gridGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), crossMat));
+}
+scene.add(gridGroup);
+
+// ======== ATMOSPHERE — floating dust motes ========
+const MOTE_COUNT = 180;
+const motePositions = new Float32Array(MOTE_COUNT * 3);
+const motePhases = new Float32Array(MOTE_COUNT);
+for (let i = 0; i < MOTE_COUNT; i++) {
+    const r = Math.sqrt(Math.random()) * 3.2;
+    const a = Math.random() * Math.PI * 2;
+    motePositions[i * 3 + 0] = Math.cos(a) * r;
+    motePositions[i * 3 + 1] = 0.05 + Math.random() * 2.5;
+    motePositions[i * 3 + 2] = Math.sin(a) * r;
+    motePhases[i] = Math.random() * Math.PI * 2;
+}
+const moteGeo = new THREE.BufferGeometry();
+moteGeo.setAttribute('position', new THREE.BufferAttribute(motePositions, 3));
+const moteMat = new THREE.PointsMaterial({
+    color: 0xaee8ff,
+    size: 0.012,
+    transparent: true,
+    opacity: 0.4,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true,
+});
+const motes = new THREE.Points(moteGeo, moteMat);
+scene.add(motes);
+
+// ======== POST PROCESSING (Bloom) ========
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.5,   // strength
+    0.65,  // radius
+    0.8,   // threshold
+);
+composer.addPass(bloomPass);
+
+// ======== SKELETON MATERIALS — polished metal/ceramic ========
+const NORMAL_EMISSIVE_INTENSITY = 0.55;
+
+function skinMaterial(color, emissive) {
+    return new THREE.MeshPhysicalMaterial({
+        color,
+        emissive,
+        emissiveIntensity: NORMAL_EMISSIVE_INTENSITY,
+        metalness: 0.6,
+        roughness: 0.25,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.3,
+        envMapIntensity: 0.9,
+        transparent: true,
+    });
+}
+
+const matJointNormal = skinMaterial(0x7fe3ff, 0x00404f);
+const matJointHighlight = skinMaterial(0xa78bfa, 0x6d28d9);
+const matBoneNormal = skinMaterial(0x4fc3dd, 0x00303c);
+const matBoneHighlight = skinMaterial(0x9d7bf8, 0x4c1d95);
+
+// Joint spheres — sized by anatomical importance (hips/knees/shoulders larger)
+const JOINT_RADII = [
+    0.014,                       // nose
+    0.009, 0.009, 0.009, 0.009,  // eyes, ears
+    0.023, 0.023,                // shoulders
+    0.018, 0.018,                // elbows
+    0.015, 0.015,                // wrists
+    0.026, 0.026,                // hips
+    0.023, 0.023,                // knees
+    0.018, 0.018,                // ankles
+    0.013, 0.013,                // feet
+];
+const HIGHLIGHT_SCALE = 1.35;
+
+const jointGeos = [];
 const joints = [];
 for (let i = 0; i < 19; i++) {
-    const m = new THREE.Mesh(jointGeo, matJointNormal.clone());
+    const g = new THREE.SphereGeometry(JOINT_RADII[i], 20, 14);
+    jointGeos.push(g);
+    const m = new THREE.Mesh(g, matJointNormal.clone());
     m.visible = false;
     scene.add(m);
     joints.push(m);
 }
 
+// Capsule bones with anatomical taper (index-aligned with BONE_CONNECTIONS)
+const BONE_RADII = [
+    0.005, 0.005, 0.005, 0.005,          // head links
+    0.009, 0.009,                        // neck
+    0.011, 0.011, 0.0085, 0.011, 0.0085, // shoulder bar, arms, forearms
+    0.013, 0.013, 0.013,                 // torso sides, hip bar
+    0.015, 0.0115, 0.015, 0.0115,        // femurs, tibias
+    0.008, 0.008,                        // feet
+];
+
+const boneGeos = [];
 const bones = [];
-for (const [a, b] of BONE_CONNECTIONS) {
-    const g = new THREE.CylinderGeometry(0.006, 0.006, 1, 6);
+for (let bi = 0; bi < BONE_CONNECTIONS.length; bi++) {
+    const [a, b] = BONE_CONNECTIONS[bi];
+    const g = new THREE.CapsuleGeometry(BONE_RADII[bi], 1, 3, 10);
     g.translate(0, 0.5, 0);
+    boneGeos.push(g);
     const m = new THREE.Mesh(g, matBoneNormal.clone());
     m.visible = false;
     scene.add(m);
     bones.push({ mesh: m, a, b });
 }
 
-// Ghost skeleton: static translucent reference (the "before" pose)
-const matGhostJoint = new THREE.MeshPhongMaterial({
-    color: 0xa0a0c0, emissive: 0x181828, transparent: true, opacity: 0.22, depthWrite: false,
+// Ghost skeleton — additive hologram reference
+const matGhostJoint = new THREE.MeshBasicMaterial({
+    color: 0x3ba7c4, transparent: true, opacity: 0.10,
+    blending: THREE.AdditiveBlending, depthWrite: false,
 });
-const matGhostBone = new THREE.MeshPhongMaterial({
-    color: 0x9090b0, emissive: 0x141420, transparent: true, opacity: 0.22, depthWrite: false,
+const matGhostBone = new THREE.MeshBasicMaterial({
+    color: 0x2f89b8, transparent: true, opacity: 0.10,
+    blending: THREE.AdditiveBlending, depthWrite: false,
 });
 const ghostJoints = [];
 for (let i = 0; i < 19; i++) {
-    const m = new THREE.Mesh(jointGeo, matGhostJoint);
+    const m = new THREE.Mesh(jointGeos[i], matGhostJoint);
     m.visible = false;
     scene.add(m);
     ghostJoints.push(m);
 }
 const ghostBones = [];
-for (const [a, b] of BONE_CONNECTIONS) {
-    const g = new THREE.CylinderGeometry(0.005, 0.005, 1, 6);
-    g.translate(0, 0.5, 0);
-    const m = new THREE.Mesh(g, matGhostBone);
+for (let bi = 0; bi < BONE_CONNECTIONS.length; bi++) {
+    const [a, b] = BONE_CONNECTIONS[bi];
+    const m = new THREE.Mesh(boneGeos[bi], matGhostBone);
     m.visible = false;
     scene.add(m);
     ghostBones.push({ mesh: m, a, b });
@@ -183,6 +647,7 @@ function cameraForCue(causeId) {
 const captionEl = document.getElementById('caption');
 const statusEl = document.getElementById('status');
 const cameraInfoEl = document.getElementById('camera-info');
+const cueDotsEl = document.getElementById('cue-dots');
 
 function setCaption(text) {
     if (text) {
@@ -191,6 +656,32 @@ function setCaption(text) {
     } else {
         captionEl.classList.remove('visible');
     }
+}
+
+let dotEls = [];
+
+function buildCueDots(count) {
+    cueDotsEl.innerHTML = '';
+    dotEls = [];
+    for (let i = 0; i < count; i++) {
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        cueDotsEl.appendChild(dot);
+        dotEls.push(dot);
+    }
+}
+
+function setActiveCueDot(index) {
+    if (dotEls.length === 0) return;
+    dotEls.forEach((dot, i) => {
+        dot.classList.toggle('active', i === index);
+        dot.classList.toggle('done', i < index);
+    });
+    cueDotsEl.classList.add('visible');
+}
+
+function clearCueDots() {
+    cueDotsEl.classList.remove('visible');
 }
 
 function hideSkeleton() {
@@ -225,9 +716,10 @@ function updateSkeletonFromPoints(pts, highlight) {
         const isHl = hl.has(i);
         const targetMat = isHl ? matJointHighlight : matJointNormal;
         if (joints[i].userData.hl !== isHl) {
-            joints[i].geometry = isHl ? jointHighGeo : jointGeo;
             joints[i].material.color.copy(targetMat.color);
             joints[i].material.emissive.copy(targetMat.emissive);
+            joints[i].material.emissiveIntensity = NORMAL_EMISSIVE_INTENSITY;
+            joints[i].scale.setScalar(isHl ? HIGHLIGHT_SCALE : 1);
             joints[i].userData.hl = isHl;
         }
     }
@@ -242,6 +734,7 @@ function updateSkeletonFromPoints(pts, highlight) {
         if (bones[bi].mesh.userData.hl !== isHl) {
             bones[bi].mesh.material.color.copy(targetMat.color);
             bones[bi].mesh.material.emissive.copy(targetMat.emissive);
+            bones[bi].mesh.material.emissiveIntensity = NORMAL_EMISSIVE_INTENSITY;
             bones[bi].mesh.userData.hl = isHl;
         }
     }
@@ -293,7 +786,7 @@ function connect() {
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
     ws.onopen = () => {
-        statusEl.textContent = 'connected — waiting for demo';
+        statusEl.textContent = 'waiting for demo';
     };
 
     ws.onmessage = (evt) => {
@@ -301,7 +794,8 @@ function connect() {
 
         if (msg.type === 'init') {
             choreo.init(msg);
-            statusEl.textContent = `loaded ${choreo.cueCount} cue(s) — waiting for start`;
+            buildCueDots((msg.cues || []).length);
+            statusEl.textContent = `${choreo.cueCount} cue(s) loaded`;
         } else if (msg.type === 'live_pose') {
             const pts = msg.points;
             const flat = new Float64Array(pts.length * 3);
@@ -313,16 +807,19 @@ function connect() {
             choreo.setLivePose(flat);
         } else if (msg.type === 'demo_start') {
             choreo.start(nowSeconds());
+            setActiveCueDot(0);
             statusEl.textContent = 'demo playing';
         } else if (msg.type === 'demo_cue') {
             choreo.advanceCue(msg.cue_index, nowSeconds());
+            setActiveCueDot(msg.cue_index);
         } else if (msg.type === 'demo_end') {
             choreo.finish(nowSeconds());
+            clearCueDots();
         }
     };
 
     ws.onclose = () => {
-        statusEl.textContent = 'disconnected';
+        statusEl.textContent = 'reconnecting';
         setTimeout(connect, 2000);
     };
 
@@ -333,10 +830,18 @@ function connect() {
 
 connect();
 
+// ======== DEBUG TOGGLE (D key) ========
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'd' || e.key === 'D') {
+        cameraInfoEl.classList.toggle('visible');
+    }
+});
+
 // ======== RESIZE + ANIMATE ========
 function resize() {
     const w = container.clientWidth, h = container.clientHeight;
     renderer.setSize(w, h);
+    composer.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
 }
@@ -351,13 +856,46 @@ function updateCameraInfo() {
         `target: (${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)})`;
 }
 
+// Gentle rim light orbit for subtle life
+let rimAngle = 0;
+
+function tickMotes(t) {
+    const pos = moteGeo.attributes.position.array;
+    for (let i = 0; i < MOTE_COUNT; i++) {
+        pos[i * 3 + 1] += 0.0006 + Math.sin(t * 0.4 + motePhases[i]) * 0.0002;
+        pos[i * 3 + 0] += Math.sin(t * 0.3 + motePhases[i]) * 0.0002;
+        if (pos[i * 3 + 1] > 2.6) pos[i * 3 + 1] = 0.05;
+    }
+    moteGeo.attributes.position.needsUpdate = true;
+}
+
+function tickHighlightPulse(t) {
+    const pulse = 0.75 + 0.45 * Math.sin(t * 3.2);
+    for (const j of joints) {
+        if (j.userData.hl) j.material.emissiveIntensity = pulse * 1.6;
+    }
+    for (const b of bones) {
+        if (b.mesh.userData.hl) b.mesh.material.emissiveIntensity = pulse * 1.6;
+    }
+}
+
 function animate(now) {
     requestAnimationFrame(animate);
-    choreo.tick(now / 1000);
+    const t = now / 1000;
+
+    choreo.tick(t);
     tickCameraLerp();
     orbitCtrl.update();
     updateCameraInfo();
-    renderer.render(scene, camera);
+    tickMotes(t);
+    tickHighlightPulse(t);
+
+    // Slow rim light orbit
+    rimAngle += 0.003;
+    rimLight.position.x = Math.sin(rimAngle) * 2.5;
+    rimLight.position.z = Math.cos(rimAngle) * 2.5 - 1;
+
+    composer.render();
 }
 requestAnimationFrame(animate);
 </script>

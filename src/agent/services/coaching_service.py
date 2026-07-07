@@ -102,6 +102,13 @@ class CoachingService:
         if not self._started:
             return
 
+        # Mark an interrupted assessment as complete so the on-disk log
+        # has a completed_at timestamp even on abnormal shutdown.
+        if self._assessment_logger is not None:
+            self._assessment_logger.finalize(passed=False)
+            self._assessment_logger = None
+            logger.info("[COACHING SERVICE] Active assessment finalized on stop")
+
         if self._coaching_orchestrator:
             self._coaching_orchestrator.stop()
             self._coaching_orchestrator = None

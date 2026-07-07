@@ -82,6 +82,23 @@ async def entrypoint(ctx: agents.JobContext):
     # Create shared userdata
     userdata = UserData(state=state, room=ctx.room)
 
+    # Data-flush safety net: the session "close" event does not always fire
+    # when the process is terminated during shutdown, but shutdown callbacks
+    # run during LiveKit's graceful drain. All stop() methods are idempotent,
+    # so running both paths is safe.
+    async def flush_session_services(reason: str):
+        for name in ("context_viewer", "compaction_service", "coaching_service"):
+            obj = getattr(userdata, name, None)
+            if obj:
+                try:
+                    await obj.stop()
+                    setattr(userdata, name, None)
+                    logger.info(f"[SHUTDOWN] {name} stopped via shutdown callback")
+                except Exception as e:
+                    logger.error(f"[SHUTDOWN] Failed to stop {name}: {e}")
+
+    ctx.add_shutdown_callback(flush_session_services)
+
     # Retrieve prewarmed AudioCueService (if available)
     prewarmed_cue_svc = ctx.proc.userdata.get("audio_cue_service")
     if prewarmed_cue_svc is not None:
