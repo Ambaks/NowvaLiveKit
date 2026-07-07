@@ -369,6 +369,23 @@ def solve_balance_lean(kpts: np.ndarray, foot_len: float) -> float | None:
 class KeypointCorrector:
     """Applies geometric corrections to 19 keypoints based on diagnosis."""
 
+    def canonicalize(
+        self,
+        observed_kpts: list[list[float]],
+        rom: dict | None = None,
+    ) -> list[list[float]]:
+        """Symmetrized canonical form of an observed pose.
+
+        Bone lengths must be captured from THIS pose, not the raw observation:
+        symmetry averages L/R bone vectors and therefore changes their lengths,
+        so it has to run before the lengths are locked. Every correction step
+        downstream of canonicalization preserves the canonical lengths exactly.
+        """
+        kpts = np.array(observed_kpts, dtype=float)
+        max_dorsi_deg = rom.get("dorsiflexion_drop") if rom else None
+        self._enforce_symmetry(kpts, max_dorsi_deg=max_dorsi_deg)
+        return kpts.tolist()
+
     def correct(
         self,
         observed_kpts: list[list[float]],
@@ -377,7 +394,15 @@ class KeypointCorrector:
         rom: dict | None = None,
         bone_lengths: tuple[float, float, float, float] | None = None,
     ) -> list[list[float]] | None:
-        """Apply tier-1 corrections. Returns corrected kpts or None if no fixes needed."""
+        """Apply tier-1 corrections. Returns corrected kpts or None if no fixes needed.
+
+        Pipeline order (length-safety invariant): the pose is canonicalized
+        (symmetrized) FIRST, bone lengths are captured from the canonical pose,
+        and no length-changing pass runs afterwards — every subsequent step
+        either moves joints rigidly or re-solves knees via IK with the captured
+        lengths. If `bone_lengths` is provided it must describe the canonical
+        pose (see `canonicalize`).
+        """
         tier1_causes = {
             cause.cause_id: cause
             for cause in diagnosis.immediate_causes
@@ -386,8 +411,14 @@ class KeypointCorrector:
         if not tier1_causes:
             return None
 
-        kpts = np.array(observed_kpts, dtype=float)
+        max_dorsi_deg = rom.get("dorsiflexion_drop") if rom else None
 
+        # 1. Canonicalize BEFORE capturing bone lengths. Idempotent, so
+        # passing an already-canonical pose (demo_builder) is a no-op.
+        kpts = np.array(observed_kpts, dtype=float)
+        self._enforce_symmetry(kpts, max_dorsi_deg=max_dorsi_deg)
+
+        # 2. Lock bone lengths — the invariant for everything below.
         if bone_lengths is not None:
             original_thigh_l, original_shin_l, original_thigh_r, original_shin_r = bone_lengths
         else:
@@ -396,6 +427,7 @@ class KeypointCorrector:
             original_thigh_r = np.linalg.norm(kpts[KNEE_R] - kpts[HIP_R])
             original_shin_r = np.linalg.norm(kpts[ANKLE_R] - kpts[KNEE_R])
 
+        # 3. Cue corrections, all length-preserving from here on.
         has_stance = "narrow_stance" in tier1_causes
         has_toe_out = "narrow_foot_angle" in tier1_causes
         if has_stance or has_toe_out:
@@ -408,15 +440,11 @@ class KeypointCorrector:
         if "knee_track_cue" in tier1_causes:
             self._push_knees_out(kpts, tier1_causes["knee_track_cue"])
 
-        if "weight_shift_cue" in tier1_causes:
-            self._center_weight(kpts, tier1_causes["weight_shift_cue"])
-
         self._enforce_bone_lengths(
             kpts, original_thigh_l, original_shin_l,
             original_thigh_r, original_shin_r,
         )
 
-        max_dorsi_deg = rom.get("dorsiflexion_drop") if rom else None
         if max_dorsi_deg is not None:
             self._enforce_dorsi_cap(
                 kpts, max_dorsi_deg,
@@ -426,6 +454,8 @@ class KeypointCorrector:
 
         self._reground(kpts)
 
+        # 4. Depth last among the leg corrections; nothing after this
+        # touches hip height, so parallel depth survives to the output.
         if "depth_cue_unfamiliar" in tier1_causes:
             self._achieve_depth_within_dorsi_budget(
                 kpts, tier1_causes["depth_cue_unfamiliar"],
@@ -434,10 +464,22 @@ class KeypointCorrector:
                 original_thigh_r, original_shin_r,
             )
 
-        self._enforce_symmetry(kpts, max_dorsi_deg=max_dorsi_deg)
-
         foot_len = anthro.get("foot_length", DEFAULT_FOOT_LEN_M) if anthro else DEFAULT_FOOT_LEN_M
-        self._solve_and_apply_balance(kpts, foot_len, stance_pelvis_shift)
+
+        # Torso follows the pelvis shift from the stance/toe-out FK before
+        # any COM computation sees the pose.
+        if stance_pelvis_shift is not None:
+            for idx in UPPER_BODY_INDICES:
+                kpts[idx] += stance_pelvis_shift
+
+        if "weight_shift_cue" in tier1_causes:
+            self._center_com_laterally(
+                kpts, foot_len,
+                original_thigh_l, original_shin_l,
+                original_thigh_r, original_shin_r,
+            )
+
+        self._solve_and_apply_balance(kpts, foot_len)
 
         return kpts.tolist()
 
@@ -520,27 +562,53 @@ class KeypointCorrector:
         nudge_r = thigh_r * math.sin(delta_r_rad)
         kpts[KNEE_R] += hip_lateral_unit * nudge_r
 
-    def _center_weight(self, kpts: np.ndarray, cause) -> None:
-        """Shift pelvis + upper body laterally."""
-        delta = cause.parameter_delta or {}
-        shift_x = delta.get("pelvis.tx", 0.0)
-        if abs(shift_x) < 1e-6:
-            return
+    def _center_com_laterally(
+        self,
+        kpts: np.ndarray,
+        foot_len: float,
+        thigh_l: float,
+        shin_l: float,
+        thigh_r: float,
+        shin_r: float,
+    ) -> float:
+        """Translate pelvis + upper body along the hip-lateral axis until the
+        COM ground projection sits on the mid-foot balance target.
 
-        shift_vec = np.array([0.0, 0.0, shift_x])
+        Ankles and feet stay planted; knees are re-solved via IK each step.
+        Iterates because leg-segment COMs only partially follow the pelvis.
+        Returns the total applied lateral shift in meters (signed along the
+        L->R hip axis).
+        """
+        total_shift = 0.0
+        for _ in range(4):
+            hip_lateral = kpts[HIP_R] - kpts[HIP_L]
+            hip_lateral[1] = 0.0
+            lat_len = np.linalg.norm(hip_lateral)
+            if lat_len < 1e-9:
+                break
+            lat_unit = hip_lateral / lat_len
+            lat_unit_xz = np.array([lat_unit[0], lat_unit[2]])
 
-        for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
-            kpts[idx] += shift_vec
+            com = compute_com_ground(kpts, foot_len)
+            target = compute_balance_target_ground(kpts, foot_len)
+            gap_lateral = float(np.dot(target - com, lat_unit_xz))
+            if abs(gap_lateral) <= BALANCE_TARGET_EPS_M:
+                break
 
-    def _solve_and_apply_balance(
-        self, kpts: np.ndarray, foot_len: float,
-        pelvis_shift: np.ndarray | None = None,
-    ) -> None:
-        """Translate upper body to follow pelvis, then rotate for balance."""
-        if pelvis_shift is not None:
-            for idx in UPPER_BODY_INDICES:
-                kpts[idx] += pelvis_shift
+            for idx in UPPER_BODY_INDICES + [HIP_L, HIP_R]:
+                kpts[idx] += lat_unit * gap_lateral
+            total_shift += gap_lateral
 
+            kpts[KNEE_L] = solve_knee(
+                kpts[HIP_L], kpts[ANKLE_L], thigh_l, shin_l, kpts[KNEE_L],
+            )
+            kpts[KNEE_R] = solve_knee(
+                kpts[HIP_R], kpts[ANKLE_R], thigh_r, shin_r, kpts[KNEE_R],
+            )
+        return total_shift
+
+    def _solve_and_apply_balance(self, kpts: np.ndarray, foot_len: float) -> None:
+        """Rotate the upper body about the hip midpoint for sagittal balance."""
         lean_rad = solve_balance_lean(kpts, foot_len)
         if lean_rad is None or abs(lean_rad) < 1e-6:
             return

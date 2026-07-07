@@ -15,7 +15,11 @@ from __future__ import annotations
 import math
 
 from ..types import RepKinematicSummary, SetScoreSummary
-from .parameter_deltas import dorsi_driven_targets, expected_trunk_lean_geometric
+from .parameter_deltas import (
+    dorsi_driven_targets,
+    expected_trunk_lean_geometric,
+    foot_angle_target_deg,
+)
 
 
 def expected_knee_valgus_baseline(anthro: dict) -> float:
@@ -81,9 +85,7 @@ def test_narrow_foot_angle(
     avg_foot_angle = (
         features.foot_direction_angle_l + features.foot_direction_angle_r
     ) / 2.0
-    dorsiflexion_capacity = rom.get("dorsiflexion_drop", 35.0)
-    _, target_toe_out = dorsi_driven_targets(dorsiflexion_capacity, anthro)
-    ideal_minimum = max(15.0, target_toe_out)
+    ideal_minimum = foot_angle_target_deg(anthro, rom)
     if avg_foot_angle >= ideal_minimum:
         return 0.0
     return _clamp((ideal_minimum - avg_foot_angle) / ideal_minimum)

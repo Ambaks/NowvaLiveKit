@@ -57,9 +57,17 @@ def order_demo_causes(diagnosis: DiagnosisResult) -> list[HypothesizedCause]:
     return [by_id[cause_id] for cause_id in CORRECTOR_CAUSE_ORDER if cause_id in by_id]
 
 
-def summarize_cue_magnitude(cause_id: str, parameter_delta: dict | None) -> str:
+def summarize_cue_magnitude(
+    cause_id: str,
+    parameter_delta: dict | None,
+    actual_shift_m: float | None = None,
+) -> str:
     if cause_id == "depth_cue_unfamiliar":
         return "hips down to parallel depth"
+    if cause_id == "weight_shift_cue" and actual_shift_m is not None:
+        # Speak the shift that was actually rendered, not the engine estimate.
+        text = magnitude_center_weight({"pelvis.tx": actual_shift_m})
+        return text if text is not None else GENERIC_MAGNITUDE_TEXT
     if parameter_delta is None:
         return GENERIC_MAGNITUDE_TEXT
     magnitude_fn = _MAGNITUDE_FN_BY_CAUSE.get(cause_id)
@@ -67,6 +75,20 @@ def summarize_cue_magnitude(cause_id: str, parameter_delta: dict | None) -> str:
         return GENERIC_MAGNITUDE_TEXT
     text = magnitude_fn(parameter_delta)
     return text if text is not None else GENERIC_MAGNITUDE_TEXT
+
+
+def _lateral_hip_shift(before: np.ndarray, after: np.ndarray) -> float:
+    """Hip-midpoint displacement projected on the L->R hip axis, in meters."""
+    lat = np.array(before[HIP_R], dtype=np.float64) - np.array(before[HIP_L], dtype=np.float64)
+    lat[1] = 0.0
+    lat_len = np.linalg.norm(lat)
+    if lat_len < 1e-9:
+        return 0.0
+    lat /= lat_len
+    mid_delta = (
+        (after[HIP_L] + after[HIP_R]) - (before[HIP_L] + before[HIP_R])
+    ) / 2.0
+    return float(np.dot(mid_delta, lat))
 
 
 def _prepare_observed_kpts(kpts: list[list[float]]) -> list[list[float]]:
@@ -92,44 +114,48 @@ def build_pose_stack(
     anthro: dict | None = None,
     rom: dict | None = None,
 ) -> np.ndarray | None:
-    """Incremental corrected poses: stack[k] applies cause k on top of stack[k-1]."""
+    """Prefix-corrected poses: stack[k] applies the first k causes to the observed pose.
+
+    The base pose (stack[0]) is the CANONICAL (symmetrized) form of the
+    observation, and bone lengths are captured from it — after symmetry, never
+    before. Symmetry averages L/R bone vectors and is the only pass allowed to
+    change segment lengths, so it must run once, up front, on the base pose.
+    Every stack entry is then computed from that same canonical pose with the
+    same locked lengths: bone lengths are identical across the whole stack and
+    the choreographer's lerps between adjacent poses can never stretch a bone
+    endpoint-to-endpoint. The last entry is by construction the all-causes
+    correction, identical to VVS --diagnose.
+    """
     ordered = order_demo_causes(diagnosis)
     if not ordered:
         return None
 
-    prepared = _prepare_observed_kpts(observed_kpts)
+    corrector = KeypointCorrector()
 
-    prep_arr = np.asarray(prepared, dtype=np.float64)
+    prepared = _prepare_observed_kpts(observed_kpts)
+    canonical = corrector.canonicalize(prepared, rom=rom)
+
+    canon_arr = np.asarray(canonical, dtype=np.float64)
     bone_lengths = (
-        float(np.linalg.norm(prep_arr[KNEE_L] - prep_arr[HIP_L])),
-        float(np.linalg.norm(prep_arr[ANKLE_L] - prep_arr[KNEE_L])),
-        float(np.linalg.norm(prep_arr[KNEE_R] - prep_arr[HIP_R])),
-        float(np.linalg.norm(prep_arr[ANKLE_R] - prep_arr[KNEE_R])),
+        float(np.linalg.norm(canon_arr[KNEE_L] - canon_arr[HIP_L])),
+        float(np.linalg.norm(canon_arr[ANKLE_L] - canon_arr[KNEE_L])),
+        float(np.linalg.norm(canon_arr[KNEE_R] - canon_arr[HIP_R])),
+        float(np.linalg.norm(canon_arr[ANKLE_R] - canon_arr[KNEE_R])),
     )
 
-    corrector = KeypointCorrector()
     pose_stack = np.empty((len(ordered) + 1, 19, 3), dtype=np.float32)
-    pose_stack[0] = np.asarray(prepared, dtype=np.float32)
+    pose_stack[0] = np.asarray(canonical, dtype=np.float32)
 
-    current = prepared
-    for i, cause in enumerate(ordered):
-        filtered = diagnosis.model_copy(
-            update={"immediate_causes": [cause]}
+    for k in range(1, len(ordered) + 1):
+        prefix = diagnosis.model_copy(
+            update={"immediate_causes": ordered[:k]}
         )
         corrected = corrector.correct(
-            current, filtered, anthro=anthro, rom=rom, bone_lengths=bone_lengths,
+            canonical, prefix, anthro=anthro, rom=rom, bone_lengths=bone_lengths,
         )
         if corrected is None:
             return None
-        pose_stack[i + 1] = np.asarray(corrected, dtype=np.float32)
-        current = corrected
-
-    # Final pose: single all-causes call matching VVS --diagnose exactly
-    full_corrected = corrector.correct(
-        prepared, diagnosis, anthro=anthro, rom=rom, bone_lengths=bone_lengths,
-    )
-    if full_corrected is not None:
-        pose_stack[-1] = np.asarray(full_corrected, dtype=np.float32)
+        pose_stack[k] = np.asarray(corrected, dtype=np.float32)
 
     return pose_stack
 
@@ -145,13 +171,23 @@ def build_demo_data(
         return None
 
     ordered = order_demo_causes(diagnosis)
-    cues = [
-        DemoCue(
-            cue_index=index,
-            cause_id=cause.cause_id,
-            explanation=cause.explanation,
-            magnitude_text=summarize_cue_magnitude(cause.cause_id, cause.parameter_delta),
+    cues = []
+    for index, cause in enumerate(ordered):
+        actual_shift_m = None
+        if cause.cause_id == "weight_shift_cue":
+            actual_shift_m = _lateral_hip_shift(
+                pose_stack[index].astype(np.float64),
+                pose_stack[index + 1].astype(np.float64),
+            )
+        cues.append(
+            DemoCue(
+                cue_index=index,
+                cause_id=cause.cause_id,
+                explanation=cause.explanation,
+                magnitude_text=summarize_cue_magnitude(
+                    cause.cause_id, cause.parameter_delta,
+                    actual_shift_m=actual_shift_m,
+                ),
+            )
         )
-        for index, cause in enumerate(ordered)
-    ]
     return DemoData(pose_stack=pose_stack, cues=cues)

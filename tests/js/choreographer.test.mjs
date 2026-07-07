@@ -205,6 +205,47 @@ describe('state machine', () => {
         choreo.advanceCue(99, T.morphIn + 0.02);
         assert.equal(choreo.state, MORPH_IN);
     });
+
+    test('cues burst during morph-in are queued and settle through in order', () => {
+        const { choreo, calls } = makeHarness(2);
+        choreo.start(0);
+        choreo.advanceCue(0, T.morphIn * 0.3);
+        choreo.advanceCue(1, T.morphIn * 0.5);
+        assert.equal(choreo.state, MORPH_IN);
+
+        // Morph-in completes: first queued cue begins its settle.
+        let now = T.morphIn + 0.01;
+        choreo.tick(now);
+        assert.equal(choreo.state, SETTLE);
+        assert.equal(calls.cameras.length, 2); // start + cue 0
+
+        // First settle completes: second queued cue chains into another settle
+        // instead of being dropped.
+        now += T.settle + 0.01;
+        choreo.tick(now);
+        assert.equal(choreo.state, SETTLE);
+        assert.equal(calls.cameras.length, 3); // + cue 1
+
+        // Second settle completes: cue loop runs on the last cue (poses 1→2).
+        now += T.settle + 0.01;
+        choreo.tick(now);
+        assert.equal(choreo.state, CUE_LOOP);
+        choreo.tick(now + T.yoyoHold + T.yoyoTravel);
+        const { pts } = lastRender(calls);
+        assert.ok(Math.abs(pts[16 * 3 + 2] - 0.21) < 1e-6);
+    });
+
+    test('finish clears queued cues and reaches final hold', () => {
+        const { choreo } = makeHarness(2);
+        choreo.start(0);
+        choreo.advanceCue(0, T.morphIn * 0.3);
+        choreo.advanceCue(1, T.morphIn * 0.4);
+        choreo.finish(T.morphIn * 0.5);
+        assert.equal(choreo.state, SETTLE);
+
+        choreo.tick(T.morphIn * 0.5 + T.settle + 0.01);
+        assert.equal(choreo.state, FINAL_HOLD);
+    });
 });
 
 describe('live pose', () => {

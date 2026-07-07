@@ -10,6 +10,7 @@ import pytest
 from biomechanics.diagnosis.keypoint_corrector import (
     ANKLE_L,
     ANKLE_R,
+    DEFAULT_FOOT_LEN_M,
     FOOT_L,
     FOOT_R,
     HIP_L,
@@ -19,6 +20,8 @@ from biomechanics.diagnosis.keypoint_corrector import (
     UPPER_BODY_INDICES,
     KeypointCorrector,
     apply_lean_to_upper_body,
+    compute_balance_target_ground,
+    compute_com_ground,
     solve_balance_lean,
 )
 from biomechanics.diagnosis.types import (
@@ -77,6 +80,8 @@ def _make_diagnosis(cause_ids: list[str]) -> DiagnosisResult:
             delta = {"L_ankle.ry": 0.15, "R_ankle.ry": -0.15}
         elif cid == "knee_track_cue":
             delta = {"L_hip.ry": -0.08, "R_hip.ry": 0.08}
+        elif cid == "weight_shift_cue":
+            delta = {"pelvis.tx": 0.02}
         causes.append(
             HypothesizedCause(
                 cause_id=cid,
@@ -253,6 +258,49 @@ class TestCorrectIntegrationSymmetry:
         assert out[HIP_L][1] == pytest.approx(out[HIP_R][1], abs=1e-4)
         assert out[ANKLE_L][1] == pytest.approx(out[ANKLE_R][1], abs=1e-4)
         assert out[KNEE_L][1] == pytest.approx(out[KNEE_R][1], abs=1e-3)
+
+
+class TestLateralComCentering:
+
+    def test_lateral_trunk_lean_centers_com_over_target(self) -> None:
+        """With a weight-shift cue, the COM ground projection must land on the
+        mid-foot balance target along the lateral axis, even when the captured
+        trunk leans sideways."""
+        kpts = _make_19pt_skeleton()
+        for idx in UPPER_BODY_INDICES:
+            kpts[idx][2] += 0.08
+
+        diagnosis = _make_diagnosis(["weight_shift_cue"])
+        corrector = KeypointCorrector()
+
+        result = corrector.correct(kpts.tolist(), diagnosis)
+
+        assert result is not None
+        out = np.array(result)
+
+        com = compute_com_ground(out, DEFAULT_FOOT_LEN_M)
+        target = compute_balance_target_ground(out, DEFAULT_FOOT_LEN_M)
+
+        hip_lateral = out[HIP_R] - out[HIP_L]
+        lat_xz = np.array([hip_lateral[0], hip_lateral[2]])
+        lat_xz /= np.linalg.norm(lat_xz)
+
+        gap_lateral = abs(float(np.dot(target - com, lat_xz)))
+        assert gap_lateral <= 0.004
+
+    def test_symmetric_pose_barely_moves(self) -> None:
+        """A laterally balanced capture needs no lateral shift."""
+        kpts = _make_19pt_skeleton()
+        diagnosis = _make_diagnosis(["weight_shift_cue"])
+        corrector = KeypointCorrector()
+
+        result = corrector.correct(kpts.tolist(), diagnosis)
+
+        assert result is not None
+        out = np.array(result)
+        hip_mid_z_before = (kpts[HIP_L][2] + kpts[HIP_R][2]) / 2.0
+        hip_mid_z_after = (out[HIP_L][2] + out[HIP_R][2]) / 2.0
+        assert hip_mid_z_after == pytest.approx(hip_mid_z_before, abs=0.005)
 
 
 class TestBalanceLean:

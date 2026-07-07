@@ -69,7 +69,7 @@ export function createChoreographer(callbacks = {}) {
     let cues = [];
     let highlightMap = {};
     let cueIndex = 0;
-    let pendingCue = null;
+    let pendingCues = [];
     let settleFrom = null;
     let settleTo = null;
     let afterSettleCue = null;
@@ -111,7 +111,7 @@ export function createChoreographer(callbacks = {}) {
 
     function start(now) {
         if (!poseStack) return;
-        pendingCue = null;
+        pendingCues = [];
         cueIndex = 0;
         morphFrom = livePose ? Float64Array.from(livePose) : null;
         currentPoints.set(morphFrom || getPose(0));
@@ -129,7 +129,9 @@ export function createChoreographer(callbacks = {}) {
         if (!poseStack || idx >= cues.length) return;
         const morphing = state === MORPH_IN && (now - stateStart) < timing.morphIn;
         if (morphing) {
-            pendingCue = idx;
+            // Queue instead of overwrite: burst-replayed cues (e.g. event
+            // backlog to a slow browser) settle through each pose in order.
+            pendingCues.push(idx);
             return;
         }
         beginSettle(getPose(idx), idx, now);
@@ -141,6 +143,7 @@ export function createChoreographer(callbacks = {}) {
             state = IDLE;
             return;
         }
+        pendingCues = [];
         beginSettle(getPose(poseCount - 1), null, now);
         cb.setCaption(null);
     }
@@ -159,6 +162,14 @@ export function createChoreographer(callbacks = {}) {
 
         if (state === SETTLE && elapsed >= timing.settle) {
             if (afterSettleCue !== null) {
+                if (pendingCues.length > 0) {
+                    // More queued cues: pass through this pose and settle on.
+                    const next = pendingCues.shift();
+                    beginSettle(getPose(next), next, now);
+                    cb.onCueCamera(cues[next].cause_id);
+                    tick(now);
+                    return;
+                }
                 cueIndex = afterSettleCue;
                 state = CUE_LOOP;
             } else {
@@ -192,9 +203,8 @@ export function createChoreographer(callbacks = {}) {
             return;
         }
 
-        if (state === MORPH_IN && pendingCue !== null && elapsed >= timing.morphIn) {
-            const idx = pendingCue;
-            pendingCue = null;
+        if (state === MORPH_IN && pendingCues.length > 0 && elapsed >= timing.morphIn) {
+            const idx = pendingCues.shift();
             beginSettle(getPose(idx), idx, now);
             cb.onCueCamera(cues[idx].cause_id);
             tick(now);

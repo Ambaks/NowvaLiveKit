@@ -93,6 +93,9 @@ class SignalRepCounter:
         self._asymmetry_sums: Dict[str, float] = {}
         self._angle_samples: int = 0
 
+        # ---- assessment mode ----
+        self._assessment_mode: bool = False
+
     # ------------------------------------------------------------------
     # Public properties (same interface as RepCounter)
     # ------------------------------------------------------------------
@@ -112,6 +115,10 @@ class SignalRepCounter:
     # ------------------------------------------------------------------
     # Public methods
     # ------------------------------------------------------------------
+
+    def set_assessment_mode(self, enabled: bool) -> None:
+        """Bypass the min-depth validation so any completed rep counts."""
+        self._assessment_mode = enabled
 
     def reset(self) -> None:
         self.state = SignalRepState.IDLE
@@ -254,13 +261,14 @@ class SignalRepCounter:
                 if returned:
                     # Validate rep
                     depth = self._max_position_in_rep - self._standing_baseline
+                    depth_ok = self._assessment_mode or depth >= self.config.min_depth_cm
                     if (
                         self._frames_in_rep >= self.config.min_rep_duration_frames
-                        and depth >= self.config.min_depth_cm
+                        and depth_ok
                     ):
                         self.rep_count += 1
                         completed_rep = self._create_rep_data(timestamp, angles)
-                    elif depth < self.config.min_depth_cm:
+                    elif not depth_ok:
                         feedback = "go_deeper"
 
                     self._change_state(SignalRepState.IDLE)

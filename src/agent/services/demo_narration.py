@@ -14,7 +14,7 @@ DEMO_LINE_WORD_LIMIT = 18
 
 _SCRIPT_PROMPT = (
     "You are Nova, an energetic, world-class fitness coach on the Nowva smart squat rack. "
-    "You just watched the user do 2 assessment squats and found the form issues listed "
+    "You just watched the user do 1 assessment squat and found the form issues listed "
     "below. The screen will show their own skeleton with each correction animated, one "
     "issue at a time.\n"
     "Return ONLY a JSON object — no markdown, no extra text — shaped exactly like:\n"
@@ -22,7 +22,7 @@ _SCRIPT_PROMPT = (
     "Rules: intro is one short sentence inviting them to look at the screen. cue_lines "
     "has exactly one line per issue, in the given order, each under "
     f"{DEMO_LINE_WORD_LIMIT} words, naming the fix and referencing what is moving on "
-    "screen. outro is one short sentence telling them to give you 2 more squats with "
+    "screen. outro is one short sentence telling them to squat again with "
     "these fixes. Sound human and encouraging, never robotic."
 )
 
@@ -40,9 +40,9 @@ def build_fallback_script(cues: list[dict]) -> DemoScript:
         for cue in cues
     ]
     return DemoScript(
-        intro="Take a look at the screen — this is you at the bottom of your squat.",
+        intro="Take a look at the screen real quick. This is you at the bottom of your squat.",
         cue_lines=cue_lines,
-        outro="Now give me two more squats with those fixes.",
+        outro="Easy as that!",
     )
 
 

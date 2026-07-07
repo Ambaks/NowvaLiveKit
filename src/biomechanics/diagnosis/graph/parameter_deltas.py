@@ -74,7 +74,7 @@ def foot_angle_target_deg(anthro: dict, rom: dict) -> float:
     geometric correction and the spoken explanation."""
     dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
     _, dorsi_target_angle = dorsi_driven_targets(dorsi_capacity, anthro)
-    return max(22.0, dorsi_target_angle)
+    return max(30.0, dorsi_target_angle)
 
 
 def delta_widen_stance(
@@ -92,18 +92,16 @@ def delta_widen_stance(
         "__foot_target_delta": [
             0.0, 0.0, -width_increase_per_side,
             0.0, 0.0, width_increase_per_side,
-        ]
+        ],
+        "__target_stance_ratio": target_ratio,
     }
 
 
 def magnitude_widen_stance(parameter_delta: dict) -> str | None:
-    target = parameter_delta.get("__foot_target_delta")
-    if not target or len(target) < 6:
+    ratio = parameter_delta.get("__target_stance_ratio")
+    if ratio is None or float(ratio) <= 0:
         return None
-    per_side_cm = round(abs(float(target[5])) * 100.0)
-    if per_side_cm <= 0:
-        return None
-    return f"about {per_side_cm} centimeters wider on each side"
+    return f"about {float(ratio):.1f} times shoulder width"
 
 
 def delta_widen_foot_angle(

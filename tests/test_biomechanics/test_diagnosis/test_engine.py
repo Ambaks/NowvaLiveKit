@@ -203,3 +203,69 @@ class TestExplanationMatchesCorrection:
         expected_per_side = (target_ratio - 1.2) * ANTHRO["shoulder_width"] / 2.0
         per_side = hypothesis.parameter_delta["__foot_target_delta"][5]
         assert per_side == pytest.approx(expected_per_side, abs=1e-6)
+
+
+class TestFootAngleAlwaysCued:
+    """When a depth or trunk-lean fault fires and the feet are turned out less
+    than the target (>=30 deg), widening the feet is force-cued even when the
+    Bayesian competition would rank it below the hypothesis threshold."""
+
+    def _immediate_ids(self, result) -> list[str]:
+        return [h.cause_id for h in result.immediate_causes]
+
+    def _shallow_feet_at(self, angle: float) -> list[RepKinematicSummary]:
+        # Shallow depth (fires depth_limit), otherwise clean form.
+        return [
+            _make_rep(
+                rep_number,
+                hip_y_bottom=45.0,
+                knee_y_l_at_bottom=40.0,
+                knee_y_r_at_bottom=40.0,
+                foot_direction_angle_l=angle,
+                foot_direction_angle_r=angle,
+                depth_class_int=1,
+            )
+            for rep_number in (1, 2, 3)
+        ]
+
+    def test_target_is_at_least_30_degrees(self):
+        assert foot_angle_target_deg(ANTHRO, ROM) >= 30.0
+
+    def test_barely_narrow_feet_are_force_cued(self):
+        # 29 deg gives near-zero evidence, so without the override the cause
+        # would never clear the 0.15 hypothesis threshold.
+        result = _diagnose(self._shallow_feet_at(29.0))
+        assert "narrow_foot_angle" in self._immediate_ids(result)
+
+    def test_recommended_angle_is_at_least_30(self):
+        result = _diagnose(self._shallow_feet_at(29.0))
+        hypothesis = next(
+            h for h in result.immediate_causes if h.cause_id == "narrow_foot_angle"
+        )
+        target_angle = foot_angle_target_deg(ANTHRO, ROM)
+        assert target_angle >= 30.0
+        assert f"~{target_angle:.0f}°" in hypothesis.explanation
+
+    def test_adequately_turned_out_feet_are_not_cued(self):
+        result = _diagnose(self._shallow_feet_at(32.0))
+        assert "narrow_foot_angle" not in self._immediate_ids(result)
+
+    def test_narrow_feet_without_linked_fault_are_not_cued(self):
+        # Deep rep with knee valgus only: knee_not_tracking_toes fires, but it
+        # is not a linked symptom, so foot angle stays silent despite 29 deg.
+        reps = [
+            _make_rep(
+                rep_number,
+                hip_y_bottom=40.0,
+                knee_y_l_at_bottom=44.0,
+                knee_y_r_at_bottom=44.0,
+                knee_valgus_l=25.0,
+                knee_valgus_r=25.0,
+                foot_direction_angle_l=29.0,
+                foot_direction_angle_r=29.0,
+                depth_class_int=4,
+            )
+            for rep_number in (1, 2, 3)
+        ]
+        result = _diagnose(reps)
+        assert "narrow_foot_angle" not in self._immediate_ids(result)

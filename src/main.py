@@ -607,8 +607,13 @@ class NowvaApp:
         self.coaching_ipc.bind(message_callback=_coaching_message_handler)
 
         def _run_coaching_server():
-            self.coaching_ipc.accept_client()
-            self.coaching_ipc.listen()
+            try:
+                self.coaching_ipc.accept_client()
+                self.coaching_ipc.listen()
+            except OSError:
+                # Expected when stop() closes the socket during shutdown
+                if self.coaching_ipc.running:
+                    raise
 
         threading.Thread(target=_run_coaching_server, daemon=True).start()
         print("[COACHING IPC] Server bound — waiting for voice agent to connect")
@@ -634,7 +639,12 @@ class NowvaApp:
             while True:
                 # Check if voice agent is still running
                 if self._voice_agent_process.poll() is not None:
-                    print("\n[SYSTEM] Voice agent terminated")
+                    # Drain remaining output so the agent's dying traceback is visible
+                    if self._voice_agent_process.stdout:
+                        remaining_output = self._voice_agent_process.stdout.read()
+                        if remaining_output:
+                            print(remaining_output, end='')
+                    print(f"\n[SYSTEM] Voice agent terminated (exit code {self._voice_agent_process.returncode})")
                     break
 
                 # Monitor voice agent stdout + state notification pipe
@@ -930,8 +940,24 @@ class NowvaApp:
         print("\nGoodbye!")
 
 
+def _check_python_environment():
+    try:
+        from livekit.agents import TurnHandlingOptions  # noqa: F401
+    except ImportError:
+        import importlib.metadata
+        version = importlib.metadata.version("livekit-agents")
+        print("ERROR: livekit-agents in this Python environment is too old for the voice agent.")
+        print(f"  Interpreter: {sys.executable}")
+        print(f"  livekit-agents: {version} (requirements.txt needs >=1.5.1)")
+        print("  Run the app from the project venv instead:")
+        print("    source venv/bin/activate && python src/main.py")
+        sys.exit(1)
+
+
 async def main():
     """Entry point"""
+    _check_python_environment()
+
     import argparse
     parser = argparse.ArgumentParser(description="Nowva Main Application")
     parser.add_argument("--simulate", action="store_true",

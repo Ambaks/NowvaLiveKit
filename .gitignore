@@ -180,6 +180,7 @@ graphify-out/*
 
 # Claude (local settings stay out of repo)
 .claude/settings.local.json
+.claude/skills/
 
 # Deprecated files (if any)
 deprecated/*

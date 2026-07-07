@@ -8,6 +8,7 @@ import pytest
 from biomechanics.diagnosis.demo_builder import (
     CORRECTOR_CAUSE_ORDER,
     GENERIC_MAGNITUDE_TEXT,
+    _prepare_observed_kpts,
     build_demo_data,
     build_pose_stack,
     order_demo_causes,
@@ -22,6 +23,7 @@ from biomechanics.diagnosis.keypoint_corrector import (
     HIP_R,
     KNEE_L,
     KNEE_R,
+    KeypointCorrector,
 )
 from biomechanics.diagnosis.types import DiagnosisResult, HypothesizedCause
 
@@ -154,17 +156,93 @@ class TestBuildPoseStack:
 
         assert build_pose_stack(_make_19pt_skeleton(), diagnosis) is None
 
+    def test_final_pose_matches_one_shot_all_causes(self) -> None:
+        """The last stack entry must be the same all-causes correction VVS produces."""
+        observed = _make_19pt_skeleton()
+        diagnosis = _make_diagnosis(
+            ["narrow_stance", "narrow_foot_angle", "knee_track_cue"]
+        )
+
+        pose_stack = build_pose_stack(observed, diagnosis)
+        assert pose_stack is not None
+
+        # VVS calls correct() without precomputed bone lengths; the corrector
+        # canonicalizes internally and locks lengths from the canonical pose.
+        prepared = _prepare_observed_kpts(observed)
+        one_shot = KeypointCorrector().correct(prepared, diagnosis)
+        assert one_shot is not None
+
+        np.testing.assert_allclose(
+            pose_stack[-1], np.asarray(one_shot, dtype=np.float32), atol=STACK_TOL,
+        )
+
+    def test_bone_lengths_constant_across_stack(self) -> None:
+        """Rigid bones must have identical lengths in every stack entry.
+
+        This is the invariant that keeps the choreographer's lerps from
+        stretching bones: if endpoints agree in length, any interpolated
+        pose shrinks a bone at most transiently (chord vs arc), and the
+        endpoints themselves never disagree.
+        """
+        observed = np.asarray(_make_19pt_skeleton())
+        # Realistic capture noise: asymmetric hips, knees, ankles
+        observed[HIP_L][1] += 0.03
+        observed[KNEE_R][1] -= 0.02
+        observed[ANKLE_L][0] += 0.01
+        diagnosis = _make_diagnosis([
+            "narrow_stance", "narrow_foot_angle", "knee_track_cue",
+            "weight_shift_cue", "depth_cue_unfamiliar",
+        ])
+
+        pose_stack = build_pose_stack(
+            observed.tolist(), diagnosis, rom={"dorsiflexion_drop": 35.0},
+        )
+        assert pose_stack is not None
+
+        rigid_bones = [
+            (HIP_L, KNEE_L), (KNEE_L, ANKLE_L),
+            (HIP_R, KNEE_R), (KNEE_R, ANKLE_R),
+            (HIP_L, HIP_R),
+            (ANKLE_L, FOOT_L), (ANKLE_R, FOOT_R),
+        ]
+        stack = pose_stack.astype(np.float64)
+        for j_a, j_b in rigid_bones:
+            lengths = [
+                float(np.linalg.norm(pose[j_b] - pose[j_a])) for pose in stack
+            ]
+            assert max(lengths) - min(lengths) < 1e-4, (
+                f"bone ({j_a},{j_b}) length varies across stack: {lengths}"
+            )
+
+    def test_cue_marginal_change_is_isolated(self) -> None:
+        """Adjacent poses differ only by the marginal effect of one cue."""
+        diagnosis = _make_diagnosis(["narrow_stance", "knee_track_cue"])
+
+        pose_stack = build_pose_stack(_make_19pt_skeleton(), diagnosis)
+        assert pose_stack is not None
+
+        planted = [ANKLE_L, ANKLE_R, FOOT_L, FOOT_R, HIP_L, HIP_R]
+        np.testing.assert_allclose(
+            pose_stack[2][planted], pose_stack[1][planted], atol=1e-3,
+        )
+
+        knee_span_before = abs(pose_stack[1][KNEE_R][2] - pose_stack[1][KNEE_L][2])
+        knee_span_after = abs(pose_stack[2][KNEE_R][2] - pose_stack[2][KNEE_L][2])
+        assert knee_span_after > knee_span_before + 0.005
+
 
 class TestSummarizeCueMagnitude:
 
-    def test_narrow_stance_reports_centimeters_per_side(self) -> None:
+    def test_narrow_stance_reports_shoulder_width_ratio(self) -> None:
         text = summarize_cue_magnitude(
             "narrow_stance",
-            {"__foot_target_delta": [0.0, 0.0, -0.04, 0.0, 0.0, 0.04]},
+            {
+                "__foot_target_delta": [0.0, 0.0, -0.04, 0.0, 0.0, 0.04],
+                "__target_stance_ratio": 1.44,
+            },
         )
 
-        assert "4 centimeters" in text
-        assert "each side" in text
+        assert "1.4 times shoulder width" in text
 
     def test_foot_angle_reports_degrees(self) -> None:
         text = summarize_cue_magnitude(

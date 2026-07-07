@@ -20,6 +20,7 @@ load_dotenv()
 
 from livekit import agents
 from livekit.agents import AgentSession, TurnHandlingOptions, AgentStateChangedEvent, MetricsCollectedEvent, metrics
+from openai.types import Reasoning
 from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import deepgram, openai, silero, elevenlabs, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -118,10 +119,19 @@ async def entrypoint(ctx: agents.JobContext):
         ],
     )
 
-    llm = openai.LLM(
-        model=os.getenv("LLM_MODEL", "gpt-5.4-mini"),
-        reasoning_effort="low",
-    )
+    llm_model = os.getenv("LLM_MODEL", "gpt-5.4-mini")
+    if llm_model.startswith("gpt-5.5"):
+        # gpt-5.5 rejects reasoning_effort + function tools on /v1/chat/completions;
+        # OpenAI requires the Responses API for this combination.
+        llm = openai.responses.LLM(
+            model=llm_model,
+            reasoning=Reasoning(effort="low"),
+        )
+    else:
+        llm = openai.LLM(
+            model=llm_model,
+            reasoning_effort="low",
+        )
 
     tts = elevenlabs.TTS(
         api_key=os.getenv("ELEVEN_API_KEY"),
