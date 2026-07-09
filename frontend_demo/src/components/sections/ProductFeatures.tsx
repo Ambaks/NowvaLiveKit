@@ -1,39 +1,39 @@
 import { useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Scan, Mic, Brain, Gem } from 'lucide-react';
+import { Activity, Hash, AlertTriangle, Brain } from 'lucide-react';
 import { useInView } from '@/hooks/useInView';
 
 const features = [
   {
-    icon: Scan,
-    title: 'Built-In Computer Vision',
+    icon: Activity,
+    title: 'Biomechanics diagnosis',
     description:
-      'Dual cameras integrated into the uprights track over 20 body keypoints in 3D with lab-grade accuracy. Every angle measured, every rep counted, every deviation caught — no wearables needed.',
-    detail: 'Pose estimation · Deep Learning · Barbell tracking · Velocity tracking',
+      'Not just tracking — diagnosis. The engine triangulates 20+ keypoints in 3D and measures depth, bar path, tempo and symmetry against your own anatomy, so cues fit your body instead of a generic template.',
+    detail: '3D triangulation · Depth · Bar path · Joint angles',
     span: 'large' as const,
   },
   {
-    icon: Mic,
-    title: 'Real-Time Voice Coaching',
+    icon: Hash,
+    title: 'Rep & velocity counting',
     description:
-      'Nova, your AI coach, lives in the rack. Get real-time form cues, teaching, and program adjustments through natural conversation.',
-    detail: 'Powered by LLMs · Context-aware · Built in memory',
+      'Every rep counted automatically, with bar speed on each one — so you and the system both know when a set is genuinely slowing down.',
+    detail: 'Auto rep count · Bar velocity',
+    span: 'small' as const,
+  },
+  {
+    icon: AlertTriangle,
+    title: 'Fault detection',
+    description:
+      'Knees caving, hips shooting up, uneven depth — common breakdown patterns are flagged the moment they appear, before they become a habit or an injury.',
+    detail: 'Pattern flags · Live feedback',
     span: 'small' as const,
   },
   {
     icon: Brain,
-    title: 'Adaptive Intelligence',
+    title: 'Adaptive programming',
     description:
-      'Every session feeds the system. Your training auto-regulates based on velocity, RPE, and fatigue — predicting plateaus before they happen, like a world class coach would.',
+      'Every session feeds the plan. Training auto-regulates from velocity, RPE and fatigue signals, adjusting load and volume the way a good coach would — and relaying it through the on-device voice coach.',
     detail: 'Autoregulation · Fatigue management · Periodization',
-    span: 'small' as const,
-  },
-  {
-    icon: Gem,
-    title: 'Designed to Impress',
-    description:
-      'Premium steel construction with a minimal footprint. Clean lines, integrated cable management, and an integrated touchscreen display. A rack that elevates any training space.',
-    detail: 'Compact footprint · Premium materials · Home gym ready',
     span: 'large' as const,
   },
 ];
@@ -104,12 +104,13 @@ export const ProductFeatures = () => {
           className="mb-14"
         >
           <p className="eyebrow mb-4">The Rack</p>
-          <h2 className="font-display text-display-md md:text-display-lg font-bold text-foreground max-w-3xl mb-5">
-            Everything your coach does.{' '}
+          <h2 className="font-display text-display-md md:text-display-lg font-bold text-foreground max-w-3xl mb-5 text-balance">
+            Everything a great coach does.{' '}
             <span className="text-accent">Built into the steel.</span>
           </h2>
           <p className="text-body-lg text-foreground-secondary max-w-2xl">
-            The Nowva Rack integrates computer vision, voice AI, and adaptive programming directly into a premium squat rack — no phone, no wearable, no compromise.
+            Computer vision, a biomechanics engine, and adaptive programming — integrated
+            directly into a premium squat rack. No phone, no wearable, no compromise.
           </p>
         </motion.div>
 
@@ -133,7 +134,7 @@ export const ProductFeatures = () => {
 
               {/* Mini visualization */}
               {index === 0 && <CVMiniViz />}
-              {index === 1 && <WaveformMini />}
+              {index === 3 && <WaveformMini />}
 
               <div className="relative z-10">
                 {/* Icon */}

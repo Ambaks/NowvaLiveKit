@@ -33,10 +33,12 @@ const CountUp = ({ end, suffix = '', duration = 2 }: { end: number; suffix?: str
   );
 };
 
+// Honest, capability-based specs — Nowva is pre-launch, so no user/traction claims.
 const stats = [
-  { end: 500, suffix: '+', label: 'Athletes in Beta', delay: 0 },
-  { end: 10000, suffix: '+', label: 'Programs Generated', delay: 0.15 },
-  { end: 60, suffix: 's', prefix: '<', label: 'Average Generation', delay: 0.3 },
+  { end: 20, suffix: '+', label: 'Keypoints tracked in 3D', delay: 0 },
+  { end: 2, suffix: '', label: 'Camera angles triangulated', delay: 0.1 },
+  { end: 100, suffix: '%', label: 'Voice runs on-device', delay: 0.2 },
+  { end: 60, prefix: '<', suffix: 's', label: 'To generate a program', delay: 0.3 },
 ];
 
 export const SocialProof = () => {
@@ -49,23 +51,23 @@ export const SocialProof = () => {
       <div className="separator" />
 
       <div className="section-container relative z-10">
-        <div className="flex flex-col md:flex-row items-center justify-center gap-8 md:gap-0 py-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-y-10 gap-x-4 py-10">
           {stats.map((stat, i) => (
             <motion.div
               key={stat.label}
               initial={{ opacity: 0, y: 16 }}
               animate={isInView ? { opacity: 1, y: 0 } : {}}
               transition={{ duration: 0.5, delay: 0.2 + stat.delay }}
-              className="text-center flex-1 relative"
+              className="text-center relative"
             >
               {/* Vertical divider between stats (desktop) */}
               {i > 0 && (
                 <div className="hidden md:block absolute left-0 top-1/2 -translate-y-1/2 w-px h-12 bg-gradient-to-b from-transparent via-border-light to-transparent" />
               )}
 
-              <div className="font-display text-display-md md:text-display-lg font-bold text-foreground leading-none mb-2">
+              <div className="font-display text-heading-xl md:text-display-md font-bold text-foreground leading-none mb-2">
                 {stat.prefix && <span className="text-accent">{stat.prefix}</span>}
-                <CountUp end={stat.end} suffix={stat.suffix} duration={1.8} />
+                <CountUp end={stat.end} suffix={stat.suffix} duration={1.6} />
               </div>
               <div className="font-mono text-[11px] tracking-[0.15em] uppercase text-foreground-tertiary">
                 {stat.label}
@@ -73,6 +75,10 @@ export const SocialProof = () => {
             </motion.div>
           ))}
         </div>
+
+        <p className="text-center text-caption text-foreground-tertiary/70 pb-2">
+          Technical specs of the system in development — not usage or traction claims.
+        </p>
       </div>
 
       {/* Bottom separator */}

@@ -1,6 +1,13 @@
 import { motion } from 'framer-motion';
+import { ArrowRight, ChevronDown, Eye, Waypoints, MessageSquare } from 'lucide-react';
 import { RackVisualization } from './RackVisualization';
 import { trackEvent } from '@/lib/analytics';
+
+const proofChips = [
+  { icon: Eye, label: 'Real-time vision' },
+  { icon: Waypoints, label: '3D biomechanics' },
+  { icon: MessageSquare, label: 'On-device voice coach' },
+];
 
 export const Hero = () => {
   const handleCTAClick = () => {
@@ -9,7 +16,7 @@ export const Hero = () => {
   };
 
   const handleLearnMore = () => {
-    document.getElementById('the-rack')?.scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' });
   };
 
   return (
@@ -27,7 +34,7 @@ export const Hero = () => {
       </div>
 
       {/* Content */}
-      <div className="section-container relative z-10 w-full pt-24 pb-20 md:pt-40 md:pb-32">
+      <div className="section-container relative z-10 w-full pt-28 pb-20 md:pt-40 md:pb-32">
         <div className="grid lg:grid-cols-2 gap-12 lg:gap-8 items-center">
           {/* Left: Copy */}
           <div className="relative z-20 max-w-2xl">
@@ -52,23 +59,42 @@ export const Hero = () => {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.15 }}
-              className="font-display font-extrabold text-[2.75rem] sm:text-display-lg md:text-display-xl lg:text-display-2xl text-foreground mb-6"
+              className="font-display font-extrabold text-[2.75rem] leading-[1.02] sm:text-display-lg md:text-display-xl lg:text-display-2xl text-foreground mb-6 text-balance"
             >
-              Intelligence,
+              The coach that
               <br />
-              <span className="gradient-text">Built In.</span>
+              <span className="gradient-text">sees every rep.</span>
             </motion.h1>
 
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.3 }}
-              className="text-body-lg md:text-heading-md text-foreground-secondary max-w-lg mb-8 md:mb-10 leading-relaxed"
+              className="text-body-lg md:text-heading-md text-foreground-secondary max-w-xl mb-8 leading-relaxed"
             >
-              The AI-powered squat rack that watches your form, coaches your lifts, and programs your training — all in real time. No phone. No wearable. Just lift.
+              Nowva is an AI trainer built into a squat rack. It watches your technique in
+              real time, coaches your lifts by voice, and adapts your program as you train —
+              no phone, no wearable. Just lift.
             </motion.p>
 
-            {/* Stats strip */}
+            {/* Honest capability chips */}
+            <motion.ul
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.45 }}
+              className="flex flex-wrap gap-x-5 gap-y-3 mb-9"
+            >
+              {proofChips.map((chip) => (
+                <li
+                  key={chip.label}
+                  className="inline-flex items-center gap-2 text-body-sm text-foreground-secondary"
+                >
+                  <chip.icon className="w-4 h-4 text-accent" aria-hidden="true" />
+                  {chip.label}
+                </li>
+              ))}
+            </motion.ul>
+
             {/* CTAs */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -78,31 +104,23 @@ export const Hero = () => {
             >
               <button
                 onClick={handleCTAClick}
-                className="button-primary text-lg group w-full sm:w-auto text-center justify-center"
+                className="button-primary text-lg group w-full sm:w-auto gap-3"
               >
-                <span className="flex items-center gap-3">
-                  Get a Free Program
-                  <svg
-                    className="w-5 h-5 transition-transform duration-300 group-hover:translate-x-1"
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                  </svg>
-                </span>
+                Get a Free Program
+                <ArrowRight
+                  className="w-5 h-5 transition-transform duration-300 group-hover:translate-x-1"
+                  aria-hidden="true"
+                />
               </button>
               <button
                 onClick={handleLearnMore}
-                className="button-secondary text-lg group w-full sm:w-auto text-center justify-center"
+                className="button-secondary text-lg group w-full sm:w-auto gap-3"
               >
-                <span className="flex items-center gap-3">
-                  See the Technology
-                  <svg
-                    className="w-4 h-4 transition-transform duration-300 group-hover:translate-y-0.5"
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </span>
+                See How It Works
+                <ChevronDown
+                  className="w-4 h-4 transition-transform duration-300 group-hover:translate-y-0.5"
+                  aria-hidden="true"
+                />
               </button>
             </motion.div>
           </div>
@@ -125,6 +143,7 @@ export const Hero = () => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 1.2, duration: 0.6 }}
+        aria-hidden="true"
       >
         <span className="text-[10px] uppercase tracking-[0.3em] text-foreground-tertiary font-mono">Scroll</span>
         <motion.div
