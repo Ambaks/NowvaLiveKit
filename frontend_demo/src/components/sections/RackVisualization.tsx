@@ -29,7 +29,14 @@ const bones: [number, number][] = [
   [14, 16], [15, 17],
 ];
 
-export const RackVisualization = ({ className = '' }: { className?: string }) => {
+export const RackVisualization = ({
+  className = '',
+  showReadouts = true,
+}: {
+  className?: string;
+  /** Hide the HTML HUD overlays when this SVG is embedded inside another HUD frame. */
+  showReadouts?: boolean;
+}) => {
   return (
     <div className={`relative select-none ${className}`}>
       <div className="relative aspect-[3/4] overflow-hidden">
@@ -280,6 +287,8 @@ export const RackVisualization = ({ className = '' }: { className?: string }) =>
         </svg>
 
         {/* Data readouts (HTML overlay for better styling) */}
+        {showReadouts && (
+        <>
         <motion.div
           className="absolute"
           style={{ right: '8%', top: '60%' }}
@@ -340,6 +349,8 @@ export const RackVisualization = ({ className = '' }: { className?: string }) =>
           />
           <span className="font-mono text-[8px] text-accent/50 tracking-[0.2em]">TRACKING</span>
         </motion.div>
+        </>
+        )}
       </div>
     </div>
   );

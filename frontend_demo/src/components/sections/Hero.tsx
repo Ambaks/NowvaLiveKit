@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { ArrowRight, ChevronDown, Eye, Waypoints, MessageSquare } from 'lucide-react';
-import { RackVisualization } from './RackVisualization';
+import { BiomechanicsScene } from '@/components/three/BiomechanicsScene';
 import { trackEvent } from '@/lib/analytics';
 
 const proofChips = [
@@ -21,17 +21,30 @@ export const Hero = () => {
 
   return (
     <section className="relative min-h-screen flex items-center overflow-hidden">
-      {/* Background */}
-      <div className="absolute inset-0 bg-gradient-mesh-dark" />
+      {/*
+        Full-bleed hero photograph — athlete at a squat rack (Ominin-style backdrop).
+        Source: Unsplash, photo by John Arano — https://unsplash.com/photos/h4i9G-de7Po
+        Self-hosted at /public/hero-athlete.jpg. To swap for a bespoke / generated
+        image later, replace that file (keep a wide, dark, subject-right composition)
+        — no code change needed. See docs/HERO_MEDIA.md.
+      */}
+      <img
+        src="/hero-athlete.jpg"
+        alt=""
+        aria-hidden="true"
+        fetchPriority="high"
+        className="absolute inset-0 w-full h-full object-cover object-[62%_center] pointer-events-none"
+      />
+
+      {/* Scrims for text legibility (WCAG contrast over the photo) */}
+      <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/25" />
+      <div className="absolute inset-0 bg-gradient-to-t from-background via-background/50 to-background/20 lg:to-transparent" />
+      <div className="absolute inset-0 bg-background/55 lg:bg-transparent" />
+
+      {/* Brand color wash + atmosphere (kept subtle above the photo) */}
+      <div className="absolute inset-0 bg-gradient-mesh-dark opacity-70" />
       <div className="absolute top-1/4 -left-32 w-[600px] h-[600px] bg-accent/[0.04] rounded-full blur-[120px]" />
       <div className="absolute bottom-1/4 right-0 w-[400px] h-[400px] bg-cta/[0.03] rounded-full blur-[100px]" />
-
-      {/* Mobile background rack (atmospheric) */}
-      <div className="absolute inset-0 lg:hidden flex items-center justify-center pointer-events-none overflow-hidden">
-        <div className="w-[280px] opacity-[0.06] translate-x-24 translate-y-12">
-          <RackVisualization />
-        </div>
-      </div>
 
       {/* Content */}
       <div className="section-container relative z-10 w-full pt-28 pb-20 md:pt-40 md:pb-32">
@@ -125,14 +138,14 @@ export const Hero = () => {
             </motion.div>
           </div>
 
-          {/* Right: Rack visualization — desktop */}
+          {/* Right: live 3D biomechanics analysis — the AI "seeing" the lift */}
           <motion.div
             initial={{ opacity: 0, scale: 0.92 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 1, delay: 0.3, ease: 'easeOut' }}
             className="relative hidden lg:block"
           >
-            <RackVisualization />
+            <BiomechanicsScene />
           </motion.div>
         </div>
       </div>
