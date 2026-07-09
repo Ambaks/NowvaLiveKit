@@ -31,12 +31,14 @@ export const Navbar = () => {
   };
 
   const navLinks = [
+    { label: 'How It Works', id: 'how-it-works' },
     { label: 'The Rack', id: 'the-rack' },
     { label: 'Free Program', id: 'sample-program' },
   ];
 
   return (
     <motion.nav
+      aria-label="Primary"
       initial={{ y: 0 }}
       animate={{ y: hidden ? -100 : 0 }}
       transition={{ duration: 0.3, ease: 'easeInOut' }}

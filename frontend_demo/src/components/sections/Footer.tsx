@@ -44,6 +44,9 @@ export const Footer = () => {
             <div>
               <h4 className="text-caption uppercase tracking-widest text-foreground-tertiary mb-4 font-semibold">Product</h4>
               <div className="space-y-3">
+                <a href="#how-it-works" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
+                  How It Works
+                </a>
                 <a href="#the-rack" className="block text-body-sm text-foreground-secondary hover:text-accent transition-colors">
                   The Rack
                 </a>
