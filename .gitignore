@@ -18,8 +18,6 @@ pip-delete-this-directory.txt
 
 # Node.js / Frontend
 node_modules/
-package-lock.json
-/package.json
 dist/
 dist-ssr/
 *.local
@@ -54,7 +52,6 @@ migrations/versions/*.pyc
 *.jks
 credentials/
 secrets/
-ssl/
 
 # Environment variables
 .env
@@ -190,3 +187,6 @@ deprecated/*
 *.png
 # Screen recordings
 *.mov
+
+# Website (Vercel frontend) — keep its image assets despite the *.png rule
+!website/**/*.png
