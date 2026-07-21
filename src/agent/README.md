@@ -68,8 +68,6 @@ extends LiveKit's `Agent` class and provides:
 | `schedule_agent.py` | `ScheduleMaintenanceAgent` -- schedule viewing and modification. |
 | `teaching_agent.py` | `TeachingAgent` -- guided squat instruction with phased progression. |
 | `teaching_phases.py` | Phase definitions and transition logic for the teaching flow. |
-| `website_voice_agent.py` | Website-facing voice agent (demo/landing page). |
-| `website_voice_agent_v2.py` | Revised website agent with step-based prompting. |
 | `console_launcher.py` | Launches the voice agent in console mode for local development. |
 
 **Prompts** live in `agents/prompts/` -- one file per agent, exporting a

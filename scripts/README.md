@@ -5,7 +5,7 @@ Utility scripts, demos, and deployment tooling. Not part of the main application
 ## Subdirectories
 
 ### deploy/
-Production deployment and server management scripts. Startup commands for Gunicorn, Celery, FastAPI, and the website voice agent. Deploy scripts for GCP and local Fedora server.
+Production deployment and server management scripts. Startup commands for Gunicorn, Celery, and FastAPI. Deploy script for the local Fedora server.
 
 ### demos/
 Visual demonstration scripts that showcase the biomechanics pipeline:

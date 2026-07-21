@@ -17,8 +17,6 @@
 
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
-- [Website & Frontend](#website--frontend)
-- [Website Voice Agent](#website-voice-agent)
 - [Console Voice Agent (main.py)](#console-voice-agent-mainpy)
 - [Biomechanics Pipeline](#biomechanics-pipeline)
   - [Pose Estimation](#1-pose-estimation)
@@ -48,7 +46,7 @@ Nowva AI is a real-time fitness coaching platform that watches you exercise thro
 
 The platform operates across two surfaces:
 
-1. **Website** — A React/TypeScript landing page where visitors generate personalized workout programs via voice conversation or structured form. The website voice agent collects user data through a 5-step conversational flow and triggers async program generation.
+1. **Website** — A standalone Next.js marketing site in `website/`, deployed on Vercel. Presents the product and the technology, and captures founding-batch preorder reservations (name + email via Resend). Fully decoupled from this backend.
 
 2. **Console application** — The full coaching system (`main.py`) that runs on a squat rack computer or laptop. Captures webcam video, runs real-time biomechanics analysis, delivers voice coaching with fault cues, manages workout sessions, and tracks long-term training progress.
 
@@ -133,125 +131,6 @@ Each process communicates via **UNIX domain sockets** with 4-byte big-endian len
 - **Coaching IPC** — main process forwards events to the voice agent for real-time coaching delivery
 
 Mode transitions are signaled over a **notification pipe** rather than file polling: the voice agent writes to a pipe fd when it changes `AgentState`, and `main.py` `select()`s on it alongside subprocess stdout. The biomechanics pipeline supports **model preloading** (`--preload`) — models load before the workout starts so the camera window appears instantly (with a native macOS fullscreen animation).
-
----
-
-## Website & Frontend
-
-**Location:** `frontend_demo/`
-
-The website is a React 19 + TypeScript SPA built with Vite and styled with Tailwind CSS. It serves as the public-facing product where visitors can generate personalized workout programs.
-
-### Tech Stack
-
-| Technology | Version | Purpose |
-|-----------|---------|---------|
-| React | 19 | UI framework |
-| TypeScript | 5.6 | Type safety |
-| Vite | 7.2 | Build tool & dev server |
-| Tailwind CSS | 3.4 | Styling |
-| Framer Motion | 12.23 | Animations |
-| LiveKit Client | 2.17 | Voice agent WebRTC connection |
-| @livekit/components-react | 2.9 | LiveKit UI components |
-| Lucide React | — | Icon library |
-
-### Page Sections
-
-The landing page is composed of modular section components in `frontend_demo/src/components/sections/`:
-
-| Component | Purpose |
-|-----------|---------|
-| `Navbar.tsx` | Top navigation |
-| `Hero.tsx` | Landing hero with value proposition |
-| `ProductFeatures.tsx` | Feature highlights |
-| `ProductShowcase.tsx` | Visual demo of the system |
-| `SampleProgram.tsx` | Example workout program output |
-| `ProgramGenerator.tsx` | Main conversion funnel (see below) |
-| `PoseVisualization.tsx` | Real-time pose display demo |
-| `HowItWorks.tsx` | Educational content |
-| `ValueProposition.tsx` | Benefits messaging |
-| `Footer.tsx` | Navigation and links |
-
-### Program Generator Flow
-
-The core conversion funnel lives in `frontend_demo/src/components/sections/ProgramGenerator.tsx` and its child components in `frontend_demo/src/components/generator/`:
-
-```
-EmailGate (capture email address)
-  └── ModeSelector (choose voice or form)
-        ├── VoiceInterface (LiveKit agent connection)
-        │     └── Connects to website_voice_agent.py via WebRTC
-        └── FormInterface (structured multi-step form)
-              ├── PersonalInfoStep (name, age, sex, height, weight)
-              ├── GoalsStep (training goals, duration, frequency)
-              ├── ScheduleStep (available days, time preferences)
-              ├── ExperienceStep (fitness level, training history)
-              └── AdvancedStep (sport-specific, injuries)
-                    └── ProgramGenerationStatus (async job polling)
-```
-
-**API Integration** (defined in `frontend_demo/src/api/`):
-- `POST /api/programs/generate` — submit program generation request
-- `GET /api/programs/status/{jobId}` — poll async job status
-- `GET /api/programs/last-submission` — fetch previous form data for returning users (prefill)
-- `GET /api/programs/{programId}/download/pdf` — download generated program as PDF
-
-The frontend is built to `frontend_demo/dist/` and served by FastAPI at the `/assets` static mount. FastAPI handles SPA routing by serving `index.html` for all unmatched routes.
-
-### Frontend Environment
-
-```bash
-# frontend_demo/.env.example
-VITE_API_URL=http://localhost:8000
-VITE_LIVEKIT_URL=wss://nowva-k5kvmizx.livekit.cloud
-```
-
----
-
-## Website Voice Agent
-
-**Location:** `src/agent/agents/website_voice_agent.py`
-**Prompts:** `src/agent/agents/prompts/website_step_prompts.py`, `src/agent/agents/prompts/website_agent_prompt.py`
-
-A streamlined voice agent for **new website visitors** creating programs without authentication. The agent connects via LiveKit WebRTC from the browser's VoiceInterface component.
-
-### Voice Pipeline
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| STT | Deepgram Nova-3 | Speech-to-text |
-| LLM | OpenAI (gpt-5.2 / gpt-5.2-mini) | Conversation + data extraction |
-| TTS | ElevenLabs | Text-to-speech |
-| VAD | Silero | Voice activity detection |
-| Turn Detection | English Model (LiveKit) | End-of-utterance detection |
-
-### 5-Step Conversational Flow
-
-The agent uses a **step-scoped prompt system** — the system prompt changes at each step to guide the LLM toward specific information gathering:
-
-| Step | Prompt | Data Collected |
-|------|--------|---------------|
-| 1. `NAME_CAPTURE` | Extract first name | Name |
-| 2. `PROFILE_CAPTURE` | Multi-field profile | Age, sex, height, weight, fitness level |
-| 3. `GOALS_CAPTURE` | Training objectives | Goals, program duration, weekly frequency |
-| 4. `ADVANCED_CAPTURE` | Sport-specific details | Sport focus, injury history, equipment access |
-| 5. `FINALIZATION` | Confirm and generate | Trigger async program generation |
-
-### Function Tools (LLM-callable)
-
-| Tool | Purpose |
-|------|---------|
-| `capture_name()` | Extract and validate user's name |
-| `capture_profile_data()` | Multi-field profile collection (age, sex, height, weight, fitness level) |
-| `capture_advanced_details()` | Sport/injury-specific questions |
-| `correct_previous_answer()` | Allow user to change previously captured values at any step |
-| `confirm_program_generation()` | Trigger async program generation via API |
-
-The agent is **ephemeral** — no persistent state between sessions. Collected data is stored in runtime memory and room metadata, then sent to `/api/programs/generate` for async job processing. Returns a `job_id` for the frontend to poll.
-
-### Returning User Handling
-
-The agent checks for existing user data on connection. For returning visitors, it greets by name and offers to use their previous information or start fresh.
 
 ---
 
@@ -996,11 +875,10 @@ User Input (profile, goals, constraints)
 | Program generation (Layers 2, 4, 5) | gpt-5.2, gpt-5.2-mini |
 | Context compaction | gpt-4.1-mini |
 | Conversation (console) | Gemini 3.1 Flash Lite |
-| Conversation (website) | OpenAI (configurable) |
 
 ### Async Execution
 
-Program generation runs as a Celery task with Valkey (Redis-compatible) as the broker. The frontend polls `/api/programs/status/{jobId}` for progress updates.
+Program generation runs as a Celery task with Valkey (Redis-compatible) as the broker. Clients poll `/api/programs/status/{jobId}` for progress updates.
 
 ---
 
@@ -1137,12 +1015,11 @@ PostgreSQL with SQLAlchemy 2.0 ORM. Migrations managed by Alembic (`src/db/migra
 |--------|-------------|
 | **Core** | Python 3.11+, FastAPI, Pydantic, YAML config |
 | **Voice (Console)** | LiveKit Agents SDK, Deepgram Nova-3 (STT), Gemini 3.1 Flash Lite (LLM), Cartesia Sonic-3 (TTS), Silero (VAD) |
-| **Voice (Website)** | LiveKit Agents SDK, Deepgram Nova-3 (STT), OpenAI gpt-5.2 (LLM), ElevenLabs (TTS), Silero (VAD) |
 | **CV / ML** | PyTorch (BiLSTM), OpenCV, MediaPipe, ONNX Runtime (RTMPose), Ultralytics YOLO (barbell) |
 | **Program Gen** | OpenAI gpt-5.2/gpt-5.2-mini, gpt-4.1-mini (compaction) |
 | **RAG** | ChromaDB, Voyage AI voyage-3 (embeddings), Cohere rerank-v3.5, Anthropic Claude (contextual enrichment) |
 | **Data** | PostgreSQL, SQLAlchemy 2.0, Alembic (migrations), Valkey/Redis, Celery |
-| **Frontend** | React 19, TypeScript 5.6, Vite 7.2, Tailwind CSS 3.4, Framer Motion, LiveKit Client |
+| **Website** | Next.js 16, React 19, TypeScript, Tailwind CSS 4, Motion, Resend — standalone in `website/`, deployed on Vercel |
 | **Numerical** | NumPy, SciPy, Pandas |
 | **Visualization** | Three.js (3D replay), Matplotlib, Seaborn, OpenCV overlays |
 | **Deployment** | Gunicorn, Uvicorn, Nginx, Cloudflare Tunnel |
@@ -1152,13 +1029,11 @@ PostgreSQL with SQLAlchemy 2.0 ORM. Migrations managed by Alembic (`src/db/migra
 | Component | Model | Purpose |
 |-----------|-------|---------|
 | Console conversation | Gemini 3.1 Flash Lite | Fast, low-cost conversational agent |
-| Website conversation | OpenAI (gpt-5.2) | Website visitor onboarding |
 | Program generation | gpt-5.2, gpt-5.2-mini | Multi-layer program synthesis |
 | Context compaction | gpt-4.1-mini | Rolling conversation summarization |
 | TTS cue pre-caching | gpt-4o-mini-tts | Cached coaching audio cues |
-| STT | Deepgram Nova-3 | Speech-to-text (both agents) |
+| STT | Deepgram Nova-3 | Speech-to-text (voice agent) |
 | TTS (console) | Cartesia Sonic-3 | Console voice output |
-| TTS (website) | ElevenLabs | Website voice output |
 | VAD | Silero | Voice activity detection (local model) |
 | Embeddings | Voyage AI voyage-3 | RAG vector embeddings |
 | Reranking | Cohere rerank-v3.5 | Context retrieval reranking |
@@ -1198,8 +1073,8 @@ NowvaLiveKit/
 │   ├── templates/                        # HTML/CSS templates for program export
 │   └── utils/                            # Shared utilities
 ├── benchmarks/                           # Component benchmark suite (run via python -m benchmarks)
-├── frontend_demo/                        # React 19 + TypeScript website
-├── config/                               # Gunicorn, Nginx, biomechanics YAML
+├── website/                              # Next.js marketing site (deployed on Vercel)
+├── config/                               # Gunicorn, biomechanics YAML
 ├── scripts/
 │   ├── deploy/                           # Production deployment + server startup
 │   ├── demos/                            # Visual pipeline demonstrations
@@ -1229,7 +1104,7 @@ NowvaLiveKit/
 - PostgreSQL 15+
 - Valkey or Redis (for Celery task queue)
 - Webcam (for biomechanics features)
-- Node.js 18+ (for frontend development)
+- Node.js 20+ (only for the marketing site in `website/`)
 
 ### Installation
 
@@ -1241,8 +1116,8 @@ git clone <repo-url> && cd NowvaLiveKit
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
-# Frontend (if developing the website)
-cd frontend_demo && npm install && cd ..
+# Marketing site (only if working on the website)
+cd website && npm install && cd ..
 ```
 
 ### Environment Configuration
@@ -1255,11 +1130,10 @@ Required environment variables:
 
 | Variable | Purpose |
 |----------|---------|
-| `OPENAI_API_KEY` | OpenAI models (program gen, website agent, TTS cues) |
+| `OPENAI_API_KEY` | OpenAI models (program gen, TTS cues) |
 | `GOOGLE_API_KEY` | Gemini 3.1 Flash Lite (console agent) |
 | `DEEPGRAM_API_KEY` | Deepgram Nova-3 (STT) |
 | `CARTESIA_API_KEY` | Cartesia Sonic-3 (TTS, console) |
-| `ELEVEN_API_KEY` | ElevenLabs (TTS, website) |
 | `LIVEKIT_URL` | LiveKit server URL |
 | `LIVEKIT_API_KEY` | LiveKit API key |
 | `LIVEKIT_API_SECRET` | LiveKit API secret |
@@ -1292,11 +1166,8 @@ python src/main.py --profile
 # API backend only
 uvicorn src.api.main:app --port 8000
 
-# Frontend dev server
-cd frontend_demo && npm run dev
-
-# Frontend production build
-cd frontend_demo && npm run build
+# Marketing site dev server (standalone, Vercel-deployed)
+cd website && npm run dev
 
 # Squat visualizer (standalone)
 python scripts/demos/visualize_video_squats.py
@@ -1342,13 +1213,13 @@ pytest tests/
 
 ```bash
 # Full program generation pipeline
-shell/test_program_generation.sh
+scripts/testing/test_program_generation.sh
 
 # API integration tests
-shell/test_api_integration.sh
+scripts/testing/test_api_integration.sh
 
 # VBT (velocity-based training) tests
-shell/test_vbt_*.sh
+scripts/testing/test_vbt_*.sh
 ```
 
 ---
@@ -1391,18 +1262,17 @@ The voice agent uploads end-of-utterance (EOU) metrics to LiveKit Cloud via the 
 
 ## Production Deployment
 
-The application runs on a **Fedora 43 server** (`Host-002`) fronted by a **Cloudflare Tunnel**. Six systemd units:
+The backend runs on a **Fedora 43 server** (`Host-002`) fronted by a **Cloudflare Tunnel**. Five systemd units:
 
 | Service | Purpose |
 |---------|---------|
 | `valkey.service` | Cache/queue broker (Redis wire-compatible) |
 | `nowva-api.service` | FastAPI backend (Gunicorn + Uvicorn workers) |
 | `nowva-celery.service` | Celery worker for async jobs |
-| `nowva-livekit-agent.service` | LiveKit voice agent |
-| `nginx.service` | Reverse proxy + static file serving |
+| `nginx.service` | Reverse proxy |
 | `cloudflared.service` | Cloudflare Tunnel (public DNS) |
 
-Deployment scripts are in `shell/`. Note: GCP scripts in `shell/` are legacy and no longer used.
+The deploy script is `scripts/deploy/deploy_to_laptop.sh`. The marketing site in `website/` deploys separately via Vercel (repo root directory setting: `website`).
 
 ---
 
@@ -1413,8 +1283,6 @@ Additional technical documentation is available in `docs/`:
 | Document | Content |
 |----------|---------|
 | `HOW_TO_RUN.md` | Detailed setup and run instructions |
-| `DEPLOYMENT_OVERVIEW.md` | Server architecture overview |
-| `PRODUCTION_DEPLOYMENT.md` | Production deployment guide |
 | `biomechanics_rep_counting_architecture.md` | Rep counting system deep dive |
 | `WORKOUT_MODE_FLOW.md` | Workout mode state machine |
 | `squat_rack_implementation.md` | Squat rack deployment details |

@@ -6,11 +6,6 @@ Project documentation, organized by topic.
 
 ### deployment/
 Production deployment guides:
-- `PRODUCTION_DEPLOYMENT.md` — launch checklist and service startup
-- `DEPLOY_NOWVASPORTS.md` — nowvasports.com deployment guide
-- `DEPLOYMENT_OVERVIEW.md` — high-level architecture overview
-- `GCP_FREE_TIER_DEPLOYMENT.md` — GCP setup (historical — production moved to Fedora server)
-- `GCP_QUICK_REFERENCE.md` — GCP quick reference
 - `FASTAPI_SETUP.md` — FastAPI backend setup
 
 ### architecture/

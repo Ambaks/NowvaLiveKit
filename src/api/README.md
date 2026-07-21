@@ -1,6 +1,6 @@
 # api/
 
-FastAPI REST backend for Nowva. Serves the website frontend and handles program generation, workout tracking, and LiveKit token management.
+FastAPI REST backend for Nowva. Handles program generation and workout tracking.
 
 ## How to Run
 
@@ -18,7 +18,6 @@ Or via the deploy script: `scripts/deploy/start_fastapi.sh`
 | `auth.py` | `/auth` | User registration and login |
 | `programs.py` | `/programs` | Program generation (async via Celery), retrieval, PDF download |
 | `workouts.py` | `/workouts` | Workout session tracking and progress |
-| `livekit.py` | `/livekit` | LiveKit room token generation for voice agent WebRTC |
 
 ## Services
 

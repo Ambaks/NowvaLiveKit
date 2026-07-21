@@ -68,11 +68,7 @@ fi
 echo ""
 echo -e "${BLUE}=== Phase 1: Building locally ===${NC}"
 
-echo "Building frontend..."
-cd "$(dirname "$0")/.."
-cd frontend_demo
-npm run build
-cd ..
+cd "$(dirname "$0")/../.."
 
 echo "Creating deployment archive..."
 tar --exclude='*.pyc' \
@@ -84,12 +80,11 @@ tar --exclude='*.pyc' \
     --exclude='*.db' \
     -czf nowva-deploy.tar.gz \
     src/ \
-    frontend_demo/dist/ \
     config/gunicorn_config.py \
     requirements-server.txt \
     requirements.txt \
     .env \
-    shell/server_monitor.sh \
+    scripts/deploy/server_monitor.sh \
     models/ \
     config/ \
     programs/
@@ -268,35 +263,6 @@ TimeoutStopSec=60
 WantedBy=multi-user.target
 EOF"
 
-# LiveKit Website Voice Agent service
-sudo bash -c "cat > /etc/systemd/system/nowva-livekit-agent.service << EOF
-[Unit]
-Description=Nowva LiveKit Website Voice Agent
-After=network.target nowva-api.service
-Wants=nowva-api.service
-
-[Service]
-Type=simple
-User=$USERNAME
-WorkingDirectory=$PROJECT_DIR
-Environment=\"PATH=$PROJECT_DIR/venv/bin\"
-Environment=\"PYTHONPATH=$PROJECT_DIR/src\"
-EnvironmentFile=$PROJECT_DIR/.env
-Environment=\"LIVEKIT_AGENT_NUM_IDLE_PROCESSES=2\"
-ExecStart=$PROJECT_DIR/venv/bin/python3 src/agents/website_voice_agent.py start
-
-Restart=always
-RestartSec=10
-KillSignal=SIGINT
-TimeoutStopSec=30
-
-StandardOutput=append:$PROJECT_DIR/logs/livekit_agent_stdout.log
-StandardError=append:$PROJECT_DIR/logs/livekit_agent_stderr.log
-
-[Install]
-WantedBy=multi-user.target
-EOF"
-
 echo "✓ Systemd services created"
 
 # --- Configure Nginx ---
@@ -311,7 +277,9 @@ upstream nowva_backend {
 
 server {
     listen 80;
-    server_name nowvasports.com www.nowvasports.com;
+    # Apex domain belongs to the Vercel marketing site (website/); the
+    # backend is served on the api. subdomain only.
+    server_name api.nowvasports.com;
 
     client_max_body_size 10M;
     client_body_timeout 30s;
@@ -385,15 +353,15 @@ echo "  tunnel: nowva"
 echo "  credentials-file: /home/$USERNAME/.cloudflared/<TUNNEL_ID>.json"
 echo ""
 echo "  ingress:"
-echo "    - hostname: nowvasports.com"
-echo "      service: http://localhost:80"
-echo "    - hostname: www.nowvasports.com"
+echo "    - hostname: api.nowvasports.com"
 echo "      service: http://localhost:80"
 echo "    - service: http_status:404"
 echo ""
+echo "NOTE: do NOT route the apex (nowvasports.com) through the tunnel —"
+echo "      it points to the Vercel marketing site (website/)."
+echo ""
 echo "Then run:"
-echo "  cloudflared tunnel route dns nowva nowvasports.com"
-echo "  cloudflared tunnel route dns nowva www.nowvasports.com"
+echo "  cloudflared tunnel route dns nowva api.nowvasports.com"
 echo "  sudo cloudflared service install"
 echo "  sudo systemctl enable --now cloudflared"
 echo "==========================================="
@@ -402,14 +370,13 @@ echo "==========================================="
 echo ""
 echo "Starting services..."
 sudo systemctl daemon-reload
-sudo systemctl enable redis nginx nowva-api nowva-celery nowva-livekit-agent
+sudo systemctl enable redis nginx nowva-api nowva-celery
 
 sudo systemctl start redis
 sudo systemctl start nginx
 sudo systemctl start nowva-api
 sleep 3
 sudo systemctl start nowva-celery
-sudo systemctl start nowva-livekit-agent
 
 sleep 5
 
@@ -417,7 +384,7 @@ echo ""
 echo "==========================================="
 echo "Service Status:"
 echo "==========================================="
-for service in redis nginx nowva-api nowva-celery nowva-livekit-agent; do
+for service in redis nginx nowva-api nowva-celery; do
     if systemctl is-active --quiet $service; then
         echo "  ✓ $service: RUNNING"
     else
@@ -475,13 +442,12 @@ pip install -q -r requirements-server.txt 2>/dev/null
 echo "Restarting services..."
 sudo systemctl restart nowva-api
 sudo systemctl restart nowva-celery
-sudo systemctl restart nowva-livekit-agent
 
 echo "Waiting for services..."
 sleep 5
 
 echo "Checking service status..."
-for service in redis nginx nowva-api nowva-celery nowva-livekit-agent; do
+for service in redis nginx nowva-api nowva-celery; do
     if systemctl is-active --quiet $service; then
         echo "  ✓ $service: RUNNING"
     else
@@ -513,10 +479,10 @@ echo -e "${GREEN}==========================================${NC}"
 echo -e "${GREEN}✓ Done!${NC}"
 echo -e "${GREEN}==========================================${NC}"
 echo ""
-echo "Your app is live at: https://nowvasports.com"
+echo "API is live at: https://api.nowvasports.com (marketing site deploys via Vercel)"
 echo ""
 echo "Useful commands:"
 echo "  ssh $SSH_TARGET                                    # SSH into laptop"
 echo "  ssh $SSH_TARGET 'sudo journalctl -u nowva-api -f'  # API logs"
-echo "  ssh $SSH_TARGET 'bash $REMOTE_DIR/shell/server_monitor.sh'  # Full status"
+echo "  ssh $SSH_TARGET 'bash $REMOTE_DIR/scripts/deploy/server_monitor.sh'  # Full status"
 echo ""
