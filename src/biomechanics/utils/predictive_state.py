@@ -88,6 +88,7 @@ class PredictiveStateEstimator:
             knee_valgus_r=angles.knee_valgus_r,
             foot_confidence_l=angles.foot_confidence_l,
             foot_confidence_r=angles.foot_confidence_r,
+            knee_ankle_sep_ratio=angles.knee_ankle_sep_ratio,
             shoulder_flexion_l=angles.shoulder_flexion_l,
             shoulder_flexion_r=angles.shoulder_flexion_r,
             shoulder_abduction_l=angles.shoulder_abduction_l,

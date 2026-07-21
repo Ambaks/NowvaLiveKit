@@ -10,9 +10,7 @@ Swap in via ``WEBSITE_AGENT_VARIANT=v2`` (see entrypoint in
 """
 
 import asyncio
-import json
 import logging
-import os
 import re
 from typing import Optional, Dict, Any
 
@@ -20,14 +18,13 @@ from livekit.agents import Agent, RunContext
 from livekit.agents.llm import function_tool
 
 from agent.agents.prompts.website_single_prompt import get_single_prompt
+from agent.agents.shared.helpers import normalize_sex
 from agent.agents.shared.unit_conversion import (
     normalize_height_to_cm,
     normalize_weight_to_kg,
     categorize_goal,
 )
-from db.database import SessionLocal
-from db.models import User
-import httpx
+from agent.agents.shared.website_finalize import WebsiteFinalizeMixin
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +34,7 @@ REQUIRED_FIELDS = {
 }
 
 
-def _service_headers() -> dict:
-    return {"X-Service-Key": os.getenv("SERVICE_API_KEY", "")}
-
-
-class WebsiteVoiceAgentV2(Agent):
+class WebsiteVoiceAgentV2(WebsiteFinalizeMixin, Agent):
     """Single-prompt voice agent for website visitors creating programs."""
 
     def __init__(self, state: Dict[str, Any]) -> None:
@@ -173,13 +166,10 @@ class WebsiteVoiceAgentV2(Agent):
 
         # -- sex --
         if sex is not None:
-            s = sex.lower().strip()
-            if s in ("m", "male", "man", "boy"):
-                pc["sex"] = "male"
-                captured.append("sex=male")
-            elif s in ("f", "female", "woman", "girl"):
-                pc["sex"] = "female"
-                captured.append("sex=female")
+            sex_normalized = normalize_sex(sex)
+            if sex_normalized is not None:
+                pc["sex"] = sex_normalized
+                captured.append(f"sex={sex_normalized}")
             else:
                 errors.append("sex unclear -- ask male or female")
 
@@ -340,131 +330,5 @@ class WebsiteVoiceAgentV2(Agent):
         logger.info(f"[V2 AGENT] Defaults applied: {pc}")
 
     # ------------------------------------------------------------------
-    # Finalize chain (mirrors V1)
+    # Finalize chain lives in WebsiteFinalizeMixin.
     # ------------------------------------------------------------------
-
-    async def _update_user_profile_direct(self):
-        user_id = self.state.get("user_id")
-        if not user_id:
-            logger.error("[V2 FINALIZE] No user ID. Cannot update profile.")
-            return
-
-        name = self.state.get("name")
-        program_params = self.state.get("program_creation", {})
-        extra_info = self.state.get("extra_info")
-
-        db = SessionLocal()
-        try:
-            db_user = db.query(User).filter(User.id == user_id).first()
-            if db_user:
-                if name:
-                    db_user.name = name
-                if "height_cm" in program_params:
-                    db_user.height_cm = program_params["height_cm"]
-                if "weight_kg" in program_params:
-                    db_user.weight_kg = program_params["weight_kg"]
-                if "age" in program_params:
-                    db_user.age = program_params["age"]
-                if "sex" in program_params:
-                    db_user.sex = program_params["sex"]
-                if extra_info:
-                    db_user.extra_info = extra_info
-                db.commit()
-                logger.info(f"[V2 FINALIZE] Updated user profile for {self.state.get('email')}")
-            else:
-                logger.error("[V2 FINALIZE] User not found in database.")
-        except Exception as e:
-            logger.error(f"[V2 FINALIZE] Failed to update user profile: {e}")
-            db.rollback()
-        finally:
-            db.close()
-
-    async def _generate_program_direct(self):
-        user_id = self.state.get("user_id")
-        user_email = self.state.get("email")
-        if not user_id:
-            logger.error("[V2 FINALIZE] No user ID. Cannot generate program.")
-            return
-
-        program_params = self.state.get("program_creation", {})
-        payload = {
-            "user_id": str(user_id),
-            "name": self.state.get("name"),
-            "email": user_email,
-            "height_cm": program_params["height_cm"],
-            "weight_kg": program_params["weight_kg"],
-            "age": program_params["age"],
-            "sex": program_params["sex"],
-            "goal_category": program_params["goal_category"],
-            "goal_raw": program_params["goal_raw"],
-            "duration_weeks": program_params["duration_weeks"],
-            "days_per_week": program_params["days_per_week"],
-            "session_duration": program_params.get("session_duration", 60),
-            "injury_history": program_params.get("injury_history", "none"),
-            "specific_sport": program_params.get("specific_sport", "none"),
-            "user_notes": program_params.get("user_notes", None),
-            "fitness_level": program_params["fitness_level"],
-            "has_vbt_capability": program_params.get("has_vbt_capability", False),
-            "send_email": True,
-            "training_season": program_params.get("training_season"),
-            "games_per_week": program_params.get("games_per_week", 0),
-            "equipment_tier": program_params.get("equipment_tier", 3),
-        }
-
-        fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
-        url = f"{fastapi_url}/api/programs/generate"
-        logger.info(f"[V2 FINALIZE] Calling program generation API: {url}")
-
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=payload, headers=_service_headers())
-                if response.status_code == 202:
-                    data = response.json()
-                    job_id = data.get("job_id")
-                    self.state["program_creation"]["job_id"] = job_id
-                    logger.info(f"[V2 FINALIZE] Program generation started. Job ID: {job_id}")
-                    try:
-                        await self.session.room_io.room.local_participant.publish_data(
-                            json.dumps({
-                                "type": "program_generating",
-                                "job_id": job_id,
-                                "email": user_email,
-                            }).encode(),
-                            reliable=True,
-                        )
-                        logger.info("[V2 FINALIZE] Sent 'program_generating' data message")
-                    except Exception as e:
-                        logger.error(f"[V2 FINALIZE] Failed to send data message: {e}")
-                else:
-                    logger.error(f"[V2 FINALIZE] API error: {response.status_code} - {response.text}")
-        except Exception as e:
-            logger.error(f"[V2 FINALIZE] Failed to generate program: {e}")
-
-    async def _finalize_and_disconnect(self):
-        try:
-            required = [
-                "height_cm", "weight_kg", "age", "sex",
-                "goal_category", "goal_raw", "duration_weeks",
-                "days_per_week", "fitness_level",
-            ]
-            program = self.state.get("program_creation", {})
-            missing = [p for p in required if p not in program]
-            if missing:
-                logger.error(f"[V2 FINALIZE] Missing required params: {missing} -- cannot finalize")
-                return
-
-            await self._update_user_profile_direct()
-            await self._generate_program_direct()
-
-            try:
-                await self.session.room_io.room.disconnect()
-                logger.info("[V2 FINALIZE] Complete. Disconnected via room.")
-            except Exception as e:
-                logger.warning(f"[V2 FINALIZE] Room disconnect failed ({e}), closing session")
-                try:
-                    await self.session.aclose()
-                    logger.info("[V2 FINALIZE] Complete. Session closed.")
-                except Exception as e2:
-                    logger.error(f"[V2 FINALIZE] Session close also failed: {e2}")
-        except Exception as e:
-            logger.error(f"[V2 FINALIZE] Error in finalize chain: {e}")

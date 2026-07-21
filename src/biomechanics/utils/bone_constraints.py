@@ -123,6 +123,11 @@ class BoneLengthConstraints:
     def is_calibrated(self) -> bool:
         return self._calibrated
 
+    @property
+    def progress(self) -> Tuple[int, int]:
+        """Return (calibration_frames_collected, calibration_frames_required)."""
+        return (min(self._frame_count, self.calibration_frames), self.calibration_frames)
+
     def enforce(self, skeleton: Skeleton3D) -> Skeleton3D:
         """
         Enforce bone length constraints.

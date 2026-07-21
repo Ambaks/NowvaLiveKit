@@ -43,6 +43,7 @@ class TeachingAgent(BaseNovaAgent):
     def __init__(self, state, userdata, exercise: str = "squat") -> None:
         self.exercise = exercise
         self._handed_off: bool = False
+        self._squat_cued: bool = False
 
         user = state.get_user() or {}
         height = user.get("height_cm")
@@ -63,6 +64,7 @@ class TeachingAgent(BaseNovaAgent):
         existing = getattr(self.userdata, "coaching_service", None)
         if existing is not None:
             existing.set_assessment_result_callback(self._on_assessment_result)
+            existing.set_assessment_ready_callback(self._on_assessment_ready)
             logger.info("[TEACHING] Reusing existing CoachingService")
         else:
             from agent.services.coaching_service import CoachingService
@@ -74,6 +76,7 @@ class TeachingAgent(BaseNovaAgent):
                 on_assessment_result=self._on_assessment_result,
                 audio_cue_service=self.userdata.audio_cue_service,
             )
+            coaching_service.set_assessment_ready_callback(self._on_assessment_ready)
             await coaching_service.start()
             self.userdata.coaching_service = coaching_service
 
@@ -103,11 +106,14 @@ class TeachingAgent(BaseNovaAgent):
             context_block
             + "Walk the user through the starting position for the squat. "
             "Cover in this order, naturally: "
-            "(1) Feet shoulder-width apart, toes slightly out. "
+            "(1) Stand back far enough that the camera can see them head to toe. "
+            "(2) Feet shoulder-width apart, toes slightly out. "
             "If is_tall is true, mention they can go a touch wider "
             "if it feels more comfortable — keep this casual, not prescriptive. "
-            "(2) Keep gaze forward throughout. "
-            "(3) Take a big breath, brace the core, squat down when ready. "
+            "(3) Keep gaze forward throughout. "
+            "(4) Ask them to stand tall and hold still for a moment while you "
+            "lock onto their movement. Do NOT tell them to squat yet — you will "
+            "cue the squat separately once tracking is ready. "
             "Sound like a real coach, not a manual. Brief, warm, clear. "
             "Do not number the points. Do not say 'step one'. "
             "This should flow as natural speech."
@@ -117,6 +123,23 @@ class TeachingAgent(BaseNovaAgent):
         self.state.set("workout.greeting_done", True)
         self.state.save_state()
         logger.info("[TEACHING] Setup complete — pipeline will start assessment")
+
+    # ------------------------------------------------------------------
+    # Assessment ready callback
+    # ------------------------------------------------------------------
+
+    async def _on_assessment_ready(self) -> None:
+        if self._handed_off or self._squat_cued:
+            return
+        self._squat_cued = True
+        logger.info("[TEACHING] Pipeline ready — cueing first squat")
+        await self._say(
+            f"[CONTEXT] exercise={self.exercise}\n\n"
+            "Tracking just locked onto the user — they are set up correctly "
+            "and you can see them fully. Now cue the movement: take a big "
+            "breath, brace the core like they're about to take a little punch, "
+            "and squat down when ready. One or two sentences, natural, no filler."
+        )
 
     # ------------------------------------------------------------------
     # Assessment result callback
@@ -229,6 +252,7 @@ class TeachingAgent(BaseNovaAgent):
         coaching = getattr(self.userdata, "coaching_service", None)
         if coaching is not None:
             coaching.set_assessment_result_callback(None)
+            coaching.set_assessment_ready_callback(None)
 
         from agent.agents.calibration_agent import CalibrationAgent
         new_agent = CalibrationAgent(state=self.state, userdata=self.userdata)

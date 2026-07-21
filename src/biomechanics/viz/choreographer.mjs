@@ -21,6 +21,88 @@ export const DEFAULT_TIMING = {
 const JOINT_COUNT = 19;
 const POSE_SIZE = JOINT_COUNT * 3;
 
+const HIP_L = 11, HIP_R = 12;
+const KNEE_L = 13, KNEE_R = 14;
+const ANKLE_L = 15, ANKLE_R = 16;
+
+const BONE_PAIRS = [
+    [5, 7], [7, 9],     // L arm
+    [6, 8], [8, 10],    // R arm
+    [5, 6],              // shoulders
+    [HIP_L, HIP_R],     // hips
+    [5, HIP_L], [6, HIP_R], // torso
+];
+
+function _jx(flat, j) { return flat[j * 3]; }
+function _jy(flat, j) { return flat[j * 3 + 1]; }
+function _jz(flat, j) { return flat[j * 3 + 2]; }
+
+function _dist3(flat, a, b) {
+    const dx = _jx(flat, a) - _jx(flat, b);
+    const dy = _jy(flat, a) - _jy(flat, b);
+    const dz = _jz(flat, a) - _jz(flat, b);
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+function _solveKnee(flat, hip, ankle, knee, thighLen, shinLen) {
+    const hx = _jx(flat, hip), hy = _jy(flat, hip), hz = _jz(flat, hip);
+    const ax = _jx(flat, ankle), ay = _jy(flat, ankle), az = _jz(flat, ankle);
+    let dx = ax - hx, dy = ay - hy, dz = az - hz;
+    let dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-9) dist = 1e-9;
+    const ux = dx / dist, uy = dy / dist, uz = dz / dist;
+
+    const dMin = Math.abs(thighLen - shinLen) + 1e-4;
+    const dMax = thighLen + shinLen - 1e-4;
+    const dc = Math.max(dMin, Math.min(dMax, dist));
+
+    let cosA = (thighLen * thighLen + dc * dc - shinLen * shinLen) / (2 * thighLen * dc);
+    cosA = Math.max(-1, Math.min(1, cosA));
+    const sinA = Math.sin(Math.acos(cosA));
+
+    const kx = _jx(flat, knee), ky = _jy(flat, knee), kz = _jz(flat, knee);
+    let px = kx - hx, py = ky - hy, pz = kz - hz;
+    const dotP = px * ux + py * uy + pz * uz;
+    px -= dotP * ux; py -= dotP * uy; pz -= dotP * uz;
+    let pLen = Math.sqrt(px * px + py * py + pz * pz);
+    if (pLen < 1e-6) {
+        px = -ux * uy; py = 1.0 - uy * uy; pz = -uz * uy;
+        pLen = Math.sqrt(px * px + py * py + pz * pz);
+        if (pLen < 1e-9) pLen = 1e-9;
+    }
+    px /= pLen; py /= pLen; pz /= pLen;
+
+    flat[knee * 3]     = hx + thighLen * cosA * ux + thighLen * sinA * px;
+    flat[knee * 3 + 1] = hy + thighLen * cosA * uy + thighLen * sinA * py;
+    flat[knee * 3 + 2] = hz + thighLen * cosA * uz + thighLen * sinA * pz;
+}
+
+function _enforceSegLen(flat, prox, dist, targetLen) {
+    const dx = flat[dist * 3] - flat[prox * 3];
+    const dy = flat[dist * 3 + 1] - flat[prox * 3 + 1];
+    const dz = flat[dist * 3 + 2] - flat[prox * 3 + 2];
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-9 || Math.abs(len - targetLen) < 1e-6) return;
+    const s = targetLen / len;
+    flat[dist * 3]     = flat[prox * 3] + dx * s;
+    flat[dist * 3 + 1] = flat[prox * 3 + 1] + dy * s;
+    flat[dist * 3 + 2] = flat[prox * 3 + 2] + dz * s;
+}
+
+export function enforceBoneLengths(flat, refPose) {
+    const thighL = _dist3(refPose, HIP_L, KNEE_L);
+    const shinL  = _dist3(refPose, KNEE_L, ANKLE_L);
+    const thighR = _dist3(refPose, HIP_R, KNEE_R);
+    const shinR  = _dist3(refPose, KNEE_R, ANKLE_R);
+
+    _solveKnee(flat, HIP_L, ANKLE_L, KNEE_L, thighL, shinL);
+    _solveKnee(flat, HIP_R, ANKLE_R, KNEE_R, thighR, shinR);
+
+    for (const [p, d] of BONE_PAIRS) {
+        _enforceSegLen(flat, p, d, _dist3(refPose, p, d));
+    }
+}
+
 export function easeInOut(t) {
     t = Math.min(1, Math.max(0, t));
     return t * t * (3 - 2 * t);
@@ -213,11 +295,14 @@ export function createChoreographer(callbacks = {}) {
 
         let highlight = [];
 
+        const refPose = getPose(0);
+
         if (state === MORPH_IN) {
             const w = easeInOut(Math.min(elapsed / timing.morphIn, 1));
             if (morphFrom) {
                 cb.setOpacity(1);
                 lerpPose(morphFrom, getPose(0), w, currentPoints);
+                enforceBoneLengths(currentPoints, refPose);
             } else {
                 cb.setOpacity(w);
                 currentPoints.set(getPose(0));
@@ -229,6 +314,7 @@ export function createChoreographer(callbacks = {}) {
             if (livePose) {
                 cb.setOpacity(1);
                 lerpPose(morphOutFrom, livePose, w, currentPoints);
+                enforceBoneLengths(currentPoints, refPose);
             } else {
                 cb.setOpacity(1 - w);
                 currentPoints.set(morphOutFrom);
@@ -241,12 +327,14 @@ export function createChoreographer(callbacks = {}) {
                 const cue = cues[cueIndex];
                 const w = yoyoWeight(elapsed, timing.yoyoTravel, timing.yoyoHold);
                 lerpPose(getPose(cueIndex), getPose(cueIndex + 1), w, currentPoints);
+                enforceBoneLengths(currentPoints, refPose);
                 highlight = highlightMap[cue.cause_id] || [];
                 cb.setCaption(cue.magnitude_text);
                 cb.setGhost(getPose(cueIndex));
             } else if (state === SETTLE) {
                 const w = easeInOut(elapsed / timing.settle);
                 lerpPose(settleFrom, settleTo, w, currentPoints);
+                enforceBoneLengths(currentPoints, refPose);
                 cb.setCaption(null);
                 cb.setGhost(null);
             } else if (state === FINAL_HOLD) {

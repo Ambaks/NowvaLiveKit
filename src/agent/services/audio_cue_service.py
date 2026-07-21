@@ -26,6 +26,8 @@ from livekit import rtc
 from livekit.agents.utils.audio import audio_frames_from_file
 from openai import AsyncOpenAI
 
+from agent.services.coaching_constants import CUE_TEXT_MAP
+
 logger = logging.getLogger(__name__)
 
 # Directory where pre-generated cue files live
@@ -43,38 +45,6 @@ TTS_INSTRUCTIONS = (
     "Speak with high energy, urgency, and motivation — like you're right next "
     "to the lifter on the gym floor. Short, punchy, and commanding."
 )
-
-# Number words for rep cues
-_NUMBER_WORDS = {
-    1: "One!", 2: "Two!", 3: "Three!", 4: "Four!", 5: "Five!",
-    6: "Six!", 7: "Seven!", 8: "Eight!", 9: "Nine!", 10: "Ten!",
-    11: "Eleven!", 12: "Twelve!", 13: "Thirteen!", 14: "Fourteen!", 15: "Fifteen!",
-    16: "Sixteen!", 17: "Seventeen!", 18: "Eighteen!", 19: "Nineteen!", 20: "Twenty!",
-}
-
-# Cue key → spoken text mapping
-CUE_TEXT_MAP: Dict[str, str] = {
-    # Squat corrections
-    "knees_out": "Knees out!",
-    "chest_up": "Chest up!",
-    "deeper": "Get deeper!",
-    "heels_down": "Heels down!",
-    "even_it_out": "Even it out!",
-    "slow_down": "Slow down!",
-    "brace": "Brace your core!",
-    # Deadlift corrections
-    "hips_through": "Hips through!",
-    "flat_back": "Flat back!",
-    "lockout": "Lock it out!",
-    # Positive reinforcement
-    "good_rep": "Good rep!",
-    "great_depth": "Great depth!",
-    "strong": "Strong!",
-    "clean": "Clean!",
-    "perfect": "Perfect!",
-    # Rep counts
-    **{f"rep_{i}": _NUMBER_WORDS[i] for i in range(1, 21)},
-}
 
 # Audio format constants
 SAMPLE_RATE = 24000

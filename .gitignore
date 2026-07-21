@@ -32,6 +32,7 @@ session.key
 
 # Agent state files (user-specific data)
 .agent_state_*.json
+.agent_state_*.json.lock
 
 # Database
 *.db

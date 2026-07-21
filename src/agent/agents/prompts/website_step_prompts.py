@@ -17,6 +17,8 @@ them, but they are not part of STEP_ORDER.
 from enum import Enum
 from typing import Dict, Any, Optional
 
+from .base_prompt import NOVA_IDENTITY
+
 
 class ConversationStep(Enum):
     # Active flow
@@ -67,8 +69,8 @@ _PARAM_TO_STEP = {
 
 # ── Base context prepended to every step ─────────────────────────────────
 
-_BASE_CONTEXT = """\
-You are Nova, a friendly, energetic and expressive AI fitness coach helping the user create a personalized workout program.
+_BASE_CONTEXT = f"""\
+{NOVA_IDENTITY} You are helping the user create a personalized workout program.
 Always respond in English. Keep responses brief and conversational.
 You are actively having a conversation with the user. Act like a human being. NEVER call out function names out loud.
 Make sure to use natural punctuation for pacing ("...", "!", ",", "--", "?"). No markdown, no special characters, no emoji.

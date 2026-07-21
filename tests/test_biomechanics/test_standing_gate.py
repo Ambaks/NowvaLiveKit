@@ -145,3 +145,24 @@ class TestStandingPoseGate:
 
         gate.reset()
         assert not gate.is_ready
+
+    def test_last_failure_tracks_failing_check(self):
+        gate = StandingPoseGate(required_consecutive_frames=5)
+        pts = _standing_skeleton()
+
+        confs = np.ones(17)
+        confs[CK.LEFT_ANKLE] = 0.1
+        gate.check(_make_skeleton(pts, confidences=confs))
+        assert gate.last_failure == "visibility"
+
+        bent = _standing_skeleton()
+        bent[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]
+        bent[CK.RIGHT_KNEE] = [-0.10, 0.70, 0.30]
+        gate.check(_make_skeleton(bent))
+        assert gate.last_failure == "knee_extension"
+
+        gate.check(_make_skeleton(pts))
+        assert gate.last_failure is None
+
+        gate.reset()
+        assert gate.last_failure is None

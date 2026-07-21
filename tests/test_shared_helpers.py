@@ -1,0 +1,119 @@
+"""
+Tests for shared agent helpers: sex normalization, service headers,
+and the program generation payload builder.
+"""
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from agent.agents.shared.helpers import (
+    build_program_generation_payload,
+    normalize_sex,
+    service_headers,
+)
+
+
+def _website_program_params() -> dict:
+    """Program params dict as the website agents hold it after apply_defaults."""
+    return {
+        "height_cm": 188.5,
+        "weight_kg": 85.0,
+        "age": 28,
+        "sex": "male",
+        "goal_category": "strength",
+        "goal_raw": "get stronger",
+        "duration_weeks": 12,
+        "days_per_week": 4,
+        "session_duration": 60,
+        "injury_history": "none",
+        "specific_sport": "none",
+        "fitness_level": "intermediate",
+        "has_vbt_capability": False,
+        "training_season": None,
+        "games_per_week": 0,
+        "equipment_tier": 3,
+    }
+
+
+class TestNormalizeSex:
+    def test_male_aliases(self):
+        for alias in ("m", "male", "man", "boy", "M", " Male "):
+            assert normalize_sex(alias) == "male"
+
+    def test_female_aliases(self):
+        for alias in ("f", "female", "woman", "girl", "F", " FEMALE "):
+            assert normalize_sex(alias) == "female"
+
+    def test_unclear_returns_none(self):
+        assert normalize_sex("yes") is None
+        assert normalize_sex("") is None
+
+
+class TestServiceHeaders:
+    def test_reads_service_api_key_from_env(self, monkeypatch):
+        monkeypatch.setenv("SERVICE_API_KEY", "secret-key")
+        assert service_headers() == {"X-Service-Key": "secret-key"}
+
+    def test_empty_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("SERVICE_API_KEY", raising=False)
+        assert service_headers() == {"X-Service-Key": ""}
+
+
+class TestBuildProgramGenerationPayload:
+    def test_website_payload_matches_collected_params(self):
+        payload = build_program_generation_payload(
+            _website_program_params(),
+            user_id="uuid-123",
+            name="Marwan",
+            email="user@example.com",
+            send_email=True,
+        )
+        assert payload["user_id"] == "uuid-123"
+        assert payload["name"] == "Marwan"
+        assert payload["email"] == "user@example.com"
+        assert payload["height_cm"] == pytest.approx(188.5)
+        assert payload["weight_kg"] == pytest.approx(85.0)
+        assert payload["send_email"] is True
+        assert payload["equipment_tier"] == 3
+        assert payload["games_per_week"] == 0
+        assert payload["user_notes"] is None
+
+    def test_optional_fields_fall_back_to_defaults(self):
+        params = _website_program_params()
+        for key in (
+            "session_duration", "injury_history", "specific_sport",
+            "has_vbt_capability", "training_season", "games_per_week",
+        ):
+            del params[key]
+        payload = build_program_generation_payload(
+            params, user_id="uuid-123", name=None, email=None, send_email=False,
+        )
+        assert payload["session_duration"] == 60
+        assert payload["injury_history"] == "none"
+        assert payload["specific_sport"] == "none"
+        assert payload["has_vbt_capability"] is False
+        assert payload["training_season"] is None
+        assert payload["games_per_week"] == 0
+        assert payload["send_email"] is False
+
+    def test_equipment_tier_omitted_when_not_captured(self):
+        # ProgramCreationAgent never captures equipment_tier; omitting the key
+        # lets the API apply its own default (tier 1).
+        params = _website_program_params()
+        del params["equipment_tier"]
+        payload = build_program_generation_payload(
+            params, user_id="uuid-123", name="X", email="x@y.z", send_email=False,
+        )
+        assert "equipment_tier" not in payload
+
+    def test_none_games_per_week_coerced_to_zero(self):
+        params = _website_program_params()
+        params["games_per_week"] = None
+        payload = build_program_generation_payload(
+            params, user_id="uuid-123", name="X", email="x@y.z", send_email=True,
+        )
+        assert payload["games_per_week"] == 0

@@ -25,7 +25,7 @@ from livekit.agents.voice.room_io import RoomInputOptions
 from livekit.plugins import deepgram, openai, silero, elevenlabs, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from agent.core.agent_state import AgentState, set_state_notify_fd
+from agent.core.agent_state import AgentState, set_state_notify_fd, PROJECT_ROOT
 from agent.agents.onboarding_agent import OnboardingAgent
 from agent.agents.main_menu_agent import MainMenuAgent
 from agent.agents.workout_agent import WorkoutAgent
@@ -66,11 +66,12 @@ async def entrypoint(ctx: agents.JobContext):
 
     if not user_id:
         logger.info("[NOVA] Searching for state files...")
-        state_files = glob.glob('.agent_state_*.json')
+        # Anchor to the project root — AgentState writes there regardless of CWD
+        state_files = glob.glob(str(PROJECT_ROOT / '.agent_state_*.json'))
         logger.info(f"[NOVA] Found {len(state_files)} state files")
         if state_files:
             latest_state = max(state_files, key=os.path.getmtime)
-            user_id = latest_state.replace('.agent_state_', '').replace('.json', '')
+            user_id = Path(latest_state).name.replace('.agent_state_', '').replace('.json', '')
             logger.info(f"[NOVA] Found recent state file for user: {user_id}")
 
     # Initialize state

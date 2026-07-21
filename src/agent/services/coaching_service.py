@@ -14,15 +14,9 @@ from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 from agent.services.assessment_logger import AssessmentLogger
+from agent.services.coaching_constants import COACHING_PERSONA
 
 logger = logging.getLogger(__name__)
-
-# Persona prefix prepended to all coaching LLM instructions.
-_COACHING_PERSONA = (
-    "You are Nova, an energetic, world-class fitness coach on the Nowva smart squat rack. "
-    "HIGH energy, motivating, supportive. SHORT responses only — follow the word limits given. "
-    "Sound like a real coach in the gym — keep it human."
-)
 
 
 class CoachingService:
@@ -48,6 +42,7 @@ class CoachingService:
         self._on_workout_complete_callback = on_workout_complete
         self._on_calibration_complete_callback = on_calibration_complete
         self._on_assessment_result_callback = on_assessment_result
+        self._on_assessment_ready_callback: Callable | None = None
 
         # Owned components
         self._coaching_ipc = None
@@ -67,10 +62,113 @@ class CoachingService:
         self._demo_start_ack = None
 
         # Orchestrator is dormant until assessment+calibration finish
-        self._workout_active: bool = False
+        self._workout_active_flag: bool = False
 
         # Assessment data persistence
         self._assessment_logger: AssessmentLogger | None = None
+
+        # Workout data persistence (sessions/sets/reps/cue outcomes → PostgreSQL)
+        self._biomech_recorder = None
+
+        # Last-session baseline for progress comparisons (fetched async at workout start)
+        self._progress_baseline: dict | None = None
+        self._baseline_task: Optional[asyncio.Task] = None
+
+    @property
+    def _workout_active(self) -> bool:
+        return self._workout_active_flag
+
+    @_workout_active.setter
+    def _workout_active(self, value: bool) -> None:
+        # Starts DB recording on the False→True transition, covering both
+        # activation paths: calibration completion and the returning-user
+        # path where workout_agent sets this attribute directly.
+        if value and not self._workout_active_flag:
+            self._start_biomech_recording()
+        self._workout_active_flag = value
+
+    def _start_biomech_recording(self) -> None:
+        if self._biomech_recorder is not None:
+            return
+        user_id = self._state.get("user.id")
+        if not user_id:
+            logger.warning("[BIOMECH DB] No user_id in state — workout persistence disabled")
+            return
+        from db.biomechanics_persistence import BiomechanicsRecorder
+        try:
+            self._biomech_recorder = BiomechanicsRecorder(
+                user_id=user_id,
+                calibration_snapshot=self._state.get("workout.calibration_profile"),
+            )
+            self._biomech_recorder.start()
+            if self._coaching_orchestrator:
+                self._coaching_orchestrator.on_fault_cue_delivered = (
+                    self._biomech_recorder.record_cue_delivered
+                )
+            logger.info(
+                f"[BIOMECH DB] Recording workout session {self._biomech_recorder.session_id} "
+                f"for user={user_id}"
+            )
+        except Exception as e:
+            self._biomech_recorder = None
+            logger.error(f"[BIOMECH DB] Failed to start recorder: {e}", exc_info=True)
+        self._baseline_task = asyncio.create_task(
+            self._fetch_progress_baseline(user_id)
+        )
+
+    async def _fetch_progress_baseline(self, user_id) -> dict | None:
+        """Load last-session comparison data without blocking the event loop."""
+        def _fetch():
+            from db.database import SessionLocal
+            from db.biomechanics_persistence import get_progress_baseline
+            db = SessionLocal()
+            try:
+                return get_progress_baseline(db, user_id)
+            finally:
+                db.close()
+
+        try:
+            baseline = await asyncio.to_thread(_fetch)
+        except Exception:
+            logger.exception("[BIOMECH DB] Progress baseline fetch failed")
+            return None
+        self._progress_baseline = baseline
+        if baseline:
+            if self._coaching_orchestrator:
+                self._coaching_orchestrator.progress_baseline = baseline
+            logger.info(
+                f"[BIOMECH DB] Progress baseline loaded: last session "
+                f"{baseline.get('days_ago')}d ago, score={baseline.get('mean_score')}"
+            )
+        else:
+            logger.info("[BIOMECH DB] No previous session — first-workout baseline")
+        return baseline
+
+    async def wait_progress_baseline(self, timeout_s: float = 2.5) -> dict | None:
+        """Baseline dict once the fetch finishes, or None on timeout/first workout."""
+        if self._baseline_task is None:
+            return self._progress_baseline
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(self._baseline_task), timeout=timeout_s
+            )
+        except asyncio.TimeoutError:
+            return None
+
+    async def _close_biomech_recording(self) -> None:
+        if self._biomech_recorder is None:
+            return
+        recorder = self._biomech_recorder
+        self._biomech_recorder = None
+        if self._coaching_orchestrator:
+            self._coaching_orchestrator.on_fault_cue_delivered = None
+        flushed = await asyncio.to_thread(recorder.close)
+        if flushed:
+            logger.info("[BIOMECH DB] Workout session persisted and finalized")
+        else:
+            logger.warning(
+                "[BIOMECH DB] Workout session close timed out — data may be incomplete"
+            )
 
     def set_workout_complete_callback(self, callback: Callable) -> None:
         self._on_workout_complete_callback = callback
@@ -80,6 +178,9 @@ class CoachingService:
 
     def set_assessment_result_callback(self, callback: Callable | None) -> None:
         self._on_assessment_result_callback = callback
+
+    def set_assessment_ready_callback(self, callback: Callable | None) -> None:
+        self._on_assessment_ready_callback = callback
 
     # ------------------------------------------------------------------
     # Lifecycle API
@@ -109,6 +210,12 @@ class CoachingService:
             self._assessment_logger = None
             logger.info("[COACHING SERVICE] Active assessment finalized on stop")
 
+        # Flush any unfinalized workout data (abnormal shutdown backstop)
+        await self._close_biomech_recording()
+        if self._baseline_task is not None and not self._baseline_task.done():
+            self._baseline_task.cancel()
+        self._baseline_task = None
+
         if self._coaching_orchestrator:
             self._coaching_orchestrator.stop()
             self._coaching_orchestrator = None
@@ -122,7 +229,7 @@ class CoachingService:
     def is_resting(self) -> bool:
         """Whether the service is in rest-between-sets mode."""
         if self._coaching_orchestrator:
-            return self._coaching_orchestrator._resting
+            return self._coaching_orchestrator.resting
         return False
 
     # ------------------------------------------------------------------
@@ -238,6 +345,8 @@ class CoachingService:
                 severity = message.get("severity", "")
                 fault_msg = message.get("message", "")
                 logger.info(f"[COACHING SERVICE] FAULT received: type={fault_type} severity={severity} cue={cue_key} msg='{fault_msg}'")
+                if self._workout_active and self._biomech_recorder:
+                    self._biomech_recorder.record_fault(message)
                 if not self._workout_active:
                     logger.debug("[COACHING SERVICE] Fault ignored — workout not active yet")
                 elif self._coaching_orchestrator:
@@ -262,6 +371,8 @@ class CoachingService:
                 )
                 if self._assessment_logger is not None:
                     self._assessment_logger.on_rep_complete(message)
+                if self._workout_active and self._biomech_recorder:
+                    self._biomech_recorder.record_rep(message)
                 if not self._workout_active:
                     logger.debug("[COACHING SERVICE] rep_complete ignored — workout not active yet")
                 elif self._coaching_orchestrator:
@@ -282,6 +393,8 @@ class CoachingService:
                         message.get("diagnosis", {}),
                         rep_score=message.get("rep_score"),
                     )
+                if self._workout_active and self._biomech_recorder:
+                    self._biomech_recorder.record_rep_diagnosis(message)
             elif msg_type == "frame_data":
                 if self._workout_active and self._coaching_orchestrator:
                     self._coaching_orchestrator.record_angle_sample(
@@ -295,6 +408,8 @@ class CoachingService:
                     f"confidence={diagnosis.get('confidence', 0):.2f} "
                     f"score={scoring.get('mean_score', 0):.3f}"
                 )
+                if self._workout_active and self._biomech_recorder:
+                    self._biomech_recorder.record_set(message)
                 if self._coaching_orchestrator:
                     self._coaching_orchestrator.set_diagnosis_data(diagnosis, scoring)
                 else:
@@ -330,6 +445,20 @@ class CoachingService:
                 logger.info(f"[COACHING SERVICE] ASSESSMENT REP {rep}/{total} (round {round_num})")
                 cue_key = f"rep_{rep}"
                 await self._play_cached_cue_audio(cue_key)
+            elif msg_type == "assessment_ready":
+                logger.info(
+                    "[COACHING SERVICE] ASSESSMENT READY — tracking calibrated, cueing first squat"
+                )
+                if self._on_assessment_ready_callback is not None:
+                    try:
+                        ret = self._on_assessment_ready_callback()
+                        if asyncio.iscoroutine(ret):
+                            await ret
+                    except Exception as e:
+                        logger.error(
+                            f"[ASSESSMENT] on_assessment_ready callback error: {e}",
+                            exc_info=True,
+                        )
             elif msg_type == "assessment_result":
                 passed = message.get("passed", False)
                 round_num = message.get("round", 1)
@@ -667,8 +796,6 @@ class CoachingService:
         self._coaching_orchestrator = CoachingOrchestrator(
             play_cached_audio_fn=self._play_cached_cue_audio,
             generate_llm_reply_fn=self._coaching_llm_reply,
-            duck_llm_fn=self._duck_llm_audio,
-            unduck_llm_fn=self._unduck_llm_audio,
             get_cue_audio_fn=self._get_cached_audio,
             advance_set_fn=self._advance_workout_set,
             on_workout_complete_fn=self._on_workout_complete,
@@ -737,10 +864,10 @@ class CoachingService:
             completed_set = session.get_current_set()
             rest_seconds = completed_set.rest_seconds if completed_set else 30
             if self._coaching_orchestrator:
-                self._coaching_orchestrator._rest_seconds = rest_seconds
+                self._coaching_orchestrator.rest_seconds = rest_seconds
 
             rep_count = (
-                self._coaching_orchestrator._set_rep_count
+                self._coaching_orchestrator.set_rep_count
                 if self._coaching_orchestrator
                 else 0
             )
@@ -801,8 +928,8 @@ class CoachingService:
         rest_seconds = completed_set.rest_seconds if completed_set else 60
 
         if self._coaching_orchestrator:
-            self._coaching_orchestrator._resting = True
-            self._coaching_orchestrator._set_rep_count = reps
+            self._coaching_orchestrator.resting = True
+            self._coaching_orchestrator.set_rep_count = reps
 
         new_target = await self._advance_workout_set()
 
@@ -828,6 +955,7 @@ class CoachingService:
     async def _on_workout_complete(self):
         """Called by orchestrator after exercise recap is spoken."""
         logger.info("[COACHING SERVICE] Workout complete — notifying voice agent")
+        await self._close_biomech_recording()
         if self._on_workout_complete_callback:
             await self._on_workout_complete_callback({"workout_complete": True})
 
@@ -938,7 +1066,7 @@ class CoachingService:
             ctx_len_before = len(agent.chat_ctx.items) if agent else 0
 
             handle = self._session.generate_reply(
-                instructions=_COACHING_PERSONA,
+                instructions=COACHING_PERSONA,
                 user_input=instructions,
                 tool_choice="none",
                 allow_interruptions=False,
@@ -964,10 +1092,3 @@ class CoachingService:
         finally:
             self.is_coaching_speaking = False
 
-    async def _duck_llm_audio(self):
-        """No-op: session.say() handles audio transitions on the WebRTC track."""
-        pass
-
-    async def _unduck_llm_audio(self):
-        """No-op: session.say() handles audio transitions on the WebRTC track."""
-        pass

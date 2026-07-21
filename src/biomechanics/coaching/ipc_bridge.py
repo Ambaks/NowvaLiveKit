@@ -114,6 +114,7 @@ class IPCBridge:
         bottom_angles: Optional[Dict[str, float]] = None,
         standing_kpts: list | None = None,
         rep_kinematic_summary: RepKinematicSummary | None = None,
+        set_number: int | None = None,
     ) -> None:
         """Send rep data and legacy rep_count.
 
@@ -152,6 +153,8 @@ class IPCBridge:
             msg["standing_kpts"] = standing_kpts
         if rep_kinematic_summary is not None:
             msg["rep_kinematic_summary"] = rep_kinematic_summary.model_dump()
+        if set_number is not None:
+            msg["set_number"] = set_number
         self.ipc_client.send_message(msg)
 
         # Backward compatibility
@@ -239,6 +242,7 @@ class IPCBridge:
                 "best_rep": score_summary.best_rep_number,
                 "worst_rep": score_summary.worst_rep_number,
                 "trend_slope": score_summary.trend_slope,
+                "per_rep_scores": [r.model_dump() for r in per_rep],
             },
         })
 

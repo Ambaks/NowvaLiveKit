@@ -28,7 +28,9 @@ class KneeValgusRule(FaultRule):
     - Hip adduction angle (thigh medial deviation from sagittal plane).
       Used when foot_confidence is below FOOT_CONFIDENCE_THRESHOLD.
 
-    Severity thresholds apply to both metrics identically.
+    The primary metric's scale depends on capture mode (2D FPPA vs. 3D
+    abduction), but hip adduction's scale does not — so the fallback has its
+    own threshold triple, defaulting to the primary one when not given.
     """
 
     def __init__(
@@ -36,10 +38,22 @@ class KneeValgusRule(FaultRule):
         mild_threshold: float = 12.0,
         moderate_threshold: float = 17.0,
         severe_threshold: float = 24.0,
+        fallback_mild_threshold: Optional[float] = None,
+        fallback_moderate_threshold: Optional[float] = None,
+        fallback_severe_threshold: Optional[float] = None,
     ):
         self.mild_threshold = mild_threshold
         self.moderate_threshold = moderate_threshold
         self.severe_threshold = severe_threshold
+        self.fallback_mild_threshold = (
+            fallback_mild_threshold if fallback_mild_threshold is not None else mild_threshold
+        )
+        self.fallback_moderate_threshold = (
+            fallback_moderate_threshold if fallback_moderate_threshold is not None else moderate_threshold
+        )
+        self.fallback_severe_threshold = (
+            fallback_severe_threshold if fallback_severe_threshold is not None else severe_threshold
+        )
 
         self._last_fault_frame: int = -30
 
@@ -51,6 +65,9 @@ class KneeValgusRule(FaultRule):
         self.mild_threshold *= proportions.valgus_scale
         self.moderate_threshold *= proportions.valgus_scale
         self.severe_threshold *= proportions.valgus_scale
+        self.fallback_mild_threshold *= proportions.valgus_scale
+        self.fallback_moderate_threshold *= proportions.valgus_scale
+        self.fallback_severe_threshold *= proportions.valgus_scale
 
     def evaluate(
         self,
@@ -78,23 +95,25 @@ class KneeValgusRule(FaultRule):
             valgus_l = angles.knee_valgus_l
             valgus_r = angles.knee_valgus_r
             metric_source = "toe"
+            mild, moderate, severe = self.mild_threshold, self.moderate_threshold, self.severe_threshold
         else:
             valgus_l = angles.hip_adduction_l
             valgus_r = angles.hip_adduction_r
             metric_source = "hip_adduction"
+            mild, moderate, severe = (
+                self.fallback_mild_threshold,
+                self.fallback_moderate_threshold,
+                self.fallback_severe_threshold,
+            )
 
         max_valgus = max(abs(valgus_l), abs(valgus_r))
 
-        if max_valgus < self.mild_threshold:
+        if max_valgus < mild:
             return None
 
         severity, score = self._get_severity(
             max_valgus,
-            {
-                "mild": self.mild_threshold,
-                "moderate": self.moderate_threshold,
-                "severe": self.severe_threshold,
-            },
+            {"mild": mild, "moderate": moderate, "severe": severe},
         )
 
         if severity == FaultSeverity.NONE:

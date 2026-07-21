@@ -5,6 +5,7 @@ Shared between pose_estimation_process.py (main pipeline) and test_workout.py.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -170,6 +171,56 @@ def save_hip_adduction_plot(set_num, t_rel, hip_adduction_l, hip_adduction_r,
     plt.close(fig)
 
 
+def save_knee_valgus_plot(set_num, t_rel, valgus_l, valgus_r, kasr,
+                          rep_events, timestamps, thresholds, out_dir):
+    """Generate knee valgus plot with threshold bands and KASR secondary axis."""
+    multi = os.getenv("NOWVA_MULTI_CAMERA", "false").lower() == "true"
+    mode_label = "3D Abduction" if multi else "2D FPPA"
+
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+    ax1.plot(t_rel, valgus_l, label=f"Left Valgus ({mode_label})", color="#2196F3", linewidth=1.5)
+    ax1.plot(t_rel, valgus_r, label=f"Right Valgus ({mode_label})", color="#F44336", linewidth=1.5)
+    ax1.axhline(y=0, color="black", linewidth=0.5, linestyle="-")
+
+    if thresholds:
+        kv = thresholds.get("knee_valgus", {})
+        mild = kv.get("mild", 0)
+        moderate = kv.get("moderate", 0)
+        severe = kv.get("severe", 0)
+        if mild:
+            ax1.axhline(y=mild, color="#FFC107", linewidth=1, linestyle="--", alpha=0.7, label=f"Mild ({mild:.0f}°)")
+        if moderate:
+            ax1.axhline(y=moderate, color="#FF9800", linewidth=1, linestyle="--", alpha=0.7, label=f"Moderate ({moderate:.0f}°)")
+        if severe:
+            ax1.axhline(y=severe, color="#F44336", linewidth=1, linestyle="--", alpha=0.7, label=f"Severe ({severe:.0f}°)")
+
+    for ts_val, rep_num in rep_events:
+        rt = ts_val - timestamps[0]
+        ax1.axvline(x=rt, color="green", linestyle="--", alpha=0.5)
+        ax1.annotate(f"Rep {rep_num}", (rt, ax1.get_ylim()[1]),
+                     textcoords="offset points", xytext=(5, -15), fontsize=8, color="green")
+
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Knee Valgus (°)")
+    ax1.set_title(f"Knee Valgus ({mode_label}) — Set {set_num}")
+
+    ax2 = ax1.twinx()
+    ax2.plot(t_rel, kasr, label="KASR", color="#4CAF50", linewidth=1, alpha=0.6, linestyle=":")
+    ax2.axhline(y=1.0, color="#4CAF50", linewidth=0.5, linestyle="-", alpha=0.3)
+    ax2.set_ylabel("Knee/Ankle Sep. Ratio")
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=7)
+
+    ax1.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = str(Path(out_dir) / f"set{set_num}_knee_valgus.png")
+    fig.savefig(path, dpi=150)
+    print(f"  Saved: {path}")
+    plt.close(fig)
+
+
 def save_bilateral_asymmetry_plot(set_num, t_rel, bilateral_asymmetry,
                                   rep_events, timestamps, out_dir):
     """Generate and save bilateral asymmetry plot for a set."""
@@ -211,6 +262,9 @@ class SetDataCollector:
         self.pipeline_trunk: list = []
         self.hip_adduction_l: list = []
         self.hip_adduction_r: list = []
+        self.knee_valgus_l: list = []
+        self.knee_valgus_r: list = []
+        self.knee_ankle_sep_ratio: list = []
         self.bilateral_asymmetry: list = []
         self.rep_events: list = []
         self.fault_events: list = []
@@ -278,6 +332,9 @@ class SetDataCollector:
             self.pipeline_trunk.append(result.joint_angles.trunk_flexion)
             self.hip_adduction_l.append(result.joint_angles.hip_adduction_l)
             self.hip_adduction_r.append(result.joint_angles.hip_adduction_r)
+            self.knee_valgus_l.append(result.joint_angles.knee_valgus_l)
+            self.knee_valgus_r.append(result.joint_angles.knee_valgus_r)
+            self.knee_ankle_sep_ratio.append(result.joint_angles.knee_ankle_sep_ratio)
             self.bilateral_asymmetry.append(
                 max(result.joint_angles.knee_asymmetry, result.joint_angles.hip_asymmetry)
             )
@@ -287,6 +344,9 @@ class SetDataCollector:
             self.pipeline_trunk.append(0.0)
             self.hip_adduction_l.append(0.0)
             self.hip_adduction_r.append(0.0)
+            self.knee_valgus_l.append(0.0)
+            self.knee_valgus_r.append(0.0)
+            self.knee_ankle_sep_ratio.append(1.0)
             self.bilateral_asymmetry.append(0.0)
 
         # Rep events
@@ -333,6 +393,9 @@ class SetDataCollector:
         self.pipeline_trunk.clear()
         self.hip_adduction_l.clear()
         self.hip_adduction_r.clear()
+        self.knee_valgus_l.clear()
+        self.knee_valgus_r.clear()
+        self.knee_ankle_sep_ratio.clear()
         self.bilateral_asymmetry.clear()
         self.rep_events.clear()
         self.fault_events.clear()
@@ -384,6 +447,7 @@ def finalize_set(
     # Smooth and plot pipeline joint angles
     pipe_knee = pipe_hip = pipe_trunk = None
     adduction_l = adduction_r = bilat_asym = None
+    valgus_l = valgus_r = kasr = None
     if collector.pipeline_knee:
         pipe_knee = smooth_1d(np.array(collector.pipeline_knee), sma_window=3, sma_start=sma_start)
         pipe_hip = smooth_1d(np.array(collector.pipeline_hip), sma_window=3, sma_start=sma_start)
@@ -398,6 +462,13 @@ def finalize_set(
         save_hip_adduction_plot(
             set_number, t_rel, adduction_l, adduction_r,
             collector.rep_events, timestamps, out_dir,
+        )
+        valgus_l = smooth_1d(np.array(collector.knee_valgus_l), sma_window=3, sma_start=sma_start)
+        valgus_r = smooth_1d(np.array(collector.knee_valgus_r), sma_window=3, sma_start=sma_start)
+        kasr = np.array(collector.knee_ankle_sep_ratio)
+        save_knee_valgus_plot(
+            set_number, t_rel, valgus_l, valgus_r, kasr,
+            collector.rep_events, timestamps, collector.thresholds, out_dir,
         )
         save_bilateral_asymmetry_plot(
             set_number, t_rel, bilat_asym,
@@ -430,6 +501,9 @@ def finalize_set(
         "pipeline_trunk_flexion_deg": pipe_trunk.tolist() if pipe_trunk is not None else [],
         "hip_adduction_l_deg": adduction_l.tolist() if adduction_l is not None else [],
         "hip_adduction_r_deg": adduction_r.tolist() if adduction_r is not None else [],
+        "knee_valgus_l_deg": valgus_l.tolist() if valgus_l is not None else [],
+        "knee_valgus_r_deg": valgus_r.tolist() if valgus_r is not None else [],
+        "knee_ankle_sep_ratio": kasr.tolist() if kasr is not None else [],
         "bilateral_asymmetry_deg": bilat_asym.tolist() if bilat_asym is not None else [],
         "fault_events": [
             {**fe, "time_s": fe["timestamp"] - timestamps[0]}

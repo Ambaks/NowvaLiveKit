@@ -29,11 +29,6 @@ _AXIS_X = np.array([1.0, 0.0, 0.0])        # forward / sagittal-plane normal
 _VERTICAL_UP = np.array([0.0, 1.0, 0.0])     # Y-up reference
 _VERTICAL_DOWN = np.array([0.0, -1.0, 0.0])  # Y-down reference (MediaPipe "up")
 
-# Minimum hip->knee floor-projection length (meters) for a stable valgus angle.
-# Near the top of a rep the knee sits over the hip, collapsing the femur's
-# floor projection to a point; its direction is then pure noise, so skip it.
-_VALGUS_MIN_FEMUR_M = 0.05
-
 
 class AnalyticalIKSolver(IKSolver):
     """
@@ -95,17 +90,8 @@ class AnalyticalIKSolver(IKSolver):
         angles.hip_adduction_l = self._compute_hip_adduction(kpts, side="left")
         angles.hip_adduction_r = self._compute_hip_adduction(kpts, side="right")
 
-        # Knee valgus from toe (primary metric when foot landmarks available)
-        valgus_l, foot_conf_l = self._compute_knee_valgus_from_toe(kpts, side="left")
-        valgus_r, foot_conf_r = self._compute_knee_valgus_from_toe(kpts, side="right")
-        angles.knee_valgus_l = valgus_l
-        angles.knee_valgus_r = valgus_r
-        angles.foot_confidence_l = foot_conf_l
-        angles.foot_confidence_r = foot_conf_r
-
-        # Hip rotation (internal/external)
-        angles.hip_rotation_l = self._compute_hip_rotation(kpts, side="left")
-        angles.hip_rotation_r = self._compute_hip_rotation(kpts, side="right")
+        # Knee valgus + foot_confidence + hip_rotation: written by the
+        # pipeline's ValgusEstimator after solve() returns (mode-aware).
 
         # Knee flexion
         angles.knee_flexion_l = self._compute_knee_flexion(kpts, side="left")
@@ -256,72 +242,6 @@ class AnalyticalIKSolver(IKSolver):
             sign = -1.0 if thigh_vec[0] < 0 else 1.0
 
         return angle * sign
-
-    def _compute_knee_valgus_from_toe(self, kpts: dict, side: str) -> tuple:
-        """
-        Compute knee valgus on the floor (XZ) plane as the angle between the
-        femur and foot directions, both projected to the ground.
-
-        Femur direction: hip -> knee (projected to XZ).
-        Foot direction:  ankle -> toe (foot_index), projected to XZ.
-
-        When the knee tracks over the foot the two floor-projected vectors
-        point the same way; valgus rotates the femur medially relative to the
-        foot line. Projecting to XZ keeps squat depth (Y) out of the metric.
-
-        Returns:
-            (valgus_angle_degrees, foot_confidence)
-
-        Positive = valgus (knee medial to the foot line)
-        Negative = varus (knee lateral to the foot line)
-        """
-        hip = self._get_point(kpts, f"{side}_hip")
-        knee = self._get_point(kpts, f"{side}_knee")
-        ankle = self._get_point(kpts, f"{side}_ankle")
-        foot = self._get_point(kpts, f"{side}_foot_index")
-
-        _, foot_conf = kpts.get(f"{side}_foot_index", (np.zeros(3), 0.0))
-
-        if hip is None or knee is None or ankle is None or foot is None:
-            return 0.0, foot_conf
-
-        # Project onto the floor plane (XZ, discarding Y/height)
-        femur_vec = np.array([knee[0] - hip[0], knee[2] - hip[2]])
-        foot_vec = np.array([foot[0] - ankle[0], foot[2] - ankle[2]])
-
-        femur_len = np.linalg.norm(femur_vec)
-        foot_len = np.linalg.norm(foot_vec)
-        if femur_len < _VALGUS_MIN_FEMUR_M or foot_len < 1e-6:
-            return 0.0, foot_conf
-
-        # Angle magnitude via 3D helper (pad to 3D for angle_between_vectors)
-        angle = angle_between_vectors(
-            np.array([foot_vec[0], foot_vec[1], 0.0]),
-            np.array([femur_vec[0], femur_vec[1], 0.0]),
-        )
-
-        # Sign via 2D cross product in the XZ floor plane (foot line -> femur)
-        cross_2d = foot_vec[0] * femur_vec[1] - foot_vec[1] * femur_vec[0]
-
-        if side == "left":
-            # Left leg: knee medial (toward center/right) → cross > 0 = valgus
-            sign = 1.0 if cross_2d > 0 else -1.0
-        else:
-            # Right leg: knee medial (toward center/left) → cross < 0 = valgus
-            sign = 1.0 if cross_2d < 0 else -1.0
-
-        return angle * sign, foot_conf
-
-    def _compute_hip_rotation(self, kpts: dict, side: str) -> float:
-        """
-        Compute hip internal/external rotation.
-
-        This is difficult to compute accurately without foot orientation.
-        Returns 0 as a placeholder.
-        """
-        # Hip rotation requires knowing foot orientation
-        # For now, return 0
-        return 0.0
 
     def _compute_knee_flexion(self, kpts: dict, side: str) -> float:
         """

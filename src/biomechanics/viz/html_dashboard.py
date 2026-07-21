@@ -113,6 +113,8 @@ def _prepare_dashboard_payload(plot_data: dict, seg_result: dict) -> dict:
         "pipeline_trunk_flexion_deg": ("d_pipeline_trunk_deg_s", "°/s"),
         "hip_adduction_l_deg": ("d_hip_adduction_l_deg_s", "°/s"),
         "hip_adduction_r_deg": ("d_hip_adduction_r_deg_s", "°/s"),
+        "knee_valgus_l_deg": ("d_knee_valgus_l_deg_s", "°/s"),
+        "knee_valgus_r_deg": ("d_knee_valgus_r_deg_s", "°/s"),
         "bilateral_asymmetry_deg": ("d_bilateral_asymmetry_deg_s", "°/s"),
     }
 
@@ -146,6 +148,9 @@ def _prepare_dashboard_payload(plot_data: dict, seg_result: dict) -> dict:
         "pipeline_trunk_flexion_deg": plot_data.get("pipeline_trunk_flexion_deg", []),
         "hip_adduction_l_deg": plot_data.get("hip_adduction_l_deg", []),
         "hip_adduction_r_deg": plot_data.get("hip_adduction_r_deg", []),
+        "knee_valgus_l_deg": plot_data.get("knee_valgus_l_deg", []),
+        "knee_valgus_r_deg": plot_data.get("knee_valgus_r_deg", []),
+        "knee_ankle_sep_ratio": plot_data.get("knee_ankle_sep_ratio", []),
         "bilateral_asymmetry_deg": plot_data.get("bilateral_asymmetry_deg", []),
         **derivatives,
         "rep_markers": rep_markers,
@@ -713,19 +718,25 @@ function chartPipelineAngles(setD, divId) {{
 
 function chartKneeValgusSection(setD, prefix) {{
     const section = document.getElementById(prefix + '-valgus-section');
-    if (!setD.hip_adduction_l_deg || setD.hip_adduction_l_deg.length === 0) {{
+    // Prefer real valgus data; fall back to hip adduction proxy
+    const hasValgus = setD.knee_valgus_l_deg && setD.knee_valgus_l_deg.length > 0;
+    const hasAdduction = setD.hip_adduction_l_deg && setD.hip_adduction_l_deg.length > 0;
+    if (!hasValgus && !hasAdduction) {{
         if (section) section.style.display = 'none';
         return;
     }}
 
     // --- Derived data ---
     const ts = setD.timestamps;
-    const leftData = setD.hip_adduction_l_deg;
-    const rightRaw = setD.hip_adduction_r_deg;
+    const leftData = hasValgus ? setD.knee_valgus_l_deg : setD.hip_adduction_l_deg;
+    const rightRaw = hasValgus ? setD.knee_valgus_r_deg : setD.hip_adduction_r_deg;
     const rightFlipped = rightRaw.map(v => -v);
     const deltaData = leftData.map((v, i) => Math.abs(v) - Math.abs(rightRaw[i]));
-    const leftDeriv = setD.d_hip_adduction_l_deg_s;
-    const rightDerivFlipped = (setD.d_hip_adduction_r_deg_s || []).map(v => -v);
+    const leftDeriv = hasValgus ? setD.d_knee_valgus_l_deg_s : setD.d_hip_adduction_l_deg_s;
+    const rightDerivFlipped = (hasValgus
+        ? (setD.d_knee_valgus_r_deg_s || [])
+        : (setD.d_hip_adduction_r_deg_s || [])).map(v => -v);
+    const metricLabel = hasValgus ? 'Valgus' : 'Adduction (proxy)';
 
     const valgusLevels = [
         ['mild', 'Valgus Mild', THRESH_COLORS.mild],
@@ -746,16 +757,29 @@ function chartKneeValgusSection(setD, prefix) {{
            line: {{ color: 'rgba(0,245,255,0.3)', width: 1, dash: 'dash' }} }},
     ] : [];
 
+    // --- KASR trace (secondary axis, shown on left chart only) ---
+    const kasrData = setD.knee_ankle_sep_ratio || [];
+
     // --- Left Knee chart ---
     const leftTraces = [{{
         x: ts, y: leftData,
         text: hoverText(ts, leftData, leftDeriv, '\u00b0', '\u00b0/s'),
         hoverinfo: 'x+text', mode: 'lines',
-        line: {{ color: '#00f5ff', width: 2 }}, name: 'Left Adduction',
+        line: {{ color: '#00f5ff', width: 2 }}, name: 'Left ' + metricLabel,
     }}];
+    if (kasrData.length > 0) {{
+        leftTraces.push({{
+            x: ts, y: kasrData, yaxis: 'y2',
+            hoverinfo: 'x+text', mode: 'lines',
+            text: kasrData.map(v => 'KASR: ' + v.toFixed(2)),
+            line: {{ color: '#4CAF50', width: 1, dash: 'dot' }}, name: 'KASR', opacity: 0.6,
+        }});
+    }}
     const leftLayout = makeLayout({{
-        yaxis: {{ title: {{ text: 'Adduction (\u00b0)' }},
+        yaxis: {{ title: {{ text: metricLabel + ' (\u00b0)' }},
                   gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
+        yaxis2: {{ title: 'KASR', overlaying: 'y', side: 'right', showgrid: false,
+                   range: [0, 2], tickfont: {{ size: 10, color: '#4CAF50' }} }},
         margin: {{ l: 50, r: 50, t: 24, b: 36 }},
         shapes: [
             ...repShapes(setD.rep_markers), zeroLine, ...bandShapes,
@@ -774,10 +798,10 @@ function chartKneeValgusSection(setD, prefix) {{
         x: ts, y: rightFlipped,
         text: hoverText(ts, rightFlipped, rightDerivFlipped, '\u00b0', '\u00b0/s'),
         hoverinfo: 'x+text', mode: 'lines',
-        line: {{ color: '#f44336', width: 2 }}, name: 'Right Adduction (flipped)',
+        line: {{ color: '#f44336', width: 2 }}, name: 'Right ' + metricLabel + ' (flipped)',
     }}];
     const rightLayout = makeLayout({{
-        yaxis: {{ title: {{ text: 'Adduction (\u00b0)' }},
+        yaxis: {{ title: {{ text: metricLabel + ' (\u00b0)' }},
                   gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' }},
         margin: {{ l: 50, r: 50, t: 24, b: 36 }},
         shapes: [

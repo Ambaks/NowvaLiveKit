@@ -220,6 +220,10 @@ def bottom_up_build(
         for idx in range(HIP_L, FOOT_R + 1):
             out[idx][1] -= min_ankle_y
 
+    # 7. Project feet to ground plane
+    out[FOOT_L][1] = 0.0
+    out[FOOT_R][1] = 0.0
+
     return out
 
 
@@ -299,19 +303,31 @@ def compute_balance_target_ground(kpts: np.ndarray, foot_len: float) -> np.ndarr
 
 
 def apply_lean_to_upper_body(kpts: np.ndarray, lean_delta_rad: float) -> np.ndarray:
-    """Rotate upper body (0-10) as a rigid body about hip midpoint in the X-Y plane."""
+    """Apply lean with 2-segment spine: 60% lower trunk, 40% upper trunk."""
     out = kpts.copy()
     hip_mid_x = (kpts[HIP_L][0] + kpts[HIP_R][0]) / 2.0
     hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
 
-    cos_a = math.cos(lean_delta_rad)
-    sin_a = math.sin(lean_delta_rad)
+    lower_lean = lean_delta_rad * 0.6
+    upper_lean = lean_delta_rad * 0.4
 
+    cos_lo = math.cos(lower_lean)
+    sin_lo = math.sin(lower_lean)
     for idx in UPPER_BODY_INDICES:
         dx = kpts[idx][0] - hip_mid_x
         dy = kpts[idx][1] - hip_mid_y
-        out[idx][0] = hip_mid_x + cos_a * dx + sin_a * dy
-        out[idx][1] = hip_mid_y - sin_a * dx + cos_a * dy
+        out[idx][0] = hip_mid_x + cos_lo * dx + sin_lo * dy
+        out[idx][1] = hip_mid_y - sin_lo * dx + cos_lo * dy
+
+    sh_mid_x = (out[5][0] + out[6][0]) / 2.0
+    sh_mid_y = (out[5][1] + out[6][1]) / 2.0
+    cos_up = math.cos(upper_lean)
+    sin_up = math.sin(upper_lean)
+    for idx in range(5):
+        dx = out[idx][0] - sh_mid_x
+        dy = out[idx][1] - sh_mid_y
+        out[idx][0] = sh_mid_x + cos_up * dx + sin_up * dy
+        out[idx][1] = sh_mid_y - sin_up * dx + cos_up * dy
 
     return out
 
@@ -608,21 +624,44 @@ class KeypointCorrector:
         return total_shift
 
     def _solve_and_apply_balance(self, kpts: np.ndarray, foot_len: float) -> None:
-        """Rotate the upper body about the hip midpoint for sagittal balance."""
+        """Apply sagittal balance with a 2-segment spine model.
+
+        Distributes the total lean between a lower trunk rotation (hips to
+        shoulders, 60%) and an upper trunk rotation (shoulders to head, 40%).
+        This produces a natural C-curve rather than a rigid board tipping.
+        """
         lean_rad = solve_balance_lean(kpts, foot_len)
         if lean_rad is None or abs(lean_rad) < 1e-6:
             return
 
+        LOWER_FRAC = 0.6
+        UPPER_FRAC = 1.0 - LOWER_FRAC
+        lower_lean = lean_rad * LOWER_FRAC
+        upper_lean = lean_rad * UPPER_FRAC
+
         hip_mid_x = (kpts[HIP_L][0] + kpts[HIP_R][0]) / 2.0
         hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
-        cos_a = math.cos(lean_rad)
-        sin_a = math.sin(lean_rad)
 
+        # Lower trunk rotation: rotate all upper body indices about hip mid
+        cos_lo = math.cos(lower_lean)
+        sin_lo = math.sin(lower_lean)
         for idx in UPPER_BODY_INDICES:
             dx = kpts[idx][0] - hip_mid_x
             dy = kpts[idx][1] - hip_mid_y
-            kpts[idx][0] = hip_mid_x + cos_a * dx + sin_a * dy
-            kpts[idx][1] = hip_mid_y - sin_a * dx + cos_a * dy
+            kpts[idx][0] = hip_mid_x + cos_lo * dx + sin_lo * dy
+            kpts[idx][1] = hip_mid_y - sin_lo * dx + cos_lo * dy
+
+        # Upper trunk rotation: rotate head/ears/eyes about shoulder mid
+        # Shoulders are indices 5, 6; head group is 0-4
+        sh_mid_x = (kpts[5][0] + kpts[6][0]) / 2.0
+        sh_mid_y = (kpts[5][1] + kpts[6][1]) / 2.0
+        cos_up = math.cos(upper_lean)
+        sin_up = math.sin(upper_lean)
+        for idx in range(5):
+            dx = kpts[idx][0] - sh_mid_x
+            dy = kpts[idx][1] - sh_mid_y
+            kpts[idx][0] = sh_mid_x + cos_up * dx + sin_up * dy
+            kpts[idx][1] = sh_mid_y - sin_up * dx + cos_up * dy
 
     def _lower_to_depth(
         self,
@@ -845,10 +884,12 @@ class KeypointCorrector:
         )
 
     def _reground(self, kpts: np.ndarray) -> None:
-        """Ensure ankles don't go below ground (Y=0 in viewer coords)."""
+        """Ensure ankles don't go below ground and feet sit on ground plane."""
         min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
         if min_ankle_y < 0:
             kpts[:, 1] -= min_ankle_y
+        kpts[FOOT_L][1] = 0.0
+        kpts[FOOT_R][1] = 0.0
 
     def _enforce_symmetry(
         self,
@@ -937,10 +978,12 @@ class KeypointCorrector:
         for idx in UPPER_BODY_INDICES:
             kpts[idx] += pelvis_shift
 
-        # Reground
+        # Reground and project feet to ground plane
         min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
         if min_ankle_y < 0:
             kpts[:, 1] -= min_ankle_y
+        kpts[FOOT_L][1] = 0.0
+        kpts[FOOT_R][1] = 0.0
 
 
 def build_morph_frames(

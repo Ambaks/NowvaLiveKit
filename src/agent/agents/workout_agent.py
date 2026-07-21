@@ -55,6 +55,12 @@ class WorkoutAgent(BaseNovaAgent):
         coaching_service._workout_active = True
         self.userdata.coaching_service = coaching_service
 
+        # Last-session progress context for the greeting (None on first workout)
+        from agent.services.progress_context import build_greeting_progress_line
+        baseline = await coaching_service.wait_progress_baseline()
+        progress_line = build_greeting_progress_line(baseline)
+        progress_suffix = f" {progress_line}" if progress_line else ""
+
         # Generate context-aware greeting BEFORE starting wake word system.
         # _say() suppresses turn detection so the greeting can't be interrupted.
         # Don't restore — wake word system sets its own turn detection next.
@@ -67,7 +73,8 @@ class WorkoutAgent(BaseNovaAgent):
             if is_quick:
                 await self._say(
                     f"Quick exercise started! First up: {first_desc}. "
-                    f"Tell the user enthusiastically that you're ready to go — get them going for the first set ",
+                    f"Tell the user enthusiastically that you're ready to go — get them going for the first set "
+                    f"{progress_suffix}",
                     restore=False,
                 )
             else:
@@ -75,12 +82,14 @@ class WorkoutAgent(BaseNovaAgent):
                 await self._say(
                     f"Workout started! Today's workout: {workout_name}. "
                     f"First exercise: {first_desc}. Inform the user enthusiastically "
-                    f"and let them know you're tracking their form",
+                    f"and let them know you're tracking their form"
+                    f"{progress_suffix}",
                     restore=False,
                 )
         else:
             await self._say(
-                f"Workout mode is starting. Psych the user up and get them ready to workout!",
+                f"Workout mode is starting. Psych the user up and get them ready to workout!"
+                f"{progress_suffix}",
                 restore=False,
             )
 

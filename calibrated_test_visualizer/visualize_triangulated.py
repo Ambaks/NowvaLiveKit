@@ -31,6 +31,7 @@ import numpy as np
 
 from biomechanics.pose.rtmpose import RTMPoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
+from biomechanics.kinematics.valgus import TriangulatedValgusEstimator
 from biomechanics.faults.rep_counter import RepCounter, RepCounterConfig
 from biomechanics.utils.filters import JointAngleFilter
 from biomechanics.utils.derivatives import DerivativeTracker
@@ -381,6 +382,7 @@ def run_triangulated_capture(camera_ids, calibration, output_dir, resolution, ta
 
     pose_estimator = RTMPoseEstimator(confidence_threshold=0.3)
     ik = AnalyticalIKSolver()
+    valgus_estimator = TriangulatedValgusEstimator()
     angle_filter = JointAngleFilter(min_cutoff=1.0, beta=0.007)
     deriv_tracker = DerivativeTracker(smoothing_alpha=0.3)
     rep_counter = RepCounter(RepCounterConfig(
@@ -538,6 +540,17 @@ def run_triangulated_capture(camera_ids, calibration, output_dir, resolution, ta
         skeleton_3d = position_smoother.smooth(skeleton_3d)
 
         raw_angles = ik.solve(skeleton_3d)
+
+        # Mode-aware valgus estimation (3D abduction — this visualizer is triangulated)
+        vr = valgus_estimator.estimate(None, skeleton_3d)
+        raw_angles.knee_valgus_l = vr.valgus_l
+        raw_angles.knee_valgus_r = vr.valgus_r
+        raw_angles.foot_confidence_l = vr.foot_confidence_l
+        raw_angles.foot_confidence_r = vr.foot_confidence_r
+        raw_angles.knee_ankle_sep_ratio = vr.kasr
+        raw_angles.hip_rotation_l = vr.hip_rotation_l
+        raw_angles.hip_rotation_r = vr.hip_rotation_r
+
         raw_angles.timestamp = time.time()
         angles = angle_filter.filter_angles(raw_angles)
         angles.timestamp = raw_angles.timestamp

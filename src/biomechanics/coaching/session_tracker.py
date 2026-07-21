@@ -125,6 +125,7 @@ class SessionTracker:
             bottom_angles=bottom_angles,
             standing_kpts=standing_kpts,
             rep_kinematic_summary=summary,
+            set_number=self.current_set_number,
         )
 
         if self._assessment_mode:

@@ -20,6 +20,7 @@ import numpy as np
 from biomechanics.config import BiomechanicsConfig, load_pipeline_config
 from biomechanics.pose.mediapipe_fallback import MediaPipePoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
+from biomechanics.kinematics.valgus import build_valgus_estimator
 from biomechanics.faults import RuleEngine
 from biomechanics.profiles import get_profile
 from biomechanics.utils.types import (
@@ -39,9 +40,13 @@ from biomechanics.utils.confidence_blend import ConfidenceBlender
 from biomechanics.utils.velocity_clamp import VelocityClamp
 from biomechanics.utils.bone_constraints import BoneLengthConstraints
 from biomechanics.utils.ground_clamp import GroundClamp
-from biomechanics.utils.position_filter import KeypointPositionSmoother
+from biomechanics.utils.position_filter import KeypointPositionSmoother, Skeleton2DSmoother
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
+from biomechanics.utils.rom_clamp import ROMClamp
 from biomechanics.utils.standing_gate import StandingPoseGate
+
+
+_MAX_DROPOUT_HOLD_FRAMES = 5
 
 
 class BiomechanicsPipeline:
@@ -77,6 +82,7 @@ class BiomechanicsPipeline:
 
         # Multi-camera mode (env-driven)
         self._multi_camera = os.getenv("NOWVA_MULTI_CAMERA", "false").lower() == "true"
+        self._valgus_estimator = build_valgus_estimator(self._multi_camera)
         self._multi_camera_provider = None
 
         if self._multi_camera:
@@ -154,9 +160,12 @@ class BiomechanicsPipeline:
         self._velocity_clamp = None
         self._bone_constraints = None
         self._ground_clamp = None
+        self._rom_clamp = None
         self._position_smoother = None
         self._predictive_estimator = None
         self._proportions_applied = False
+        self._last_valid_skeleton: Optional[Skeleton3D] = None
+        self._dropout_decay_frames: int = 0
 
         if self._preik_enabled:
             self._confidence_blender = ConfidenceBlender(
@@ -178,6 +187,7 @@ class BiomechanicsPipeline:
                 ankle_y_tolerance_m=self.config.ground_clamp.ankle_y_tolerance_m,
                 standing_gate=self._standing_gate,
             )
+            self._rom_clamp = ROMClamp()
             self._position_smoother = KeypointPositionSmoother(
                 min_cutoff=self.config.position_filter.min_cutoff,
                 beta=self.config.position_filter.beta,
@@ -186,6 +196,16 @@ class BiomechanicsPipeline:
             self._predictive_estimator = PredictiveStateEstimator(
                 horizon_seconds=self.config.predictive_state.horizon_seconds,
                 max_extrapolation_deg=self.config.predictive_state.max_extrapolation_deg,
+            )
+
+        # Display-only 2D skeleton smoothing (does not affect analysis pipeline)
+        self._display_smoother: Skeleton2DSmoother | None = None
+        if self.config.display_filter.enabled:
+            df = self.config.display_filter
+            self._display_smoother = Skeleton2DSmoother(
+                min_cutoff=df.min_cutoff,
+                beta=df.beta,
+                d_cutoff=df.d_cutoff,
             )
 
         # Layer 3b (optional): Barbell detection + Kalman-smoothed tracking.
@@ -326,6 +346,12 @@ class BiomechanicsPipeline:
             self._confidence_blender.reset()
             self._velocity_clamp.reset()
             self._position_smoother.reset()
+            self._bone_constraints.reset()
+            self._ground_clamp.reset()
+            self._proportions_applied = False
+
+        if self._display_smoother is not None:
+            self._display_smoother.reset()
 
     def consume_bottom_frame(self) -> tuple[Optional[List[List[float]]], Optional[dict]]:
         """Return and reset the bottom-of-rep keypoints and angles.
@@ -399,6 +425,9 @@ class BiomechanicsPipeline:
 
         self.last_frame = frame
 
+        if skeleton_2d is not None and self._display_smoother is not None:
+            skeleton_2d = self._display_smoother.smooth(skeleton_2d)
+
         # --- Barbell detection + tracking (independent of pose) ---
         if self._barbell_detector is not None:
             t0 = time.perf_counter()
@@ -413,16 +442,34 @@ class BiomechanicsPipeline:
             latency_ms["barbell"] = (time.perf_counter() - t0) * 1000.0
 
         if skeleton_3d is None:
-            # No pose detected — return early with what we have
-            self._frame_index += 1
-            return PipelineFrame(
-                frame_index=self._frame_index,
-                timestamp=now,
-                skeleton_2d=skeleton_2d,
-                bar_detection=bar_detection,
-                bar_track=bar_track,
-                latency_ms=latency_ms,
-            )
+            if (
+                self._last_valid_skeleton is not None
+                and self._dropout_decay_frames < _MAX_DROPOUT_HOLD_FRAMES
+            ):
+                self._dropout_decay_frames += 1
+                decay = 1.0 - (self._dropout_decay_frames / _MAX_DROPOUT_HOLD_FRAMES)
+                held = self._last_valid_skeleton
+                skeleton_3d = Skeleton3D.from_numpy(
+                    held.to_numpy(),
+                    confidences=[
+                        kp.confidence * decay for kp in held.keypoints
+                    ],
+                    timestamp=now,
+                    frame_index=self._frame_index,
+                )
+            else:
+                self._frame_index += 1
+                return PipelineFrame(
+                    frame_index=self._frame_index,
+                    timestamp=now,
+                    skeleton_2d=skeleton_2d,
+                    bar_detection=bar_detection,
+                    bar_track=bar_track,
+                    latency_ms=latency_ms,
+                )
+        else:
+            self._dropout_decay_frames = 0
+            self._last_valid_skeleton = skeleton_3d
 
         # --- BiLSTM rep counting (runs on raw skeleton, before IK) ---
         bilstm_rep_data = None
@@ -462,6 +509,7 @@ class BiomechanicsPipeline:
             skeleton_3d = self._confidence_blender.blend(skeleton_3d)
             skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+            skeleton_3d = self._rom_clamp.clamp(skeleton_3d)
             skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
             skeleton_3d = self._position_smoother.smooth(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
@@ -481,6 +529,21 @@ class BiomechanicsPipeline:
         # --- IK solve ---
         t0 = time.perf_counter()
         raw_angles = self._ik_solver.solve(skeleton_3d)
+
+        # Mode-aware valgus estimation (2D FPPA or 3D abduction)
+        vr = self._valgus_estimator.estimate(skeleton_2d, skeleton_3d)
+        raw_angles.knee_valgus_l = vr.valgus_l
+        raw_angles.knee_valgus_r = vr.valgus_r
+        raw_angles.foot_confidence_l = vr.foot_confidence_l
+        raw_angles.foot_confidence_r = vr.foot_confidence_r
+        raw_angles.knee_ankle_sep_ratio = vr.kasr
+        raw_angles.hip_rotation_l = vr.hip_rotation_l
+        raw_angles.hip_rotation_r = vr.hip_rotation_r
+
+        # Update phase-aware smoothing BEFORE filtering so the current
+        # frame uses the correct parameters (not the previous frame's).
+        if self._preik_enabled:
+            self._angle_filter.update_phase(self._rep_counter.phase)
 
         # Apply temporal filter for stability
         angles = self._angle_filter.filter_angles(raw_angles)
@@ -537,10 +600,6 @@ class BiomechanicsPipeline:
             angles=angles,
             faults=faults,
         )
-
-        # Phase-aware smoothing only when pre-IK filters are active
-        if self._preik_enabled:
-            self._angle_filter.update_phase(self._rep_counter.phase)
 
         # If rep completed, check depth faults and advance calibration
         if rep_data is not None:

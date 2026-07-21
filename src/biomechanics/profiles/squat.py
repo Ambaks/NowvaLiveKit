@@ -7,9 +7,10 @@ This is a pure extraction refactor — zero behavioral change.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional
 
-from biomechanics.config import BiomechanicsConfig
+from biomechanics.config import BiomechanicsConfig, FaultsConfig
 from biomechanics.faults.fault_types import FaultRule
 from biomechanics.faults.rules.depth import DepthRule
 from biomechanics.faults.rules.symmetry import SymmetryRule
@@ -81,11 +82,26 @@ class SquatProfile(ExerciseProfile):
                 severe_threshold=fc.forward_lean.severe,
             ),
             KneeValgusRule(
-                mild_threshold=fc.knee_valgus.mild,
-                moderate_threshold=fc.knee_valgus.moderate,
-                severe_threshold=fc.knee_valgus.severe,
+                **self._valgus_thresholds(fc),
             ),
         ]
+
+    @staticmethod
+    def _valgus_thresholds(fc: FaultsConfig) -> dict[str, float]:
+        multi = os.getenv("NOWVA_MULTI_CAMERA", "false").lower() == "true"
+        kv = fc.knee_valgus
+        # Fallback (hip adduction) is always 3D-scale — its formula doesn't
+        # change with capture mode, unlike the primary toe/FPPA metric.
+        fallback = dict(
+            fallback_mild_threshold=kv.mild,
+            fallback_moderate_threshold=kv.moderate,
+            fallback_severe_threshold=kv.severe,
+        )
+        if multi:
+            return dict(mild_threshold=kv.mild, moderate_threshold=kv.moderate, severe_threshold=kv.severe, **fallback)
+        return dict(
+            mild_threshold=kv.mild_2d, moderate_threshold=kv.moderate_2d, severe_threshold=kv.severe_2d, **fallback
+        )
 
     def get_rep_signal(
         self, skeleton_3d: Skeleton3D, angles: Optional[JointAngles] = None

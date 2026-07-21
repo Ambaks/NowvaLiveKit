@@ -1,7 +1,7 @@
 """
 Tests for CoachingOrchestrator
 
-Verifies priority ordering, motivation trigger logic, audio ducking,
+Verifies priority ordering, motivation trigger logic,
 set recap dispatch, and stale event handling.
 """
 
@@ -32,8 +32,6 @@ def _make_callbacks():
     return {
         "play_cached_audio_fn": AsyncMock(),
         "generate_llm_reply_fn": AsyncMock(),
-        "duck_llm_fn": AsyncMock(),
-        "unduck_llm_fn": AsyncMock(),
         "get_cue_audio_fn": lambda key: True if key else False,
     }
 
@@ -182,8 +180,10 @@ class TestEventEnqueueing:
             assert event.cue_key == "rep_1"
         asyncio.run(_run())
 
-    def test_on_rep_complete_clean_enqueues_positive(self, orchestrator):
+    def test_on_rep_complete_clean_enqueues_positive(self, orchestrator, monkeypatch):
         orchestrator._positive_cue_keys = ["good_rep", "strong"]
+        # Production fires the positive cue only 30% of the time — pin the roll
+        monkeypatch.setattr("agent.services.coaching_orchestrator.random.random", lambda: 0.0)
 
         async def _run():
             await orchestrator.on_rep_complete(1, "parallel", True, [])
@@ -235,7 +235,7 @@ class TestEventEnqueueing:
 class TestDispatch:
     """Test event dispatch behavior."""
 
-    def test_cached_cue_ducks_and_unducks(self, mock_callbacks):
+    def test_cached_cue_plays(self, mock_callbacks):
         orch = CoachingOrchestrator(**mock_callbacks)
 
         async def _run():
@@ -243,9 +243,7 @@ class TestDispatch:
                 CuePriority.FAULT_CUE, time.monotonic(), "cached_cue", "knees_out"
             )
             await orch._dispatch(event)
-            mock_callbacks["duck_llm_fn"].assert_awaited_once()
             mock_callbacks["play_cached_audio_fn"].assert_awaited_once_with("knees_out")
-            mock_callbacks["unduck_llm_fn"].assert_awaited_once()
         asyncio.run(_run())
 
     def test_stale_motivation_dropped(self, mock_callbacks):

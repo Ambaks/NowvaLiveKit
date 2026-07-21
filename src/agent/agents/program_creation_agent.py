@@ -13,15 +13,17 @@ from livekit.agents.llm import function_tool
 from agent.agents.prompts import get_program_creation_prompt
 from agent.agents.shared.base_agent import BaseNovaAgent
 from agent.agents.shared.unit_conversion import normalize_height_to_cm, normalize_weight_to_kg, categorize_goal
-from agent.agents.shared.helpers import get_recommended_duration, normalize_fitness_level, should_enable_vbt
+from agent.agents.shared.helpers import (
+    build_program_generation_payload,
+    get_recommended_duration,
+    normalize_fitness_level,
+    normalize_sex,
+    service_headers,
+    should_enable_vbt,
+)
 from db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
-
-
-def _service_headers() -> dict:
-    """Headers for authenticated service-to-service API calls."""
-    return {"X-Service-Key": os.getenv("SERVICE_API_KEY", "")}
 
 # Context summarization constants
 MAX_CONTEXT_TOKENS = 28672
@@ -98,7 +100,8 @@ class ProgramCreationAgent(BaseNovaAgent):
         if state.get("program_creation.precaptured_session_duration"):
             precaptured_params["session_duration"] = state.get("program_creation.precaptured_session_duration")
 
-        return get_program_creation_prompt(existing_data, precaptured_params)
+        return get_program_creation_prompt(existing_data, precaptured_params,
+                                           user_name=state.get("user.name") or "")
 
     async def on_enter(self):
         """Generate greeting based on creation vs update mode."""
@@ -149,7 +152,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                 weight = self.state.get("program_creation.weight_kg")
                 age = self.state.get("program_creation.age")
                 sex = self.state.get("program_creation.sex")
-                goal = self.state.get("program_creation.goal")
+                goal = self.state.get("program_creation.goal_raw")
                 experience = self.state.get("program_creation.experience_level")
                 equipment = self.state.get("program_creation.equipment_access")
                 schedule = self.state.get("program_creation.days_per_week")
@@ -467,12 +470,8 @@ class ProgramCreationAgent(BaseNovaAgent):
                 if sex is None:
                     return None, "I got your age but I still need your sex. Say: 'Are you male or female?' Keep it simple."
 
-                sex_normalized = sex.lower().strip()
-                if sex_normalized in ["m", "male", "man", "boy"]:
-                    sex_normalized = "male"
-                elif sex_normalized in ["f", "female", "woman", "girl"]:
-                    sex_normalized = "female"
-                else:
+                sex_normalized = normalize_sex(sex)
+                if sex_normalized is None:
                     return None, f"I didn't catch the sex. Say: 'Sorry, are you male or female?' Keep it simple."
 
                 if db_user:
@@ -526,12 +525,8 @@ class ProgramCreationAgent(BaseNovaAgent):
         """
         logger.info("[PROGRAM] Capturing sex")
 
-        sex_normalized = sex.lower().strip()
-        if sex_normalized in ["m", "male", "man", "boy"]:
-            sex_normalized = "male"
-        elif sex_normalized in ["f", "female", "woman", "girl"]:
-            sex_normalized = "female"
-        else:
+        sex_normalized = normalize_sex(sex)
+        if sex_normalized is None:
             return None, f"I didn't catch that. Say: 'Sorry, are you male or female?' Keep it simple."
 
         self.state.set("program_creation.sex", sex_normalized)
@@ -817,15 +812,7 @@ class ProgramCreationAgent(BaseNovaAgent):
         goal_raw = self.state.get("program_creation.goal_raw")
         duration_weeks = self.state.get("program_creation.duration_weeks")
         days_per_week = self.state.get("program_creation.days_per_week")
-        session_duration = self.state.get("program_creation.session_duration", 60)
-        injury_history = self.state.get("program_creation.injury_history", "none")
-        specific_sport = self.state.get("program_creation.specific_sport", "none")
-        user_notes = self.state.get("program_creation.user_notes")
         fitness_level = self.state.get("program_creation.fitness_level")
-        has_vbt_capability = self.state.get("program_creation.has_vbt_capability", False)
-        # V6 fields
-        training_season = self.state.get("program_creation.training_season")
-        games_per_week = self.state.get("program_creation.games_per_week", 0)
 
         missing = []
         if not height_cm: missing.append("height_cm")
@@ -850,35 +837,20 @@ class ProgramCreationAgent(BaseNovaAgent):
 
         try:
             user_info = self.state.get_user()
-            params = {
-                "user_id": user_id,
-                "name": user_info.get("name", "Unknown"),
-                "email": user_info.get("email", "unknown@nowva.ai"),
-                "height_cm": height_cm,
-                "weight_kg": weight_kg,
-                "age": age,
-                "sex": sex,
-                "goal_category": goal_category,
-                "goal_raw": goal_raw,
-                "duration_weeks": duration_weeks,
-                "days_per_week": days_per_week,
-                "session_duration": session_duration,
-                "injury_history": injury_history,
-                "specific_sport": specific_sport,
-                "user_notes": user_notes,
-                "fitness_level": fitness_level,
-                "has_vbt_capability": has_vbt_capability,
-                # V6 fields
-                "training_season": training_season,
-                "games_per_week": games_per_week or 0,
-            }
+            params = build_program_generation_payload(
+                self.state.get("program_creation", {}),
+                user_id=str(user_id),
+                name=user_info.get("name", "Unknown"),
+                email=user_info.get("email", "unknown@nowva.ai"),
+                send_email=False,
+            )
 
             fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:8000")
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{fastapi_url}/api/programs/generate",
                     json=params,
-                    headers=_service_headers(),
+                    headers=service_headers(),
                     timeout=10.0
                 )
                 data = response.json()
@@ -898,7 +870,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                     async with httpx.AsyncClient() as client:
                         status_resp = await client.get(
                             f"{fastapi_url}/api/programs/status/{job_id}",
-                            headers=_service_headers(),
+                            headers=service_headers(),
                             timeout=5.0
                         )
                         status_data = status_resp.json()
@@ -1180,7 +1152,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                         "weight_kg": user_profile["weight_kg"],
                         "fitness_level": user_profile["fitness_level"]
                     },
-                    headers=_service_headers(),
+                    headers=service_headers(),
                     timeout=10.0
                 )
                 data = response.json()
@@ -1198,7 +1170,7 @@ class ProgramCreationAgent(BaseNovaAgent):
                     async with httpx.AsyncClient() as client:
                         status_resp = await client.get(
                             f"{fastapi_url}/api/programs/update-status/{job_id}",
-                            headers=_service_headers(),
+                            headers=service_headers(),
                             timeout=5.0
                         )
                         status_data = status_resp.json()

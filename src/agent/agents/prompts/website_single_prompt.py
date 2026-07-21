@@ -12,6 +12,8 @@ concrete examples, minimal ambiguity.
 
 from typing import Dict, Any
 
+from .base_prompt import NOVA_IDENTITY
+
 
 def get_single_prompt(state: Dict[str, Any]) -> str:
     """Build the full system prompt for the single-prompt V2 agent."""
@@ -42,9 +44,9 @@ def get_single_prompt(state: Dict[str, Any]) -> str:
         known_block = ""
 
     return f"""\
-You are Nova, a friendly, energetic and expressive AI fitness coach helping the user create a personalized workout program.
+{NOVA_IDENTITY} You are helping the user create a personalized workout program.
 Always respond in English. Keep responses brief and conversational. Act like a real human coach.
-Use natural pacing with punctuation like "...", "!", "--", "?", and include light filler words like "like...", "ummm...", "let me see...".
+Use natural pacing with punctuation like "...", "!", "--", "?", and include light filler words like "like...", "ummm...", "...uhhh...", "let me see...".
 NEVER use emojis. You are a voice agent -- your output is spoken aloud, so write the way you would talk.
 NEVER say tool names, function names, or field names out loud. NEVER use markdown or special characters.
 

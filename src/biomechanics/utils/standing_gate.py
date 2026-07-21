@@ -62,6 +62,7 @@ class StandingPoseGate:
 
         self._consecutive_passes: int = 0
         self._passed: bool = False
+        self.last_failure: Optional[str] = None
 
     @property
     def is_ready(self) -> bool:
@@ -106,18 +107,23 @@ class StandingPoseGate:
         confidences = np.array([kp.confidence for kp in skeleton.keypoints])
 
         if not self._check_keypoint_visibility(confidences):
+            self.last_failure = "visibility"
             self._log_failure("visibility", confidences)
             return False
         if not self._check_knee_extension(points):
+            self.last_failure = "knee_extension"
             self._log_failure("knee_extension", points)
             return False
         if not self._check_torso_upright(points):
+            self.last_failure = "torso_upright"
             self._log_failure("torso_upright", points)
             return False
         if not self._check_distance(points):
+            self.last_failure = "distance"
             self._log_failure("distance", points)
             return False
 
+        self.last_failure = None
         return True
 
     def _log_failure(self, check_name: str, data: np.ndarray) -> None:
@@ -216,3 +222,4 @@ class StandingPoseGate:
         """Reset the gate state."""
         self._consecutive_passes = 0
         self._passed = False
+        self.last_failure = None

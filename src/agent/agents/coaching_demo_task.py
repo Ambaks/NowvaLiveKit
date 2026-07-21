@@ -8,6 +8,7 @@ from typing import Callable
 
 from livekit.agents import AgentTask
 
+from agent.services.coaching_constants import COACHING_PERSONA
 from agent.services.demo_narration import (
     NARRATION_TIMEOUT_SECONDS,
     build_fallback_script,
@@ -41,7 +42,7 @@ class DemoStartAck:
             return False
 
 _DEMO_INSTRUCTIONS_TEMPLATE = (
-    "You are Nova, an energetic fitness coach, mid-demonstration of squat-form "
+    f"{COACHING_PERSONA} You are mid-demonstration of squat-form "
     "corrections. The screen shows the user's own skeleton animating each correction. "
     "The demo script is driven for you — NEVER advance to the next correction or end "
     "the demo yourself. If the user asks a question, answer briefly (2 sentences max) "

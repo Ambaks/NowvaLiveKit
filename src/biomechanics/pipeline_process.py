@@ -65,6 +65,14 @@ HUD_PANEL = (16, 5, 5)
 HUD_PANEL_ALPHA = 0.62
 HUD_FONT = cv2.FONT_HERSHEY_DUPLEX
 
+# On-screen hints for why the standing gate is rejecting frames.
+GATE_FAILURE_HINTS = {
+    "visibility": "STEP BACK - FULL BODY IN VIEW",
+    "knee_extension": "STAND TALL - STRAIGHTEN KNEES",
+    "torso_upright": "STAND UPRIGHT",
+    "distance": "ADJUST DISTANCE FROM CAMERA",
+}
+
 
 def _draw_rounded_rect(img, pt1, pt2, color, radius, thickness):
     x1, y1 = pt1
@@ -431,8 +439,15 @@ def run_biomechanics_pipeline(
                     fps_counter.update()
                     draw_fps(display, fps_counter.fps)
 
-                    current, required = pipeline._readiness_gate.progress
-                    _draw_hud_pill(display, f"WAITING {current}/{required}", accent=HUD_VIOLET)
+                    standing_gate = pipeline._standing_gate
+                    if not standing_gate.is_ready:
+                        current, required = standing_gate.progress
+                        hint = GATE_FAILURE_HINTS.get(standing_gate.last_failure, "HOLD STILL")
+                        pill_text = f"{hint}  {current}/{required}"
+                    else:
+                        current, required = pipeline._bone_constraints.progress
+                        pill_text = f"CALIBRATING {current}/{required}"
+                    _draw_hud_pill(display, pill_text, accent=HUD_VIOLET)
                     _draw_wordmark(display)
 
                     if not _window_animated:
@@ -456,6 +471,10 @@ def run_biomechanics_pipeline(
             pipeline.release()
             ipc_client.disconnect()
             return
+
+        # Tracking is locked in — tell the agent it can cue the first squat
+        ipc_client.send_message({"type": "assessment_ready"})
+        print("  [ASSESSMENT] Gate passed + bones calibrated — sent assessment_ready")
 
         # Extract athlete params from bone constraints
         athlete_params = _extract_athlete_params(pipeline)

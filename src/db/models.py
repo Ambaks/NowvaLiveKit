@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Boolean, Date, DateTime,
-    Text, ForeignKey, DECIMAL, ARRAY
+    Text, ForeignKey, DECIMAL, ARRAY, Float, Index
 )
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -356,6 +356,134 @@ class UserCalibration(Base):
 
     # Relationships
     user = relationship("User", back_populates="calibrations")
+
+
+# -------------------------
+# Biomechanics Tracking (retention + cue-effectiveness flywheel)
+# -------------------------
+class BiomechanicsSession(Base):
+    __tablename__ = "biomechanics_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    exercise = Column(String(50), nullable=False, default="squat")
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    total_reps = Column(Integer, default=0, nullable=False)
+    total_sets = Column(Integer, default=0, nullable=False)
+    mean_session_score = Column(Float, nullable=True)  # Mean of set mean_scores, 0-1
+    calibration_snapshot = Column(JSONB, nullable=True)  # Thresholds active during this session
+    session_causes = Column(JSONB, nullable=True)  # Accumulated session-level causes from diagnosis
+
+    # Relationships
+    user = relationship("User")
+    sets = relationship("BiomechanicsSet", back_populates="session", cascade="all, delete-orphan")
+    reps = relationship("BiomechanicsRep", back_populates="session", cascade="all, delete-orphan")
+    cue_events = relationship("CueEvent", back_populates="session", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_biomech_sessions_user_started", "user_id", "started_at"),
+    )
+
+
+class BiomechanicsSet(Base):
+    __tablename__ = "biomechanics_sets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("biomechanics_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    set_number = Column(Integer, nullable=False)
+    rep_count = Column(Integer, nullable=False)
+    mean_score = Column(Float, nullable=True)  # 0-1 composite for the set
+    depth_score_avg = Column(Float, nullable=True)
+    trunk_score_avg = Column(Float, nullable=True)
+    knee_score_avg = Column(Float, nullable=True)
+    symmetry_score_avg = Column(Float, nullable=True)
+    trend_slope = Column(Float, nullable=True)  # Score trend across reps (fatigue signal)
+    best_rep_number = Column(Integer, nullable=True)
+    worst_rep_number = Column(Integer, nullable=True)
+    diagnosis = Column(JSONB, nullable=True)  # Full diagnosis payload (symptoms, causes, perturbation)
+    scoring = Column(JSONB, nullable=True)  # Full scoring payload incl. per_rep_scores
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    session = relationship("BiomechanicsSession", back_populates="sets")
+    reps = relationship("BiomechanicsRep", back_populates="set")
+    cue_events = relationship("CueEvent", back_populates="set")
+
+    __table_args__ = (
+        Index("ix_biomech_sets_user_created", "user_id", "created_at"),
+    )
+
+
+class BiomechanicsRep(Base):
+    __tablename__ = "biomechanics_reps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("biomechanics_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    set_id = Column(UUID(as_uuid=True), ForeignKey("biomechanics_sets.id", ondelete="SET NULL"), nullable=True, index=True)  # Backfilled at set end
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    rep_number = Column(Integer, nullable=False)
+    set_number = Column(Integer, nullable=True)
+    is_clean = Column(Boolean, default=False, nullable=False)
+    depth_class = Column(Integer, nullable=True)
+    max_depth_angle = Column(Float, nullable=True)
+    # Per-dimension scores (backfilled from set diagnosis)
+    composite_score = Column(Float, nullable=True)
+    depth_score = Column(Float, nullable=True)
+    trunk_control_score = Column(Float, nullable=True)
+    knee_tracking_score = Column(Float, nullable=True)
+    symmetry_score = Column(Float, nullable=True)
+    # Full detail for ML training
+    kinematics = Column(JSONB, nullable=True)  # RepKinematicSummary dump
+    faults = Column(JSONB, nullable=True)  # faults_detailed list
+    timing = Column(JSONB, nullable=True)  # duration/descent/ascent
+    bottom_kpts = Column(JSONB, nullable=True)  # 17x3 keypoints at squat bottom
+    standing_kpts = Column(JSONB, nullable=True)  # 17x3 keypoints at standing
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    session = relationship("BiomechanicsSession", back_populates="reps")
+    set = relationship("BiomechanicsSet", back_populates="reps")
+
+    __table_args__ = (
+        Index("ix_biomech_reps_user_created", "user_id", "created_at"),
+    )
+
+
+class CueEvent(Base):
+    __tablename__ = "cue_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("biomechanics_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    set_id = Column(UUID(as_uuid=True), ForeignKey("biomechanics_sets.id", ondelete="SET NULL"), nullable=True)  # Backfilled at set end
+    rep_id = Column(UUID(as_uuid=True), ForeignKey("biomechanics_reps.id", ondelete="SET NULL"), nullable=True)  # Rep during which the cue fired
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    rep_number = Column(Integer, nullable=True)
+    fault_type = Column(String(50), nullable=False)
+    severity = Column(String(20), nullable=True)  # mild / moderate / severe
+    severity_score = Column(Float, nullable=True)
+    cue_key = Column(String(100), nullable=True)
+    cue_source = Column(String(30), default="cached_fault", nullable=False)  # cached_fault | llm_diagnosis
+    cause_id = Column(String(50), nullable=True)  # Diagnosis cause behind an LLM cue
+    message = Column(Text, nullable=True)
+    parameter_delta = Column(JSONB, nullable=True)
+    delivered = Column(Boolean, default=False, nullable=False)  # Cue audio actually played to the user
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Outcome columns — backfilled when the next rep / next set completes
+    present_next_rep = Column(Boolean, nullable=True)
+    severity_next_rep = Column(Float, nullable=True)
+    severity_next_set = Column(Float, nullable=True)
+    effective = Column(Boolean, nullable=True)  # Fault gone or less severe on next rep
+
+    # Relationships
+    session = relationship("BiomechanicsSession", back_populates="cue_events")
+    set = relationship("BiomechanicsSet", back_populates="cue_events")
+    rep = relationship("BiomechanicsRep")
+
+    __table_args__ = (
+        Index("ix_cue_events_user_fault", "user_id", "fault_type"),
+    )
 
 
 class DeloadHistory(Base):

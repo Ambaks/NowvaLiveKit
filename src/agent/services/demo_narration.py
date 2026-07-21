@@ -7,13 +7,15 @@ import logging
 
 from pydantic import BaseModel
 
+from agent.services.coaching_constants import COACHING_PERSONA
+
 logger = logging.getLogger(__name__)
 
 NARRATION_TIMEOUT_SECONDS = 8.0
 DEMO_LINE_WORD_LIMIT = 18
 
 _SCRIPT_PROMPT = (
-    "You are Nova, an energetic, world-class fitness coach on the Nowva smart squat rack. "
+    f"{COACHING_PERSONA} "
     "You just watched the user do 1 assessment squat and found the form issues listed "
     "below. The screen will show their own skeleton with each correction animated, one "
     "issue at a time.\n"

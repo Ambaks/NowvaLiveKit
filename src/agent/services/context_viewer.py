@@ -134,9 +134,10 @@ class ContextViewer:
         compaction = {"hot": "", "warm": "", "cold": "", "summary": "", "stats": {}}
         if self._compaction:
             try:
-                compaction["hot"] = self._compaction._format_events(self._compaction._event_buffer)
-                compaction["warm"] = self._compaction._warm or ""
-                compaction["cold"] = self._compaction._cold or ""
+                tiers = self._compaction.get_tier_snapshot()
+                compaction["hot"] = tiers["hot"]
+                compaction["warm"] = tiers["warm"] or ""
+                compaction["cold"] = tiers["cold"] or ""
                 compaction["summary"] = self._compaction.get_summary()
                 compaction["stats"] = self._compaction.get_stats()
             except Exception:

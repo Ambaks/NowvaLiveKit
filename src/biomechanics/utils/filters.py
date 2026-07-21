@@ -266,6 +266,7 @@ class JointAngleFilter:
             'knee_valgus_r': self._get_filter('knee_valgus_r').filter(angles.knee_valgus_r, timestamp),
             'foot_confidence_l': angles.foot_confidence_l,
             'foot_confidence_r': angles.foot_confidence_r,
+            'knee_ankle_sep_ratio': angles.knee_ankle_sep_ratio,
             'shoulder_flexion_l': self._get_filter('shoulder_flexion_l').filter(angles.shoulder_flexion_l, timestamp),
             'shoulder_flexion_r': self._get_filter('shoulder_flexion_r').filter(angles.shoulder_flexion_r, timestamp),
             'shoulder_abduction_l': self._get_filter('shoulder_abduction_l').filter(angles.shoulder_abduction_l, timestamp),

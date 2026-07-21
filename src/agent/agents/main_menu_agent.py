@@ -2,6 +2,7 @@
 MainMenuAgent - Primary interaction hub with schedule management, workout start, and program creation
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -549,7 +550,46 @@ class MainMenuAgent(BaseNovaAgent):
         Call this when the user wants to view their progress, stats, or history.
         """
         logger.info("[MAIN MENU] User requested to view progress")
-        return None, f"The user wants to see their progress. Acknowledge their request and let them know this feature is coming soon - they'll be able to see workout history, personal records, and progress charts. Keep it encouraging."
+        user_id = self.state.get("user.id")
+        if not user_id:
+            return None, (
+                "No user profile is loaded, so there is no progress data yet. "
+                "Let them know their progress tracking starts once they log in "
+                "and complete a workout."
+            )
+
+        def _fetch():
+            from db.biomechanics_persistence import (
+                get_progress_baseline,
+                get_score_progress,
+            )
+            db = SessionLocal()
+            try:
+                return (
+                    get_progress_baseline(db, user_id),
+                    get_score_progress(db, user_id),
+                )
+            finally:
+                db.close()
+
+        try:
+            baseline, score_rows = await asyncio.to_thread(_fetch)
+        except Exception:
+            logger.exception("[MAIN MENU] Progress fetch failed")
+            return None, (
+                "Progress data could not be loaded right now. Apologize briefly "
+                "and suggest trying again in a moment."
+            )
+
+        from agent.services.progress_context import build_progress_report
+        report = build_progress_report(score_rows, baseline)
+        return None, (
+            "Here is the user's real squat progress data:\n"
+            f"{report}\n"
+            "Present this conversationally in 2-4 sentences. Lead with the trend "
+            "if there is one, mention their biggest opportunity, and keep it "
+            "encouraging. Do not read every number."
+        )
 
     @function_tool
     async def update_profile(self, context: RunContext):

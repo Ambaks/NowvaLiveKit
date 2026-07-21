@@ -305,25 +305,30 @@ class TestLateralComCentering:
 
 class TestBalanceLean:
 
-    def test_rotation_preserves_relative_distances(self) -> None:
+    def test_rotation_preserves_segment_distances(self) -> None:
+        """Each spine segment preserves internal pairwise distances."""
         kpts = _make_19pt_skeleton()
         lean_rad = math.radians(15.0)
 
-        before_dists = []
-        for i in UPPER_BODY_INDICES:
-            for j in UPPER_BODY_INDICES:
-                if i < j:
-                    before_dists.append(np.linalg.norm(kpts[i] - kpts[j]))
+        head_indices = list(range(5))
+        trunk_indices = list(range(5, 11))
 
-        result = apply_lean_to_upper_body(kpts, lean_rad)
+        for segment in [head_indices, trunk_indices]:
+            before_dists = []
+            for i in segment:
+                for j in segment:
+                    if i < j:
+                        before_dists.append(np.linalg.norm(kpts[i] - kpts[j]))
 
-        after_dists = []
-        for i in UPPER_BODY_INDICES:
-            for j in UPPER_BODY_INDICES:
-                if i < j:
-                    after_dists.append(np.linalg.norm(result[i] - result[j]))
+            result = apply_lean_to_upper_body(kpts, lean_rad)
 
-        np.testing.assert_allclose(before_dists, after_dists, atol=1e-10)
+            after_dists = []
+            for i in segment:
+                for j in segment:
+                    if i < j:
+                        after_dists.append(np.linalg.norm(result[i] - result[j]))
+
+            np.testing.assert_allclose(before_dists, after_dists, atol=1e-10)
 
     def test_rotation_tilts_head_forward(self) -> None:
         kpts = _make_19pt_skeleton()

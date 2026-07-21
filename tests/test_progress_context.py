@@ -1,0 +1,176 @@
+"""
+Tests for progress context formatters: greeting line, recap comparisons,
+and the main-menu progress report.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from agent.services.progress_context import (
+    build_greeting_progress_line,
+    build_progress_comparison_lines,
+    build_progress_report,
+    build_session_comparison_line,
+)
+
+
+def _baseline(**overrides):
+    baseline = {
+        "session_date": "2026-07-15T10:00:00",
+        "days_ago": 3,
+        "mean_score": 0.72,
+        "per_dimension": {
+            "depth": 0.80,
+            "trunk_control": 0.75,
+            "knee_tracking": 0.60,
+            "symmetry": 0.78,
+        },
+        "total_reps": 24,
+        "total_sets": 3,
+        "top_faults": [{"fault_type": "knee_valgus", "count": 9, "avg_severity": 0.5}],
+        "avg_knee_valgus_deg": 14.2,
+        "avg_trunk_pitch_deg": 38.0,
+    }
+    baseline.update(overrides)
+    return baseline
+
+
+def _scoring(mean_score=0.78, **dims):
+    per_dimension = {
+        "depth": 0.78,
+        "trunk_control": 0.76,
+        "knee_tracking": 0.74,
+        "symmetry": 0.79,
+    }
+    per_dimension.update(dims)
+    return {"mean_score": mean_score, "per_dimension": per_dimension}
+
+
+class TestGreetingProgressLine:
+    def test_none_baseline_returns_none(self):
+        assert build_greeting_progress_line(None) is None
+
+    def test_full_baseline_mentions_key_facts(self):
+        line = build_greeting_progress_line(_baseline())
+        assert "3 days ago" in line
+        assert "72/100" in line
+        assert "knee tracking" in line
+        assert "14.2 degrees" in line
+        assert "knees caving in" in line
+
+    def test_same_day_phrasing(self):
+        line = build_greeting_progress_line(_baseline(days_ago=0))
+        assert "earlier today" in line
+
+    def test_minimal_baseline_still_builds(self):
+        line = build_greeting_progress_line(
+            _baseline(
+                mean_score=None,
+                per_dimension={},
+                top_faults=[],
+                avg_knee_valgus_deg=None,
+                total_reps=0,
+            )
+        )
+        assert "last squat session" in line
+
+
+class TestProgressComparisonLines:
+    def test_no_baseline_returns_empty(self):
+        assert build_progress_comparison_lines(None, _scoring()) == []
+
+    def test_no_scoring_returns_empty(self):
+        assert build_progress_comparison_lines(_baseline(), None) == []
+
+    def test_overall_delta_computed(self):
+        lines = build_progress_comparison_lines(_baseline(), _scoring(mean_score=0.78))
+        joined = " ".join(lines)
+        assert "72 -> 78" in joined
+        assert "+6 points" in joined
+
+    def test_dimension_deltas_above_threshold_included(self):
+        lines = build_progress_comparison_lines(_baseline(), _scoring())
+        joined = " ".join(lines)
+        # knee_tracking moved 0.60 -> 0.74 (+14): included
+        assert "knee tracking: 60 -> 74 (+14)" in joined
+        # depth moved 0.80 -> 0.78 (-2 < 3-point threshold): excluded
+        assert "depth: 80" not in joined
+
+    def test_delta_always_matches_rounded_endpoints(self):
+        # 0.716 -> 0.784: raw delta rounds to +7, but spoken endpoints are
+        # 72 and 78 — the stated delta must be their difference (+6)
+        lines = build_progress_comparison_lines(
+            _baseline(mean_score=0.716), _scoring(mean_score=0.784)
+        )
+        joined = " ".join(lines)
+        assert "72 -> 78" in joined
+        assert "+6 points" in joined
+
+    def test_missing_dimensions_skipped(self):
+        scoring = {"mean_score": 0.7, "per_dimension": {}}
+        lines = build_progress_comparison_lines(_baseline(), scoring)
+        joined = " ".join(lines)
+        assert "72 -> 70" in joined
+        assert "Changed vs last session" not in joined
+
+
+class TestSessionComparisonLine:
+    def test_improvement(self):
+        line = build_session_comparison_line(_baseline(), 0.80)
+        assert "8 points better" in line
+
+    def test_decline(self):
+        line = build_session_comparison_line(_baseline(), 0.65)
+        assert "7 points below" in line
+
+    def test_matched(self):
+        line = build_session_comparison_line(_baseline(), 0.72)
+        assert "matched" in line
+
+    def test_no_baseline_returns_none(self):
+        assert build_session_comparison_line(None, 0.8) is None
+        assert build_session_comparison_line(_baseline(mean_score=None), 0.8) is None
+
+
+def _score_row(mean_score, **dims):
+    row = {
+        "timestamp": None,
+        "set_number": 1,
+        "rep_count": 8,
+        "mean_score": mean_score,
+        "depth": 0.8,
+        "trunk_control": 0.75,
+        "knee_tracking": 0.65,
+        "symmetry": 0.78,
+        "trend_slope": 0.0,
+    }
+    row.update(dims)
+    return row
+
+
+class TestProgressReport:
+    def test_empty_rows(self):
+        report = build_progress_report([], None)
+        assert "No squat sessions recorded" in report
+
+    def test_trend_reported_with_enough_sets(self):
+        rows = [
+            _score_row(0.60),
+            _score_row(0.62),
+            _score_row(0.70),
+            _score_row(0.74),
+            _score_row(0.78),
+        ]
+        report = build_progress_report(rows, _baseline())
+        assert "5 squat sets recorded" in report
+        assert "Form score trend" in report
+        assert "Biggest opportunity: knee tracking" in report
+        assert "knees caving in" in report
+
+    def test_few_sets_skips_trend(self):
+        rows = [_score_row(0.60), _score_row(0.70)]
+        report = build_progress_report(rows, None)
+        assert "Form score trend" not in report
+        assert "2 squat sets recorded" in report

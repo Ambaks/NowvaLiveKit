@@ -13,6 +13,8 @@ import struct
 import json
 import os
 import logging
+import threading
+from collections import deque
 from typing import Callable, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,11 @@ logger = logging.getLogger(__name__)
 HEADER_FORMAT = ">I"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB safety limit
+
+# Bounded outbound queue so a slow peer never stalls the caller
+SEND_QUEUE_MAX_SIZE = 256
+FRAME_DATA_MESSAGE_TYPE = "frame_data"
+SENDER_JOIN_TIMEOUT_S = 2.0
 
 
 def _send_framed(sock: socket.socket, message: Dict[str, Any]) -> None:
@@ -62,34 +69,176 @@ def _recv_framed(sock: socket.socket) -> Optional[Dict[str, Any]]:
     return json.loads(data.decode('utf-8'))
 
 
+def _remove_socket_file(socket_path: str) -> None:
+    try:
+        os.unlink(socket_path)
+    except FileNotFoundError:
+        pass
+
+
+class _SendQueue:
+    """Bounded outbound message queue drained by a dedicated sender thread.
+
+    When full: new 'frame_data' messages are dropped (debug log); other
+    message types evict the oldest queued 'frame_data' if one exists,
+    otherwise the new message is dropped with a warning.
+    """
+
+    def __init__(self, name: str, get_socket_fn: Callable[[], Optional[socket.socket]]):
+        self._name = name
+        self._get_socket_fn = get_socket_fn
+        self._condition = threading.Condition()
+        self._messages: deque = deque()
+        self._stopped = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        with self._condition:
+            self._stopped = False
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(
+                target=self._drain, name=f"{self._name}-sender", daemon=True
+            )
+            self._thread.start()
+
+    def put(self, message: Dict[str, Any]) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            if len(self._messages) >= SEND_QUEUE_MAX_SIZE:
+                if message.get("type") == FRAME_DATA_MESSAGE_TYPE:
+                    logger.debug(f"{self._name}: send queue full — dropping frame_data")
+                    return
+                if not self._evict_oldest_frame_data():
+                    logger.warning(
+                        f"{self._name}: send queue full — dropping message "
+                        f"type={message.get('type')}"
+                    )
+                    return
+            self._messages.append(message)
+            self._condition.notify()
+
+    def stop(self) -> None:
+        with self._condition:
+            self._stopped = True
+            # Keep control messages for a synchronous flush below — final
+            # sends like 'error' or 'pipeline_status: stopped' are enqueued
+            # right before disconnect()/stop() and must not be lost
+            pending = [m for m in self._messages if m.get("type") != FRAME_DATA_MESSAGE_TYPE]
+            self._messages.clear()
+            self._condition.notify_all()
+        thread = self._thread
+        sender_finished = True
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=SENDER_JOIN_TIMEOUT_S)
+            sender_finished = not thread.is_alive()
+        if not sender_finished:
+            # Sender is wedged mid-sendall — flushing now would interleave
+            # bytes on the same socket and corrupt framing
+            if pending:
+                logger.warning(
+                    f"{self._name}: sender thread stuck at stop — "
+                    f"dropping {len(pending)} pending message(s)"
+                )
+            return
+        for message in pending:
+            sock = self._get_socket_fn()
+            if sock is None:
+                break
+            try:
+                _send_framed(sock, message)
+            except Exception as e:
+                logger.error(f"{self._name}: error flushing message at stop: {e}")
+                break
+
+    def _evict_oldest_frame_data(self) -> bool:
+        for index, queued in enumerate(self._messages):
+            if queued.get("type") == FRAME_DATA_MESSAGE_TYPE:
+                del self._messages[index]
+                logger.debug(f"{self._name}: send queue full — evicted oldest frame_data")
+                return True
+        return False
+
+    def _drain(self) -> None:
+        while True:
+            with self._condition:
+                while not self._messages and not self._stopped:
+                    self._condition.wait()
+                if self._stopped:
+                    return
+                message = self._messages.popleft()
+            sock = self._get_socket_fn()
+            if sock is None:
+                logger.debug(
+                    f"{self._name}: no peer connected — dropping message "
+                    f"type={message.get('type')}"
+                )
+                continue
+            try:
+                _send_framed(sock, message)
+            except Exception as e:
+                logger.error(f"{self._name}: error sending message: {e}")
+
+
 class IPCServer:
-    """IPC Server using UNIX domain sockets with length-prefix framing"""
+    """IPC Server using UNIX domain sockets with length-prefix framing.
+
+    Thread-safe: socket mutation is guarded by a lock and send_message()
+    only enqueues onto a bounded queue (SEND_QUEUE_MAX_SIZE) drained by a
+    background sender thread, so a slow peer never blocks the caller.
+    When the queue is full, 'frame_data' messages are dropped (debug log);
+    other message types evict the oldest queued 'frame_data' if possible,
+    otherwise the new message is dropped with a warning.
+
+    listen() re-accepts a new client after a disconnect, so a restarted
+    peer can reconnect without restarting the server.
+    """
 
     def __init__(self, socket_path: str = "/tmp/nowva_ipc.sock"):
         self.socket_path = socket_path
-        self.server_socket = None
-        self.client_socket = None
-        self.running = False
+        self.server_socket: Optional[socket.socket] = None
+        self.client_socket: Optional[socket.socket] = None
         self.message_callback: Optional[Callable[[Dict], None]] = None
+        self._lock = threading.Lock()
+        self._running = threading.Event()
+        self._sender = _SendQueue("IPCServer", self._get_client_socket)
+
+    @property
+    def running(self) -> bool:
+        return self._running.is_set()
+
+    def _get_client_socket(self) -> Optional[socket.socket]:
+        with self._lock:
+            return self.client_socket
 
     def bind(self, message_callback: Optional[Callable[[Dict], None]] = None):
         """Create and bind the server socket. Connectable immediately after return."""
-        if os.path.exists(self.socket_path):
-            os.remove(self.socket_path)
+        _remove_socket_file(self.socket_path)
 
-        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server_socket.bind(self.socket_path)
-        self.server_socket.listen(1)
+        server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server_socket.bind(self.socket_path)
+        server_socket.listen(1)
 
-        self.running = True
+        with self._lock:
+            self.server_socket = server_socket
+        self._running.set()
         self.message_callback = message_callback
+        self._sender.start()
 
         logger.info(f"IPC Server bound on {self.socket_path}")
 
     def accept_client(self):
         """Block until a client connects. Call after bind()."""
+        with self._lock:
+            server_socket = self.server_socket
+        if server_socket is None:
+            raise OSError("Server socket is not bound")
+
         logger.info("Waiting for client connection...")
-        self.client_socket, _ = self.server_socket.accept()
+        client_socket, _ = server_socket.accept()
+        with self._lock:
+            self.client_socket = client_socket
         logger.info("Client connected!")
 
     def start(self, message_callback: Optional[Callable[[Dict], None]] = None):
@@ -98,61 +247,103 @@ class IPCServer:
         self.accept_client()
 
     def listen(self):
-        """Listen for incoming framed messages in a loop."""
-        if not self.client_socket:
-            logger.warning("No client connected")
-            return
+        """Receive framed messages in a loop, re-accepting a new client on disconnect."""
+        while self._running.is_set():
+            with self._lock:
+                client_socket = self.client_socket
+            if client_socket is None:
+                if not self._accept_for_listen():
+                    return
+                continue
 
-        while self.running:
             try:
-                message = _recv_framed(self.client_socket)
-                if message is None:
-                    logger.info("Client disconnected")
-                    break
-
-                if self.message_callback:
-                    self.message_callback(message)
-
+                message = _recv_framed(client_socket)
             except json.JSONDecodeError as e:
                 logger.error(f"Error decoding message: {e}")
+                continue
             except (ConnectionError, ValueError) as e:
                 logger.error(f"Error in IPC server: {e}")
-                break
+                message = None
             except Exception as e:
+                if not self._running.is_set():
+                    return
                 logger.error(f"Unexpected error in IPC server: {e}")
-                break
+                message = None
+
+            if message is None:
+                logger.info("Client disconnected")
+                self._close_client_socket()
+                continue
+
+            if self.message_callback:
+                try:
+                    self.message_callback(message)
+                except Exception as e:
+                    logger.error(f"Error in message callback: {e}")
 
     def send_message(self, message: Dict[str, Any]):
-        """Send a framed message to the connected client."""
-        if not self.client_socket:
-            logger.warning("No client connected")
-            return
-
-        try:
-            _send_framed(self.client_socket, message)
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
+        """Enqueue a framed message for the connected client (never blocks)."""
+        self._sender.put(message)
 
     def stop(self):
         """Stop IPC server and clean up socket file."""
-        self.running = False
-        if self.client_socket:
-            self.client_socket.close()
-        if self.server_socket:
-            self.server_socket.close()
-        if os.path.exists(self.socket_path):
-            os.remove(self.socket_path)
+        self._running.clear()
+        self._sender.stop()
+        with self._lock:
+            client_socket = self.client_socket
+            server_socket = self.server_socket
+            self.client_socket = None
+            self.server_socket = None
+        if client_socket is not None:
+            client_socket.close()
+        if server_socket is not None:
+            server_socket.close()
+        _remove_socket_file(self.socket_path)
         logger.info("IPC Server stopped")
+
+    def _accept_for_listen(self) -> bool:
+        try:
+            self.accept_client()
+            return True
+        except OSError as e:
+            if self._running.is_set():
+                logger.error(f"Accept failed while waiting for client: {e}")
+            return False
+
+    def _close_client_socket(self) -> None:
+        with self._lock:
+            client_socket = self.client_socket
+            self.client_socket = None
+        if client_socket is not None:
+            client_socket.close()
 
 
 class IPCClient:
-    """IPC Client using UNIX domain sockets with length-prefix framing"""
+    """IPC Client using UNIX domain sockets with length-prefix framing.
+
+    Thread-safe: socket mutation is guarded by a lock and send_message()
+    only enqueues onto a bounded queue (SEND_QUEUE_MAX_SIZE) drained by a
+    background sender thread, so a slow peer never blocks the caller.
+    When the queue is full, 'frame_data' messages are dropped (debug log);
+    other message types evict the oldest queued 'frame_data' if possible,
+    otherwise the new message is dropped with a warning.
+    """
 
     def __init__(self, socket_path: str = "/tmp/nowva_ipc.sock"):
         self.socket_path = socket_path
-        self.client_socket = None
-        self.running = False
+        self.client_socket: Optional[socket.socket] = None
         self.message_callback: Optional[Callable[[Dict], None]] = None
+        self._lock = threading.Lock()
+        self._running = threading.Event()
+        self._sender = _SendQueue("IPCClient", self._get_client_socket)
+
+    @property
+    def running(self) -> bool:
+        return self._running.is_set()
+
+    def _get_client_socket(self) -> Optional[socket.socket]:
+        with self._lock:
+            return self.client_socket
 
     def connect(self, timeout: int = 10):
         """Connect to IPC server with retry."""
@@ -160,29 +351,37 @@ class IPCClient:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
+            client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
-                self.client_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                self.client_socket.connect(self.socket_path)
-                self.running = True
-                logger.info(f"IPC Client connected to {self.socket_path}")
-                return True
+                client_socket.connect(self.socket_path)
             except (FileNotFoundError, ConnectionRefusedError):
+                client_socket.close()
                 time.sleep(0.5)
+                continue
+
+            with self._lock:
+                self.client_socket = client_socket
+            self._running.set()
+            self._sender.start()
+            logger.info(f"IPC Client connected to {self.socket_path}")
+            return True
 
         logger.error(f"Failed to connect to IPC server after {timeout}s")
         return False
 
     def listen(self, message_callback: Optional[Callable[[Dict], None]] = None):
         """Listen for incoming framed messages."""
-        if not self.client_socket:
+        with self._lock:
+            client_socket = self.client_socket
+        if client_socket is None:
             logger.warning("Not connected to server")
             return
 
         self.message_callback = message_callback
 
-        while self.running:
+        while self._running.is_set():
             try:
-                message = _recv_framed(self.client_socket)
+                message = _recv_framed(client_socket)
                 if message is None:
                     logger.info("Server disconnected")
                     break
@@ -197,7 +396,7 @@ class IPCClient:
                 break
             except OSError:
                 # Expected during shutdown — socket was closed via disconnect()
-                if not self.running:
+                if not self._running.is_set():
                     break
                 logger.error("Unexpected OS error in IPC client")
                 break
@@ -206,25 +405,22 @@ class IPCClient:
                 break
 
     def send_message(self, message: Dict[str, Any]):
-        """Send a framed message to the server."""
-        if not self.client_socket:
-            logger.warning("Not connected to server")
-            return
-
-        try:
-            _send_framed(self.client_socket, message)
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
+        """Enqueue a framed message for the server (never blocks)."""
+        self._sender.put(message)
 
     def disconnect(self):
         """Disconnect from server."""
-        self.running = False
-        if self.client_socket:
+        self._running.clear()
+        self._sender.stop()
+        with self._lock:
+            client_socket = self.client_socket
+            self.client_socket = None
+        if client_socket is not None:
             try:
                 # Shut down the socket first to unblock any recv() calls
                 # in the listener thread, preventing "Bad file descriptor".
-                self.client_socket.shutdown(socket.SHUT_RDWR)
+                client_socket.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            self.client_socket.close()
+            client_socket.close()
         logger.info("IPC Client disconnected")

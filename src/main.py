@@ -7,7 +7,9 @@ Orchestrates voice agent and pose estimation with IPC communication
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
+import select
 import sys
 import signal
 import threading
@@ -21,8 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from agent.core.session_manager import SessionManager
 from agent.core.ipc_communication import IPCServer
 from agent.core.session_logger import SessionLogger
-from db import init_db, get_db
-from db.models import User
+from db import init_db
 from agent.agents.console_launcher import run_console_voice_onboarding, terminate_process_group
 from auth.user_management import create_user_account
 from dotenv import load_dotenv
@@ -34,6 +35,9 @@ from profiler.collector import SessionProfiler
 
 # Suppress SQLAlchemy INFO logs
 logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+
+DEFAULT_EXERCISE_NAME = "Barbell Back Squat"
+COACHING_SOCKET_PATH = "/tmp/nowva_coaching.sock"
 
 
 class _TeeStream:
@@ -63,6 +67,18 @@ if os.environ.get("NOWVA_LOG_CONSOLE", "").lower() == "true":
     _log_dir = Path("session_logs")
     _log_dir.mkdir(exist_ok=True)
     _tee_file = open(_log_dir / f"console_{_dt.now().strftime('%Y%m%d_%H%M%S')}.log", "w")
+    _original_stdout = sys.stdout
+    _original_stderr = sys.stderr
+
+    def _close_tee():
+        # Restore the real streams BEFORE closing the log file — CPython's
+        # final flush of sys.stdout would otherwise hit the closed tee file
+        # and fail interpreter finalization (exit code 120)
+        sys.stdout = _original_stdout
+        sys.stderr = _original_stderr
+        _tee_file.close()
+
+    atexit.register(_close_tee)
     sys.stdout = _TeeStream(sys.stdout, _tee_file)
     sys.stderr = _TeeStream(sys.stderr, _tee_file)
 
@@ -82,24 +98,18 @@ class NowvaApp:
         self._recording_process = None
         self._recording_log = None
         self._session_dir: Path | None = None
+        self._fastapi_log = None
+        self._cal_file: str | None = None
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _signal_handler(self, signum, frame):
-        """Handle shutdown signals by resetting state"""
-        print("\n[SIGNAL] Received shutdown signal - cleaning up state...")
-        if self.state:
-            try:
-                self.state.switch_mode("main_menu")
-                self.state.set("workout.active", False)
-                self.state.set("shutdown_requested", False)
-                self.state.save_state()
-                print("[SIGNAL] State reset to main_menu")
-            except Exception as e:
-                print(f"[SIGNAL] Error resetting state: {e}")
-        # Re-raise to allow normal shutdown
+        """Trigger graceful shutdown. State reset happens in _cleanup(), which
+        run() guarantees via try/finally — mutating state here could interrupt
+        the main thread mid-reload and corrupt it."""
+        print("\n[SIGNAL] Received shutdown signal - shutting down...")
         raise KeyboardInterrupt
 
     def _start_fastapi_server(self):
@@ -109,14 +119,19 @@ class NowvaApp:
         env["PYTHONPATH"] = str(Path(__file__).parent)
         env["DYLD_FALLBACK_LIBRARY_PATH"] = f"/opt/homebrew/lib:{env.get('DYLD_FALLBACK_LIBRARY_PATH', '')}"
 
+        # Log to a file instead of PIPE — undrained pipes fill the OS buffer
+        # (~16KB) and deadlock uvicorn once it has logged enough.
+        log_dir = Path("session_logs")
+        log_dir.mkdir(exist_ok=True)
+        self._fastapi_log = open(log_dir / "fastapi.log", "w")
         self.fastapi_process = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "api.main:app", "--port", "8000"],
             cwd=project_root,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self._fastapi_log,
+            stderr=subprocess.STDOUT,
         )
-        print(f"[FASTAPI] Server started (PID: {self.fastapi_process.pid})")
+        print(f"[FASTAPI] Server started (PID: {self.fastapi_process.pid}, logs: {log_dir / 'fastapi.log'})")
 
     # ------------------------------------------------------------------
     #  Screen + audio recording (NOWVA_RECORD_SESSION=true)
@@ -323,38 +338,8 @@ class NowvaApp:
             print(f"Error creating user: {e}")
             return None, None
 
-    def start_ipc_server(self):
-        """Start IPC server in a separate thread"""
-        def ipc_message_handler(message: dict):
-            """Handle messages from pose estimation process"""
-            msg_type = message.get('type')
-            value = message.get('value')
-
-            if msg_type == 'rep_count':
-                print(f"[IPC] Rep count: {value}")
-            elif msg_type == 'feedback':
-                print(f"[IPC] Form feedback: {value}")
-            elif msg_type == 'status':
-                print(f"[IPC] Status: {value}")
-            elif msg_type == 'error':
-                print(f"[IPC] Error: {value}")
-
-        # Initialize IPC server
-        self.ipc_server = IPCServer()
-
-        def run_server():
-            self.ipc_server.start(message_callback=ipc_message_handler)
-            self.ipc_server.listen()
-
-        # Start server in thread
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        server_thread.start()
-        print("IPC Server started in background thread")
-
-        return server_thread
-
     def start_pose_estimation(self, cam0_id: int = 0, cam1_id: int = 1,
-                              exercise_name: str = "Barbell Back Squat",
+                              exercise_name: str = DEFAULT_EXERCISE_NAME,
                               calibration_file: str = None,
                               calibration_mode: bool = False,
                               preload: bool = False):
@@ -443,14 +428,17 @@ class NowvaApp:
             from db.models import User
 
             db = next(get_db())
-            user = db.query(User).filter(User.email == email).first()
+            try:
+                user = db.query(User).filter(User.email == email).first()
 
-            if not user:
-                print("Failed to retrieve user after onboarding")
-                return (False, agent_process)
+                if not user:
+                    print("Failed to retrieve user after onboarding")
+                    return (False, agent_process)
 
-            user_id = str(user.id)
-            actual_username = user.username
+                user_id = str(user.id)
+                actual_username = user.username
+            finally:
+                db.close()
 
         except Exception as e:
             print(f"Error retrieving user: {e}")
@@ -543,11 +531,15 @@ class NowvaApp:
 
             # Start voice agent for returning user
             from agent.agents.console_launcher import run_console_voice_agent
-            self._voice_agent_process = await run_console_voice_agent(
-                user_id=self.current_user['user_id'],
-                state_notify_fd=state_pipe_w,
-            )
-            os.close(state_pipe_w)
+            try:
+                self._voice_agent_process = await run_console_voice_agent(
+                    user_id=self.current_user['user_id'],
+                    state_notify_fd=state_pipe_w,
+                )
+            finally:
+                # Always close our copy of the write end — a leaked fd would
+                # keep the read end from ever seeing EOF
+                os.close(state_pipe_w)
 
         else:
             # Create notification pipe before onboarding subprocess launches
@@ -555,10 +547,11 @@ class NowvaApp:
             os.set_blocking(self._state_pipe_r, False)
 
             # Run onboarding - returns (success, agent_process)
-            success, voice_agent_process = await self.run_onboarding(state_notify_fd=state_pipe_w)
-            self._voice_agent_process = voice_agent_process
-
-            os.close(state_pipe_w)
+            try:
+                success, voice_agent_process = await self.run_onboarding(state_notify_fd=state_pipe_w)
+                self._voice_agent_process = voice_agent_process
+            finally:
+                os.close(state_pipe_w)
 
             if not success:
                 print("Onboarding failed. Exiting.")
@@ -578,41 +571,36 @@ class NowvaApp:
         def _coaching_message_handler(message: dict):
             """Handle messages FROM voice agent (reverse direction)."""
             msg_type = message.get("type")
+            if msg_type not in ("rest_start", "workout_complete", "demo_start",
+                                "demo_cue", "demo_end", "assessment_mode"):
+                return
             if msg_type == "rest_start":
                 rest_sec = message.get("rest_seconds", 30)
                 print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
-                if self.ipc_server and self.ipc_server.client_socket:
-                    try:
-                        self.ipc_server.send_message(message)
-                        print(f"[REST] Forwarded rest_start to pose process")
-                    except Exception as e:
-                        print(f"[REST] Failed to forward to pose process: {e}")
             elif msg_type == "workout_complete":
                 print("[COACHING IPC] Received workout_complete from voice agent")
-                if self.ipc_server and self.ipc_server.client_socket:
-                    try:
-                        self.ipc_server.send_message(message)
-                        print("[COACHING IPC] Forwarded workout_complete to pose process")
-                    except Exception as e:
-                        print(f"[COACHING IPC] Failed to forward workout_complete: {e}")
-            elif msg_type in ("demo_start", "demo_cue", "demo_end", "assessment_mode"):
-                if self.ipc_server and self.ipc_server.client_socket:
-                    try:
-                        self.ipc_server.send_message(message)
-                        print(f"[COACHING IPC] Forwarded {msg_type} to pose process")
-                    except Exception as e:
-                        print(f"[COACHING IPC] Failed to forward {msg_type}: {e}")
+            # Snapshot the reference — this runs on the coaching IPC thread
+            # while the main loop can nil self.ipc_server during shutdown
+            pose_ipc = self.ipc_server
+            if pose_ipc and pose_ipc.client_socket:
+                try:
+                    pose_ipc.send_message(message)
+                    print(f"[COACHING IPC] Forwarded {msg_type} to pose process")
+                except Exception as e:
+                    print(f"[COACHING IPC] Failed to forward {msg_type}: {e}")
 
-        self.coaching_ipc = IPCServer(socket_path="/tmp/nowva_coaching.sock")
+        self.coaching_ipc = IPCServer(socket_path=COACHING_SOCKET_PATH)
         self.coaching_ipc.bind(message_callback=_coaching_message_handler)
 
         def _run_coaching_server():
+            # Snapshot — the main loop nils self.coaching_ipc during shutdown
+            coaching = self.coaching_ipc
             try:
-                self.coaching_ipc.accept_client()
-                self.coaching_ipc.listen()
+                coaching.accept_client()
+                coaching.listen()
             except OSError:
                 # Expected when stop() closes the socket during shutdown
-                if self.coaching_ipc.running:
+                if coaching.running:
                     raise
 
         threading.Thread(target=_run_coaching_server, daemon=True).start()
@@ -632,7 +620,6 @@ class NowvaApp:
         last_mode = self.state.get_mode()
 
         # Set stdout to line-buffered mode for immediate output
-        import sys
         sys.stdout.flush()
 
         try:
@@ -651,7 +638,6 @@ class NowvaApp:
                 state_notified = False
                 had_output = False
                 try:
-                    import select
                     read_fds = []
                     if self._voice_agent_process.stdout:
                         read_fds.append(self._voice_agent_process.stdout)
@@ -673,7 +659,10 @@ class NowvaApp:
                                 except BlockingIOError:
                                     pass
                                 state_notified = True
-                except Exception:
+                except (OSError, ValueError):
+                    # Expected when an fd closes mid-select during shutdown.
+                    # Anything else is a real bug — let it propagate instead
+                    # of silently hanging the app.
                     pass
 
                 if state_notified:
@@ -764,25 +753,28 @@ class NowvaApp:
                             if msg_type and msg_type != 'frame_data':
                                 self._profiler.record("ipc", msg_type, direction="pose_to_main")
 
-                            # Forward coaching-relevant messages to voice agent
+                            # Forward coaching-relevant messages to voice agent.
+                            # Snapshot the reference — this runs on the pose IPC
+                            # thread while the main loop can nil self.coaching_ipc
                             if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep', 'demo_abort'):
-                                if self.coaching_ipc and self.coaching_ipc.client_socket:
+                                coaching = self.coaching_ipc
+                                if coaching and coaching.client_socket:
                                     try:
-                                        self.coaching_ipc.send_message(message)
+                                        coaching.send_message(message)
                                     except Exception as e:
                                         print(f"[COACHING IPC] Forward failed: {e}")
                                 else:
                                     print(f"[COACHING IPC] No voice agent connected — dropping {msg_type}")
 
-                        # Create IPC server directly with the correct handler
-                        # (avoids race condition with start_ipc_server's old handler)
                         self.ipc_server = IPCServer()
                         self.ipc_server.bind(message_callback=ipc_message_handler)
                         print("[IPC] Server ready")
 
-                        def run_server():
-                            self.ipc_server.accept_client()
-                            self.ipc_server.listen()
+                        def run_server(pose_ipc=self.ipc_server):
+                            # Bound as default arg — the main loop can nil
+                            # self.ipc_server while this thread is running
+                            pose_ipc.accept_client()
+                            pose_ipc.listen()
 
                         ipc_thread = threading.Thread(target=run_server, daemon=True)
                         ipc_thread.start()
@@ -791,13 +783,13 @@ class NowvaApp:
                     # Launch the subprocess with --preload as soon as IPC
                     # is bound so the model loads while the greeting plays.
                     if not self.pose_process and not getattr(self, 'simulate_mode', False):
-                        exercise_name = self.state.get("workout.exercise_name", "Barbell Back Squat")
+                        exercise_name = self.state.get("workout.exercise_name", DEFAULT_EXERCISE_NAME)
                         if not exercise_name:
                             session_data = self.state.get("workout.current_session")
                             if session_data and session_data.get("exercises"):
-                                exercise_name = session_data["exercises"][0].get("exercise_name", "Barbell Back Squat")
+                                exercise_name = session_data["exercises"][0].get("exercise_name", DEFAULT_EXERCISE_NAME)
                             else:
-                                exercise_name = "Barbell Back Squat"
+                                exercise_name = DEFAULT_EXERCISE_NAME
 
                         cal_mode = bool(self.state.get("calibration.active"))
                         cal_file = None
@@ -807,6 +799,7 @@ class NowvaApp:
                             cal_file = os.path.join(tempfile.gettempdir(), f"nowva_cal_{id(self)}.json")
                             with open(cal_file, "w") as f:
                                 json.dump(cal_profile, f)
+                            self._cal_file = cal_file
                             print(f"[CALIBRATION] Wrote calibration profile to {cal_file}")
 
                         self.start_pose_estimation(
@@ -831,8 +824,11 @@ class NowvaApp:
                     else:
                         # Signal the preloaded subprocess to open camera
                         if self.ipc_server and self.ipc_server.client_socket:
-                            self.ipc_server.send_message({"type": "start_capture"})
-                            print("[PRELOAD] Sent start_capture — camera opening")
+                            try:
+                                self.ipc_server.send_message({"type": "start_capture"})
+                                print("[PRELOAD] Sent start_capture — camera opening")
+                            except Exception as e:
+                                print(f"[PRELOAD] Failed to send start_capture: {e}")
 
                     pose_running = True
                     print("[POSE] Pose estimation started" if not getattr(self, 'simulate_mode', False) else "[SIMULATE] IPC servers ready — waiting for simulator")
@@ -901,6 +897,16 @@ class NowvaApp:
             print("Stopping FastAPI server...")
             self.fastapi_process.terminate()
             self.fastapi_process.wait()
+        if self._fastapi_log:
+            self._fastapi_log.close()
+            self._fastapi_log = None
+
+        if self._cal_file:
+            try:
+                os.unlink(self._cal_file)
+            except OSError:
+                pass
+            self._cal_file = None
 
         if self.ipc_server:
             print("Stopping IPC server...")

@@ -61,7 +61,7 @@ bone_constraints:
 
 standing_gate:
   min_confidence: 0.5
-  max_knee_flexion_deg: 20.0
+  max_knee_flexion_deg: 25.0
   max_trunk_flexion_deg: 25.0
   min_torso_length_m: 0.25
   max_torso_length_m: 0.80

@@ -581,6 +581,14 @@ class CompactionService:
         """Return number of events in the pending buffer."""
         return len(self._event_buffer)
 
+    def get_tier_snapshot(self) -> dict[str, str]:
+        """Return formatted HOT/WARM/COLD tier contents for debug display."""
+        return {
+            "hot": self._format_events(self._event_buffer),
+            "warm": self._warm,
+            "cold": self._cold,
+        }
+
     def get_stats(self) -> dict[str, Any]:
         """Return compaction stats for monitoring and debug logging."""
         input_cost = (self._total_input_tokens / 1_000_000) * _INPUT_COST_PER_M

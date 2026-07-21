@@ -83,10 +83,13 @@ class ForwardLeanConfig(BaseModel):
 
 
 class KneeValgusConfig(BaseModel):
-    """Knee valgus fault thresholds."""
+    """Knee valgus fault thresholds (3D triangulated and 2D FPPA)."""
     mild: float = 12.0
     moderate: float = 17.0
     severe: float = 24.0
+    mild_2d: float = 6.0
+    moderate_2d: float = 10.0
+    severe_2d: float = 16.0
 
 
 class FaultsConfig(BaseModel):
@@ -225,6 +228,14 @@ class PositionFilterConfig(BaseModel):
     d_cutoff: float = 1.0
 
 
+class DisplayFilterConfig(BaseModel):
+    """One Euro Filter for 2D skeleton overlay smoothing (display-only)."""
+    enabled: bool = True
+    min_cutoff: float = 1.5
+    beta: float = 0.5
+    d_cutoff: float = 1.0
+
+
 class PredictiveStateConfig(BaseModel):
     """Predictive fault pre-cueing configuration."""
     horizon_seconds: float = 0.2
@@ -234,7 +245,7 @@ class PredictiveStateConfig(BaseModel):
 class StandingGateConfig(BaseModel):
     """Standing pose gate configuration."""
     min_confidence: float = 0.5
-    max_knee_flexion_deg: float = 20.0
+    max_knee_flexion_deg: float = 25.0
     max_trunk_flexion_deg: float = 25.0
     min_torso_length_m: float = 0.25
     max_torso_length_m: float = 0.80
@@ -278,6 +289,7 @@ class BiomechanicsConfig(BaseModel):
     ground_clamp: GroundClampConfig = Field(default_factory=GroundClampConfig)
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
     position_filter: PositionFilterConfig = Field(default_factory=PositionFilterConfig)
+    display_filter: DisplayFilterConfig = Field(default_factory=DisplayFilterConfig)
     predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
     standing_gate: StandingGateConfig = Field(default_factory=StandingGateConfig)
     readiness_gate: ReadinessGateConfig = Field(default_factory=ReadinessGateConfig)
@@ -405,6 +417,9 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
 
     if "position_filter" in raw_config:
         config_dict["position_filter"] = PositionFilterConfig(**raw_config["position_filter"])
+
+    if "display_filter" in raw_config:
+        config_dict["display_filter"] = DisplayFilterConfig(**raw_config["display_filter"])
 
     if "predictive_state" in raw_config:
         config_dict["predictive_state"] = PredictiveStateConfig(**raw_config["predictive_state"])
