@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Plus_Jakarta_Sans, Syne } from "next/font/google";
+import { JetBrains_Mono, Plus_Jakarta_Sans, Sora } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import "./globals.css";
 import { IntroLoader } from "@/components/layout/IntroLoader";
@@ -7,10 +7,10 @@ import { Providers } from "@/components/layout/Providers";
 import { CookieBanner } from "@/components/layout/CookieBanner";
 import { DELIVERY, GA_ID, SITE_NAME, SITE_URL } from "@/lib/constants";
 
-const syne = Syne({
+const sora = Sora({
   subsets: ["latin"],
-  weight: ["700", "800"],
-  variable: "--font-syne",
+  weight: ["600", "700", "800"],
+  variable: "--font-sora",
 });
 
 const jakarta = Plus_Jakarta_Sans({
@@ -63,7 +63,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${syne.variable} ${jakarta.variable} ${jetbrains.variable} antialiased`}
+      className={`${sora.variable} ${jakarta.variable} ${jetbrains.variable} antialiased`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: INTRO_SCRIPT }} />

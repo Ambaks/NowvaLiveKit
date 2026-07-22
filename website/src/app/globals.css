@@ -81,7 +81,7 @@
   --color-on-cta: var(--on-cta);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
-  --font-display: var(--font-syne), ui-serif, serif;
+  --font-display: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
@@ -322,7 +322,7 @@ html[data-intro="off"] .hero-img-in {
 }
 
 .intro-loader__word {
-  font-family: var(--font-syne);
+  font-family: var(--font-sora);
   font-weight: 800;
   font-size: 1.05rem;
   letter-spacing: 0.55em;
