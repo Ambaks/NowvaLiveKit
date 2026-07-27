@@ -49,6 +49,23 @@ def _standing_skeleton(
     return pts
 
 
+def _folded_skeleton() -> np.ndarray:
+    """Hallucinated folded-leg skeleton matching session 2026-07-22_11-39-49:
+    ankles at hip height, feet at knee height, bone lengths plausible."""
+    pts = np.zeros((19, 3))
+    pts[CK.LEFT_SHOULDER] = [-0.18, -0.42, 0.0]
+    pts[CK.RIGHT_SHOULDER] = [0.18, -0.42, 0.0]
+    pts[CK.LEFT_HIP] = [-0.10, 0.0, 0.03]
+    pts[CK.RIGHT_HIP] = [0.10, 0.0, -0.03]
+    pts[CK.LEFT_KNEE] = [-0.15, 0.34, -0.24]
+    pts[CK.RIGHT_KNEE] = [0.15, 0.34, -0.24]
+    pts[CK.LEFT_ANKLE] = [-0.12, 0.05, 0.07]
+    pts[CK.RIGHT_ANKLE] = [0.12, 0.05, 0.07]
+    pts[CK.LEFT_FOOT_INDEX] = [-0.25, 0.36, -0.18]
+    pts[CK.RIGHT_FOOT_INDEX] = [0.25, 0.36, -0.18]
+    return pts
+
+
 def _calibrate(clamp: GroundClamp, frames: int = 30) -> None:
     for i in range(frames):
         clamp.clamp(_make_skeleton(
@@ -180,3 +197,40 @@ class TestGroundClamp:
         assert clamp.is_calibrated
         clamp.reset()
         assert not clamp.is_calibrated
+
+
+class TestCalibrationSanity:
+    """Calibration must be rejected when the observed leg extension is
+    implausible for a standing person — otherwise a hallucinated folded
+    pose (ankles at hip height) gets locked in and enforced all session
+    (regression from session 2026-07-22_11-39-49)."""
+
+    def test_folded_calibration_rejected(self):
+        clamp = GroundClamp(calibration_frames=5)
+        pts = _folded_skeleton()
+        for i in range(20):
+            result = clamp.clamp(_make_skeleton(pts, frame_index=i))
+            assert np.allclose(result.to_numpy(), pts, atol=1e-10)
+        assert not clamp.is_calibrated
+
+    def test_recovers_after_rejected_calibration(self):
+        clamp = GroundClamp(calibration_frames=5)
+        for i in range(5):
+            clamp.clamp(_make_skeleton(_folded_skeleton(), frame_index=i))
+        assert not clamp.is_calibrated
+
+        _calibrate(clamp, frames=5)
+        assert clamp.is_calibrated
+
+        # Calibrated values must come from the sane frames: a floor-
+        # penetrating ankle clamps to the sane 0.9, not the folded 0.05.
+        pts = _standing_skeleton()
+        pts[CK.LEFT_ANKLE, 1] = 0.95
+        pts[CK.RIGHT_ANKLE, 1] = 0.95
+        result = clamp.clamp(_make_skeleton(pts, frame_index=20))
+        assert result.to_numpy()[CK.LEFT_ANKLE, 1] == pytest.approx(0.9, abs=1e-6)
+
+    def test_sane_calibration_still_accepted(self):
+        clamp = GroundClamp(calibration_frames=5)
+        _calibrate(clamp, frames=5)
+        assert clamp.is_calibrated

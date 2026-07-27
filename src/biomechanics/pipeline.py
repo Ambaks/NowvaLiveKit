@@ -139,6 +139,7 @@ class BiomechanicsPipeline:
             max_trunk_flexion_deg=sg.max_trunk_flexion_deg,
             min_torso_length_m=sg.min_torso_length_m,
             max_torso_length_m=sg.max_torso_length_m,
+            min_leg_extension_ratio=sg.min_leg_extension_ratio,
             required_consecutive_frames=sg.required_consecutive_frames,
         )
 
@@ -152,6 +153,7 @@ class BiomechanicsPipeline:
             max_trunk_flexion_deg=rg.max_trunk_flexion_deg,
             min_torso_length_m=rg.min_torso_length_m,
             max_torso_length_m=rg.max_torso_length_m,
+            min_leg_extension_ratio=rg.min_leg_extension_ratio,
             required_consecutive_frames=rg.required_consecutive_frames,
         )
 
@@ -185,6 +187,7 @@ class BiomechanicsPipeline:
                 calibration_frames=self.config.ground_clamp.calibration_frames,
                 stance_width_tolerance_m=self.config.ground_clamp.stance_width_tolerance_m,
                 ankle_y_tolerance_m=self.config.ground_clamp.ankle_y_tolerance_m,
+                min_leg_extension_ratio=self.config.ground_clamp.min_leg_extension_ratio,
                 standing_gate=self._standing_gate,
             )
             self._rom_clamp = ROMClamp()

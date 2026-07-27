@@ -173,7 +173,7 @@ class TestStandingGateBlocksCalibration:
         bc = BoneLengthConstraints(calibration_frames=5, standing_gate=gate)
 
         bad_pts = _standing_skeleton()
-        bad_pts[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]  # bent knee
+        bad_pts[CK.LEFT_KNEE] = [0.35, 0.60, 0.0]  # bent knee (frontal plane)
 
         # 10 frames with bad pose — gate doesn't pass, calibration doesn't advance
         for i in range(10):

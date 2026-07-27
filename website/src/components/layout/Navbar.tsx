@@ -32,15 +32,18 @@ export function Navbar() {
     >
       <div
         className={cn(
-          "border-b transition-colors duration-500",
+          "border-b transition-[background-color,border-color,box-shadow] duration-500",
           scrolled
-            ? "border-border bg-bg/80 backdrop-blur-xl"
+            ? "border-[color-mix(in_oklab,var(--accent)_20%,var(--border))] bg-bg/80 shadow-[0_12px_40px_-24px_var(--glow)] backdrop-blur-xl"
             : "border-transparent bg-transparent",
         )}
       >
         <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 md:px-8">
-          <a href="#top" className="flex items-center gap-3" aria-label="NOWVA — back to top">
-            <ThemedLogo size={26} />
+          <a href="#top" className="group flex items-center gap-3" aria-label="NOWVA — back to top">
+            <ThemedLogo
+              size={26}
+              className="transition-[filter] duration-300 group-hover:drop-shadow-[0_0_9px_color-mix(in_oklab,var(--accent)_50%,transparent)]"
+            />
             <span className="font-display text-sm font-extrabold tracking-[0.3em] text-fg">
               NOWVA
             </span>
@@ -51,9 +54,13 @@ export function Navbar() {
               <a
                 key={link.href}
                 href={link.href}
-                className="text-sm text-fg-2 transition-colors duration-200 hover:text-fg"
+                className="group relative text-sm text-fg-2 transition-colors duration-200 hover:text-fg"
               >
                 {link.label}
+                <span
+                  aria-hidden
+                  className="absolute inset-x-0 -bottom-1 h-px origin-left scale-x-0 bg-accent-ink transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-x-100"
+                />
               </a>
             ))}
           </div>

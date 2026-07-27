@@ -1,18 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { updateConsent } from "@/lib/analytics";
 
-export function CookieBanner() {
-  const [visible, setVisible] = useState(false);
+const emptySubscribe = () => () => {};
 
-  useEffect(() => {
-    try {
-      if (!localStorage.getItem("nv-consent")) setVisible(true);
-    } catch {
-      /* storage unavailable — stay hidden */
-    }
-  }, []);
+const readNoConsent = () => {
+  try {
+    return !localStorage.getItem("nv-consent");
+  } catch {
+    /* storage unavailable — stay hidden */
+    return false;
+  }
+};
+
+export function CookieBanner() {
+  const [dismissed, setDismissed] = useState(false);
+  const noConsent = useSyncExternalStore(
+    emptySubscribe,
+    readNoConsent,
+    () => false,
+  );
+  const visible = noConsent && !dismissed;
 
   const decide = (granted: boolean) => {
     try {
@@ -21,7 +30,7 @@ export function CookieBanner() {
       /* ignore */
     }
     updateConsent(granted);
-    setVisible(false);
+    setDismissed(true);
   };
 
   if (!visible) return null;

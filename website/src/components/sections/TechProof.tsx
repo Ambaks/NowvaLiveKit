@@ -50,25 +50,25 @@ const SHOTS: Shot[] = [
   },
 ];
 
-const SPECS = [
-  "Multi-camera 3D triangulation",
-  "20+ keypoints · 30 fps",
-  "IK solve ~1–2 ms / frame",
-  "Fault-to-cue < 50 ms",
-  "Severity: mild / moderate / severe",
-  "Anatomy-calibrated thresholds",
-] as const;
+type Spec = {
+  key: string;
+  value: string;
+};
 
-const PRIVACY_POINTS = [
-  "No cloud video processing",
-  "No uploads — footage never leaves the rack",
-  "Coaching runs on the rack's own computer",
-] as const;
+const SPECS: Spec[] = [
+  { key: "Reconstruction", value: "Multi-camera 3D triangulation" },
+  { key: "Pose rate", value: "30 fps · 21 tracked points" },
+  { key: "IK solve", value: "~1–2 ms / frame" },
+  { key: "Fault-to-cue", value: "< 50 ms" },
+  { key: "Severity grading", value: "mild / moderate / severe" },
+  { key: "Fault thresholds", value: "calibrated per athlete" },
+];
 
 function ShotFigure({ shot, delay }: { shot: Shot; delay: number }) {
   return (
     <Reveal delay={delay} className={shot.wide ? "md:col-span-2" : undefined}>
-      <figure className="group flex h-full flex-col overflow-hidden rounded-xl border border-border bg-[#0a0a0b]">
+      {/* Fixed-dark card: the `dark` scope makes theme tokens resolve to dark values in both themes. */}
+      <figure className="dark group flex h-full flex-col overflow-hidden rounded-xl border border-border bg-bg">
         <div className={cn("overflow-hidden", shot.cover && "aspect-2/1")}>
           <Image
             src={shot.src}
@@ -101,10 +101,10 @@ export function TechProof() {
           title={
             <>
               The rack ships in 2027.{" "}
-              <span className="gradient-text">The intelligence works today.</span>
+              <span className="gradient-text">The engine works today.</span>
             </>
           }
-          lead="This is live telemetry from our biomechanics engine — the same software that will run inside every Nowva Rack. Real skeletons, real fault detection, real sessions in our lab."
+          lead="This is live telemetry from our biomechanics engine — the same software that ships inside every Nowva Rack. Real athletes, real faults, caught mid-rep in our lab. We proved the engine on the squat, the most unforgiving of the big lifts; every movement that follows runs on the same stack."
         />
 
         <div className="mt-16 grid gap-5 md:grid-cols-3">
@@ -118,22 +118,29 @@ export function TechProof() {
 
         <Reveal className="mt-14">
           <div className="rounded-2xl border border-border bg-surface p-7 md:p-9">
-            <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-x-10 gap-y-4 sm:grid-cols-2">
               {SPECS.map((spec) => (
-                <p key={spec} className="flex items-center gap-3 font-mono text-sm text-fg">
-                  <span className="size-1 shrink-0 rounded-full bg-accent" aria-hidden />
-                  {spec}
-                </p>
+                <div
+                  key={spec.key}
+                  className="flex items-baseline justify-between gap-4 border-b border-border pb-3"
+                >
+                  <span className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-fg-2">
+                    {spec.key}
+                  </span>
+                  <span className="text-right font-mono text-sm text-fg">
+                    {spec.value}
+                  </span>
+                </div>
               ))}
             </div>
-            <p className="mt-7 border-t border-border pt-5 font-mono text-[0.65rem] uppercase tracking-[0.18em] text-fg-2">
+            <p className="mt-7 font-mono text-[0.65rem] uppercase tracking-[0.18em] text-fg-2">
               Measured on our lab prototype
             </p>
           </div>
         </Reveal>
 
         <Reveal className="mt-14">
-          <div className="grid items-center gap-8 rounded-2xl border border-accent/25 bg-surface p-8 md:grid-cols-[auto_1fr] md:p-10">
+          <div className="gradient-border aurora-bg grid items-center gap-8 rounded-2xl p-8 md:grid-cols-[auto_1fr] md:p-10">
             <ShieldCheck
               className="size-12 text-accent-ink md:size-14"
               strokeWidth={1.4}
@@ -141,25 +148,17 @@ export function TechProof() {
             />
             <div>
               <h3 className="font-display text-2xl font-bold tracking-tight text-fg">
-                Cameras that never phone home.
+                Fully Local Intelligence.
               </h3>
               <p className="mt-3 max-w-2xl leading-relaxed text-fg-2">
-                Everything runs on a dedicated AI computer inside the rack.
-                Your video is processed on-device and never leaves it — no
-                cloud, no uploads, no account required to lift. Edge AI isn&apos;t
-                just faster. It&apos;s the only version of this product we&apos;d put in
-                our own homes.
+                The biomechanics engine runs in our lab today, processing
+                every frame before the next one arrives. Every rack ships
+                with a single embedded computer that runs the entire stack —
+                multi-camera 3D reconstruction, inverse kinematics, real-time
+                fault detection, and Nova&apos;s voice. No server, no cloud,
+                no round-trip latency. Your footage never leaves the machine
+                it was captured on.
               </p>
-              <ul className="mt-5 flex flex-wrap gap-x-8 gap-y-2">
-                {PRIVACY_POINTS.map((point) => (
-                  <li
-                    key={point}
-                    className="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-accent-ink"
-                  >
-                    {point}
-                  </li>
-                ))}
-              </ul>
             </div>
           </div>
         </Reveal>

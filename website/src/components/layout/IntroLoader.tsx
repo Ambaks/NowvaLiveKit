@@ -11,11 +11,16 @@ export function IntroLoader() {
         alt=""
         width={76}
         height={76}
-        priority
+        preload
         className="intro-loader__logo"
       />
       <div className="intro-loader__word">NOWVA</div>
       <div className="intro-loader__bar" />
+      <div className="intro-loader__status">
+        <span>Calibrating cameras</span>
+        <span>Loading pose engine</span>
+        <span>Coach online</span>
+      </div>
     </div>
   );
 }

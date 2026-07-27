@@ -9,6 +9,7 @@ import pytest
 
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.graph.parameter_deltas import (
+    dorsi_driven_targets,
     foot_angle_target_deg,
     stance_target_ratio,
 )
@@ -203,6 +204,45 @@ class TestExplanationMatchesCorrection:
         expected_per_side = (target_ratio - 1.2) * ANTHRO["shoulder_width"] / 2.0
         per_side = hypothesis.parameter_delta["__foot_target_delta"][5]
         assert per_side == pytest.approx(expected_per_side, abs=1e-6)
+
+
+class TestNarrowStanceSurfacesUnderDepthLimit:
+    """When depth_limit fires from hip-vs-knee height, a narrow stance must
+    surface as an immediate cause even if the knee-flexion depth class and
+    trunk pitch look fine — the two depth measures can disagree (regression
+    from session 2026-07-22_11-39-49, where the toe cue fired six rounds
+    running while the stance cue was structurally silenced)."""
+
+    def _depth_limited_rep(
+        self, rep_number: int, stance_width_ratio: float
+    ) -> RepKinematicSummary:
+        # Hip above knee fires depth_limit; depth_class_int=4 and neutral
+        # trunk pitch mimic the contradictory live measurements.
+        return _make_rep(
+            rep_number,
+            hip_y_bottom=45.0,
+            knee_y_l_at_bottom=40.0,
+            knee_y_r_at_bottom=40.0,
+            stance_width_ratio=stance_width_ratio,
+            foot_direction_angle_l=27.5,
+            foot_direction_angle_r=27.5,
+            depth_class_int=4,
+        )
+
+    def test_narrow_stance_is_diagnosed(self):
+        reps = [self._depth_limited_rep(n, 0.77) for n in (1, 2, 3)]
+        result = _diagnose(reps)
+        assert "narrow_stance" in [h.cause_id for h in result.immediate_causes]
+
+    def test_wide_stance_is_not_diagnosed(self):
+        target_ratio, _ = dorsi_driven_targets(ROM["dorsiflexion_drop"], ANTHRO)
+        reps = [
+            self._depth_limited_rep(n, target_ratio + 0.1) for n in (1, 2, 3)
+        ]
+        result = _diagnose(reps)
+        assert "narrow_stance" not in [
+            h.cause_id for h in result.immediate_causes
+        ]
 
 
 class TestFootAngleAlwaysCued:

@@ -6,6 +6,7 @@ const COLUMNS = [
     title: "Product",
     links: [
       { label: "The Rack", href: "#rack" },
+      { label: "The Coach", href: "#coach" },
       { label: "Technology", href: "#technology" },
       { label: "FAQ", href: "#faq" },
       { label: "Reserve", href: "#reserve" },
@@ -26,8 +27,14 @@ const COLUMNS = [
 
 export function Footer() {
   return (
-    <footer className="border-t border-border bg-bg-2">
-      <div className="mx-auto max-w-6xl px-5 py-16 md:px-8">
+    <footer className="relative overflow-hidden bg-bg-2">
+      {/* Hairline that blends from the standard border into a violet glow at center. */}
+      <div
+        aria-hidden
+        className="h-px w-full bg-linear-to-r from-border via-accent/60 to-border"
+      />
+
+      <div className="mx-auto max-w-6xl px-5 pt-16 md:px-8">
         <div className="flex flex-col gap-12 md:flex-row md:justify-between">
           <div className="max-w-xs">
             <div className="flex items-center gap-3">
@@ -37,7 +44,7 @@ export function Footer() {
               </span>
             </div>
             <p className="mt-4 text-sm leading-relaxed text-fg-2">
-              Precision intelligence for human performance.
+              A full coach, built into the steel.
             </p>
           </div>
 
@@ -50,7 +57,7 @@ export function Footer() {
                     <li key={link.label}>
                       <a
                         href={link.href}
-                        className="text-sm text-fg-2 transition-colors duration-200 hover:text-fg"
+                        className="text-sm text-fg-2 transition-colors duration-200 hover:text-accent-ink"
                       >
                         {link.label}
                       </a>
@@ -66,7 +73,7 @@ export function Footer() {
                 until your rack ships — cancel anytime with one email to{" "}
                 <a
                   href={`mailto:${CONTACT_EMAIL}`}
-                  className="text-accent-ink underline underline-offset-2"
+                  className="text-accent-ink underline decoration-accent-ink/30 underline-offset-2 transition-colors duration-200 hover:text-accent-strong hover:decoration-accent-strong/60"
                 >
                   {CONTACT_EMAIL}
                 </a>
@@ -76,13 +83,22 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-14 flex flex-col gap-3 border-t border-border pt-8 md:flex-row md:items-center md:justify-between">
-          <p className="text-xs text-fg-2">© 2026 Nowva. All rights reserved.</p>
-          <p className="font-mono text-[0.68rem] leading-relaxed text-fg-2">
+        <div className="mt-14 flex flex-col gap-3 border-t border-border pt-8 md:flex-row md:items-baseline md:justify-between">
+          <p className="shrink-0 font-mono text-[0.68rem] tracking-[0.08em] text-fg-2">
+            © 2026 Nowva. All rights reserved.
+          </p>
+          <p className="max-w-lg font-mono text-[0.68rem] leading-relaxed tracking-[0.02em] text-fg-2 md:text-right">
             The Nowva Rack is in development. Product imagery shows early CAD
             renders; final design and specifications may change.
           </p>
         </div>
+      </div>
+
+      {/* Oversized wordmark, clipped at the page's bottom edge. Decorative only. */}
+      <div aria-hidden className="pointer-events-none mt-10 select-none">
+        <p className="translate-y-[0.3em] pl-[0.16em] text-center font-display text-[clamp(4.5rem,15vw,11.5rem)] font-extrabold leading-none tracking-[0.16em] text-fg/5">
+          NOWVA
+        </p>
       </div>
     </footer>
   );

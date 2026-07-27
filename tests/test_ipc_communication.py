@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -270,3 +271,121 @@ class TestBackpressure:
         for i in range(SEND_QUEUE_MAX_SIZE + 5):
             server.send_message(_frame_data_message(i))
         assert len(server._sender._messages) == SEND_QUEUE_MAX_SIZE
+
+    def test_raw_bytes_evicted_like_frame_data(self) -> None:
+        send_queue = _SendQueue("test", lambda: None)
+        for i in range(SEND_QUEUE_MAX_SIZE):
+            send_queue.put_raw(json.dumps({"type": "frame_data", "seq": i}).encode())
+
+        send_queue.put({"type": "fault", "severity": "SEVERE"})
+
+        assert len(send_queue._messages) == SEND_QUEUE_MAX_SIZE
+        assert send_queue._messages[-1] == {"type": "fault", "severity": "SEVERE"}
+
+    def test_raw_bytes_dropped_when_queue_full(self) -> None:
+        send_queue = _SendQueue("test", lambda: None)
+        for i in range(SEND_QUEUE_MAX_SIZE):
+            send_queue.put_raw(b'{"type":"frame_data"}')
+
+        send_queue.put_raw(b'{"type":"frame_data","overflow":true}')
+
+        assert len(send_queue._messages) == SEND_QUEUE_MAX_SIZE
+
+
+def _start_raw_server(
+    socket_path: str,
+    on_raw_message: Callable[[dict, bytes], None],
+) -> tuple[IPCServer, threading.Thread]:
+    server = IPCServer(socket_path=socket_path)
+    server.bind(raw_message_callback=on_raw_message)
+
+    def _serve() -> None:
+        try:
+            server.accept_client()
+            server.listen()
+        except OSError:
+            if server.running:
+                raise
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    return server, thread
+
+
+class TestRawForwarding:
+    def test_raw_message_callback_receives_raw_bytes(self, socket_path: str) -> None:
+        results: list[tuple[dict, bytes]] = []
+
+        def _on_raw(msg: dict, raw: bytes) -> None:
+            results.append((msg, raw))
+
+        server, thread = _start_raw_server(socket_path, _on_raw)
+        client = IPCClient(socket_path=socket_path)
+        try:
+            assert client.connect(timeout=5) is True
+            sent = {"type": "frame_data", "joint_angles": {"knee_l": 90}}
+            client.send_message(sent)
+            assert _wait_until(lambda: len(results) == 1)
+
+            parsed, raw_bytes = results[0]
+            assert parsed == sent
+            assert json.loads(raw_bytes.decode("utf-8")) == sent
+        finally:
+            client.disconnect()
+            server.stop()
+            thread.join(timeout=2)
+
+    def test_send_raw_message_delivered_without_re_encoding(self, socket_path: str) -> None:
+        """Simulate the forwarding path: receive raw bytes, forward them."""
+        # Set up two socket pairs: source -> middleman -> destination
+        src_path = socket_path
+        dst_path = socket_path + ".dst"
+
+        dst_received: list[dict] = []
+        dst_server, dst_thread = _start_server(dst_path, dst_received.append)
+
+        raw_captured: list[bytes] = []
+
+        def _on_raw(msg: dict, raw: bytes) -> None:
+            raw_captured.append(raw)
+            if msg.get("type") == "frame_data":
+                dst_server.send_raw_message(raw)
+            else:
+                dst_server.send_message(msg)
+
+        mid_server, mid_thread = _start_raw_server(src_path, _on_raw)
+
+        src_client = IPCClient(socket_path=src_path)
+        dst_client = IPCClient(socket_path=dst_path)
+        dst_listen_received: list[dict] = []
+        dst_listener = threading.Thread(
+            target=dst_client.listen,
+            kwargs={"message_callback": dst_listen_received.append},
+            daemon=True,
+        )
+
+        try:
+            assert dst_client.connect(timeout=5) is True
+            dst_listener.start()
+
+            assert src_client.connect(timeout=5) is True
+            assert _wait_until(lambda: mid_server.client_socket is not None)
+            assert _wait_until(lambda: dst_server.client_socket is not None)
+
+            original = {"type": "frame_data", "joint_angles": {"knee_l": 85}, "fps": 30.0}
+            src_client.send_message(original)
+
+            assert _wait_until(lambda: len(dst_listen_received) == 1)
+            assert dst_listen_received[0] == original
+        finally:
+            src_client.disconnect()
+            dst_client.disconnect()
+            mid_server.stop()
+            dst_server.stop()
+            mid_thread.join(timeout=2)
+            dst_thread.join(timeout=2)
+            dst_listener.join(timeout=2)
+            try:
+                os.unlink(dst_path)
+            except FileNotFoundError:
+                pass

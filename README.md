@@ -15,6 +15,7 @@
 
 ## Table of Contents
 
+- [Project Status](#project-status)
 - [Overview](#overview)
 - [System Architecture](#system-architecture)
 - [Console Voice Agent (main.py)](#console-voice-agent-mainpy)
@@ -37,6 +38,30 @@
 - [Getting Started](#getting-started)
 - [Testing](#testing)
 - [Profiling & Benchmarking](#profiling--benchmarking)
+
+---
+
+## Project Status
+
+**Current Focus:** Squat Visualizer v2 — Interactive 3D rack explorer and stabilized biomechanics validation.
+
+### Recent Changes (July 2026)
+- **Standing Gate Refactor:** Added frontal-plane knee flexion check (using only x/y, not noisy z-depth) and new `_check_leg_extension()` validation to reject depth-hallucinated "folded leg" artifacts. Legs must extend ~60% of their length vertically away from the hip.
+- **Ground Clamp Validation:** Rejects calibration if median leg extension is below threshold (0.75), preventing folded-leg hallucinations from corrupting the session's ground truth. Logs rejection count and recollects observations.
+- **IPC Raw Forwarding:** Enhanced ipc_communication.py with `_send_framed_raw()` and `_recv_framed_with_raw()` to forward pre-serialized frame_data without re-encoding, reducing latency and memory churn for high-frequency messages.
+- **Website 3D Rack Explorer:** New interactive 3D model viewer in `website/src/components/rack/` (RackExplorer, RackStage, SceneParts) with part exploding, assembly visualization, and Draco compression. Updated Hero component with animated stat counters synced to 3D intro scene. Messaging refactored to emphasize on-device AI, rapid feedback, and anatomical calibration.
+- **Test Coverage:** Comprehensive tests added for IPC raw forwarding, ground clamp rejection logic, standing gate leg extension check, and evidence test refinements.
+
+### YC Application Readiness
+- Core demo loop: webcam → real-time 3D skeleton → fault detection → voice cue (all on-device, <50ms latency).
+- Marketing site live on Vercel with 3D rack model, technical proof, pricing tier, and preorder capture.
+- Edge-first architecture validated: no cloud dependency for conversational layer, inference runs on Jetson Nano.
+
+### Known Limitations / TODO
+- Barbell tracking (z-depth) remains noisy on single-camera setups; multi-camera triangulation in place but not yet field-tested at scale.
+- Rep counter BiLSTM classifier trained on 8 users; generalization on new anthropometry TBD.
+- Program generator V5 working but not yet integrated into the live voice agent for automated workout difficulty scaling.
+- Website Vercel import and DNS verification pending (domain: nowva.ai via Cloudflare Tunnel).
 
 ---
 

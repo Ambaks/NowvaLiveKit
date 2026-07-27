@@ -17,22 +17,11 @@ except ImportError:
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Sender address — set RESEND_FROM_EMAIL; the placeholder fallback triggers a
-# warning at send time.
-_PLACEHOLDER_FROM_EMAIL = "noreply@yourdomain.com"
-FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", _PLACEHOLDER_FROM_EMAIL)
+# Sender address — override with RESEND_FROM_EMAIL env var if needed.
+FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "noreply@nowva.io")
 
 # One-time initialization guard for initialize_resend()
 _resend_initialized = False
-
-
-def _warn_if_placeholder_sender():
-    if FROM_EMAIL == _PLACEHOLDER_FROM_EMAIL:
-        logger.warning(
-            "RESEND_FROM_EMAIL environment variable not set — "
-            f"sending from placeholder address '{_PLACEHOLDER_FROM_EMAIL}'. "
-            "Set RESEND_FROM_EMAIL to a verified sender domain."
-        )
 
 
 def initialize_resend():
@@ -87,8 +76,6 @@ def send_program_email(
         # Read PDF content
         with open(pdf_path, 'rb') as f:
             pdf_content = f.read()
-
-        _warn_if_placeholder_sender()
 
         # Prepare email parameters
         params = {
@@ -209,8 +196,6 @@ def send_test_email(to_email: str) -> Optional[dict]:
         return None
 
     try:
-        _warn_if_placeholder_sender()
-
         params = {
             "from": f"Nova <{FROM_EMAIL}>",
             "to": [to_email],

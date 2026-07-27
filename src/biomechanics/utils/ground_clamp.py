@@ -38,19 +38,23 @@ class GroundClamp:
         calibration_frames: int = 30,
         stance_width_tolerance_m: float = 0.02,
         ankle_y_tolerance_m: float = 0.01,
+        min_leg_extension_ratio: float = 0.75,
         standing_gate: Optional["StandingPoseGate"] = None,
     ):
         self._calibration_frames = calibration_frames
         self._stance_width_tol = stance_width_tolerance_m
         self._ankle_y_tol = ankle_y_tolerance_m
+        self._min_leg_extension_ratio = min_leg_extension_ratio
         self._standing_gate = standing_gate
 
         self._calibrated = False
         self._frame_count = 0
+        self._rejection_count = 0
 
         self._stance_widths: list[float] = []
         self._ankle_y_l_obs: list[float] = []
         self._ankle_y_r_obs: list[float] = []
+        self._leg_extension_obs: list[float] = []
 
         self._stance_width: float = 0.0
         self._ankle_y_max_l: float = 0.0
@@ -135,16 +139,50 @@ class GroundClamp:
         self._stance_widths.append(width)
         self._ankle_y_l_obs.append(float(l_ankle[1]))
         self._ankle_y_r_obs.append(float(r_ankle[1]))
+        self._leg_extension_obs.append(self._leg_extension(points))
+
+    def _leg_extension(self, points: np.ndarray) -> float:
+        hip_mid_y = (points[CK.LEFT_HIP, 1] + points[CK.RIGHT_HIP, 1]) / 2.0
+        extensions = []
+        for hip_idx, knee_idx, ankle_idx in (
+            (CK.LEFT_HIP, CK.LEFT_KNEE, CK.LEFT_ANKLE),
+            (CK.RIGHT_HIP, CK.RIGHT_KNEE, CK.RIGHT_ANKLE),
+        ):
+            leg_length = float(
+                np.linalg.norm(points[hip_idx] - points[knee_idx])
+                + np.linalg.norm(points[knee_idx] - points[ankle_idx])
+            )
+            if leg_length < 1e-6:
+                extensions.append(0.0)
+                continue
+            span = abs(float(points[ankle_idx, 1]) - hip_mid_y)
+            extensions.append(span / leg_length)
+        return min(extensions)
 
     def _finalize_calibration(self) -> None:
+        # A standing person's ankles sit most of a leg-length below the
+        # hips. Hallucinated folded legs (ankles near hip height) must not
+        # become the calibration, or the clamp enforces the fold all
+        # session — reject and keep collecting.
+        leg_extension = float(np.median(self._leg_extension_obs))
+        if leg_extension < self._min_leg_extension_ratio:
+            if self._rejection_count % 10 == 0:
+                logger.warning(
+                    "[GROUND CLAMP] Calibration rejected (x%d): leg extension "
+                    "%.2f < %.2f (folded/hallucinated legs) — recollecting",
+                    self._rejection_count + 1,
+                    leg_extension, self._min_leg_extension_ratio,
+                )
+            self._rejection_count += 1
+            self._clear_observations()
+            return
+
         self._stance_width = float(np.median(self._stance_widths))
         self._ankle_y_max_l = float(np.median(self._ankle_y_l_obs))
         self._ankle_y_max_r = float(np.median(self._ankle_y_r_obs))
         self._calibrated = True
 
-        self._stance_widths.clear()
-        self._ankle_y_l_obs.clear()
-        self._ankle_y_r_obs.clear()
+        self._clear_observations()
 
         logger.info(
             "[GROUND CLAMP] Calibrated: stance_width=%.3fm, "
@@ -152,9 +190,14 @@ class GroundClamp:
             self._stance_width, self._ankle_y_max_l, self._ankle_y_max_r,
         )
 
-    def reset(self) -> None:
-        self._calibrated = False
+    def _clear_observations(self) -> None:
         self._frame_count = 0
         self._stance_widths.clear()
         self._ankle_y_l_obs.clear()
         self._ankle_y_r_obs.clear()
+        self._leg_extension_obs.clear()
+
+    def reset(self) -> None:
+        self._calibrated = False
+        self._rejection_count = 0
+        self._clear_observations()

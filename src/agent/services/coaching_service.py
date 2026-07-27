@@ -501,10 +501,10 @@ class CoachingService:
                 await self._audio_cue_service.setup_rep_track(self._room)
         else:
             # Prewarmed service — attach live session and rep track on first use
-            if self._audio_cue_service._session is None:
+            if self._audio_cue_service.session is None:
                 self._audio_cue_service.attach_session(self._session)
                 logger.info("[COACHING SERVICE] Attached session to prewarmed AudioCueService")
-            if self._room and not self._audio_cue_service._rep_track_ready:
+            if self._room and not self._audio_cue_service.rep_track_ready:
                 await self._audio_cue_service.setup_rep_track(self._room)
 
         cues = message.get("cues", {})
@@ -516,7 +516,7 @@ class CoachingService:
             if self._coaching_orchestrator:
                 from biomechanics.coaching.cue_cache import POSITIVE_CUE_KEYS
                 available = [k for k in cues if k in POSITIVE_CUE_KEYS]
-                self._coaching_orchestrator._positive_cue_keys = available
+                self._coaching_orchestrator.positive_cue_keys = available
         except Exception as e:
             logger.error(f"[COACHING SERVICE] TTS cache generation failed: {e}")
 

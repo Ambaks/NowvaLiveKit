@@ -81,6 +81,16 @@ class AudioCueService:
         self._load_from_disk()
         self._validate_expected_cues()
 
+    @property
+    def session(self):
+        """The bound AgentSession, or None before attach_session()."""
+        return self._session
+
+    @property
+    def rep_track_ready(self) -> bool:
+        """Whether the dedicated rep sound track has been published."""
+        return self._rep_track_ready
+
     def attach_session(self, session) -> None:
         """Bind a live AgentSession for audio playback (after prewarm)."""
         self._session = session

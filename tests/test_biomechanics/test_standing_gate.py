@@ -68,9 +68,9 @@ class TestStandingPoseGate:
     def test_bent_knees_fails(self):
         gate = StandingPoseGate(required_consecutive_frames=1, max_knee_flexion_deg=20.0)
         pts = _standing_skeleton()
-        # Move knees forward to create ~45° flexion
-        pts[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]
-        pts[CK.RIGHT_KNEE] = [-0.10, 0.70, 0.30]
+        # Push knees out sideways to create large frontal-plane flexion
+        pts[CK.LEFT_KNEE] = [0.35, 0.60, 0.0]
+        pts[CK.RIGHT_KNEE] = [-0.35, 0.60, 0.0]
 
         for _ in range(10):
             assert not gate.check(_make_skeleton(pts))
@@ -111,7 +111,7 @@ class TestStandingPoseGate:
         gate = StandingPoseGate(required_consecutive_frames=5)
         good_pts = _standing_skeleton()
         bad_pts = _standing_skeleton()
-        bad_pts[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]  # bent knee
+        bad_pts[CK.LEFT_KNEE] = [0.35, 0.60, 0.0]  # bent knee (frontal plane)
 
         # 4 good frames, then 1 bad → resets counter
         for i in range(4):
@@ -127,7 +127,7 @@ class TestStandingPoseGate:
         gate = StandingPoseGate(required_consecutive_frames=1)
         good_pts = _standing_skeleton()
         bad_pts = _standing_skeleton()
-        bad_pts[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]
+        bad_pts[CK.LEFT_KNEE] = [0.35, 0.60, 0.0]
 
         assert gate.check(_make_skeleton(good_pts))
         assert gate.is_ready
@@ -146,6 +146,61 @@ class TestStandingPoseGate:
         gate.reset()
         assert not gate.is_ready
 
+    def test_depth_folded_legs_fail(self):
+        # Regression (session 2026-07-22_11-39-49): MediaPipe hallucinated
+        # legs folded in depth — frontally straight, so the frontal knee
+        # check passes, but the ankles sit far too close to hip height.
+        # Y-down hip-centered coords like live MediaPipe world landmarks.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = np.zeros((19, 3))
+        pts[CK.LEFT_SHOULDER] = [-0.18, -0.50, 0.0]
+        pts[CK.RIGHT_SHOULDER] = [0.18, -0.50, 0.0]
+        pts[CK.LEFT_HIP] = [-0.10, 0.0, 0.0]
+        pts[CK.RIGHT_HIP] = [0.10, 0.0, 0.0]
+        # Frontally collinear hip→knee→ankle (flexion ≈ 0) with the leg
+        # length consumed in depth: vertical span 0.55m vs ~1.0m of leg.
+        pts[CK.LEFT_KNEE] = [-0.10, 0.30, -0.45]
+        pts[CK.RIGHT_KNEE] = [0.10, 0.30, -0.45]
+        pts[CK.LEFT_ANKLE] = [-0.10, 0.55, -0.85]
+        pts[CK.RIGHT_ANKLE] = [0.10, 0.55, -0.85]
+
+        for _ in range(10):
+            assert not gate.check(_make_skeleton(pts))
+        assert not gate.is_ready
+        assert gate.last_failure == "leg_extension"
+
+    def test_inverted_legs_fail(self):
+        # Ankles on the same vertical side of the hips as the shoulders —
+        # a large span, frontally straight, but anatomically impossible.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = _standing_skeleton()
+        pts[CK.LEFT_KNEE] = [0.10, 1.45, -0.30]
+        pts[CK.RIGHT_KNEE] = [-0.10, 1.45, -0.30]
+        pts[CK.LEFT_ANKLE] = [0.10, 1.90, -0.60]
+        pts[CK.RIGHT_ANKLE] = [-0.10, 1.90, -0.60]
+
+        for _ in range(10):
+            assert not gate.check(_make_skeleton(pts))
+        assert not gate.is_ready
+        assert gate.last_failure == "leg_extension"
+
+    def test_y_down_standing_passes(self):
+        # Live MediaPipe world landmarks are Y-down hip-centered; the gate
+        # must accept a proper standing pose in that convention too.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = np.zeros((19, 3))
+        pts[CK.LEFT_SHOULDER] = [-0.18, -0.50, 0.0]
+        pts[CK.RIGHT_SHOULDER] = [0.18, -0.50, 0.0]
+        pts[CK.LEFT_HIP] = [-0.10, 0.0, 0.0]
+        pts[CK.RIGHT_HIP] = [0.10, 0.0, 0.0]
+        pts[CK.LEFT_KNEE] = [-0.10, 0.45, 0.0]
+        pts[CK.RIGHT_KNEE] = [0.10, 0.45, 0.0]
+        pts[CK.LEFT_ANKLE] = [-0.10, 0.90, 0.0]
+        pts[CK.RIGHT_ANKLE] = [0.10, 0.90, 0.0]
+
+        assert gate.check(_make_skeleton(pts))
+        assert gate.is_ready
+
     def test_last_failure_tracks_failing_check(self):
         gate = StandingPoseGate(required_consecutive_frames=5)
         pts = _standing_skeleton()
@@ -156,8 +211,8 @@ class TestStandingPoseGate:
         assert gate.last_failure == "visibility"
 
         bent = _standing_skeleton()
-        bent[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]
-        bent[CK.RIGHT_KNEE] = [-0.10, 0.70, 0.30]
+        bent[CK.LEFT_KNEE] = [0.35, 0.60, 0.0]
+        bent[CK.RIGHT_KNEE] = [-0.35, 0.60, 0.0]
         gate.check(_make_skeleton(bent))
         assert gate.last_failure == "knee_extension"
 

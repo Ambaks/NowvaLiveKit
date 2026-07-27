@@ -8,6 +8,7 @@ export const GA_ID = "G-HM9PK1FKCY";
 
 export const NAV_LINKS = [
   { label: "The Rack", href: "#rack" },
+  { label: "The Coach", href: "#coach" },
   { label: "Technology", href: "#technology" },
   { label: "Mission", href: "#mission" },
   { label: "FAQ", href: "#faq" },

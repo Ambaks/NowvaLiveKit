@@ -29,6 +29,21 @@ REQUIRED_KEYPOINTS = [
 ]
 
 
+def _frontal_knee_flexion(points: np.ndarray) -> tuple:
+    # Monocular depth (z) is too noisy for a 3D knee angle — straight legs
+    # read 5-30° flexion frame to frame. The frontal (x, y) projection is
+    # stable and sufficient to confirm the user is standing.
+    frontal = points.copy()
+    frontal[:, 2] = 0.0
+    left_flexion = 180.0 - joint_angle_3_points(
+        frontal[CK.LEFT_HIP], frontal[CK.LEFT_KNEE], frontal[CK.LEFT_ANKLE],
+    )
+    right_flexion = 180.0 - joint_angle_3_points(
+        frontal[CK.RIGHT_HIP], frontal[CK.RIGHT_KNEE], frontal[CK.RIGHT_ANKLE],
+    )
+    return (left_flexion, right_flexion)
+
+
 class StandingPoseGate:
     """
     Validates that the skeleton represents a standing person before
@@ -36,9 +51,11 @@ class StandingPoseGate:
 
     Checks per frame:
       1. All 8 major keypoints visible with confidence >= min_confidence
-      2. Knees nearly extended (flexion < max_knee_flexion_deg)
+      2. Knees nearly extended in the frontal plane (flexion < max_knee_flexion_deg)
       3. Torso roughly upright (trunk angle from vertical < max_trunk_flexion_deg)
-      4. Person at reasonable distance (torso length in plausible range)
+      4. Legs vertically extended away from the shoulders
+         (ankle-to-hip span >= min_leg_extension_ratio of leg length)
+      5. Person at reasonable distance (torso length in plausible range)
 
     Requires ``required_consecutive_frames`` consecutive passing frames
     before latching ``is_ready = True``.
@@ -46,11 +63,12 @@ class StandingPoseGate:
 
     def __init__(
         self,
-        min_confidence: float = 0.5,
+        min_confidence: float = 0.25,
         max_knee_flexion_deg: float = 20.0,
         max_trunk_flexion_deg: float = 25.0,
         min_torso_length_m: float = 0.25,
         max_torso_length_m: float = 0.80,
+        min_leg_extension_ratio: float = 0.6,
         required_consecutive_frames: int = 5,
     ):
         self.min_confidence = min_confidence
@@ -58,6 +76,7 @@ class StandingPoseGate:
         self.max_trunk_flexion_deg = max_trunk_flexion_deg
         self.min_torso_length_m = min_torso_length_m
         self.max_torso_length_m = max_torso_length_m
+        self.min_leg_extension_ratio = min_leg_extension_ratio
         self.required_consecutive_frames = required_consecutive_frames
 
         self._consecutive_passes: int = 0
@@ -118,6 +137,12 @@ class StandingPoseGate:
             self.last_failure = "torso_upright"
             self._log_failure("torso_upright", points)
             return False
+        # After the torso check so a bent-over user is reported as
+        # "torso_upright", not blamed on their (correct) legs.
+        if not self._check_leg_extension(points):
+            self.last_failure = "leg_extension"
+            self._log_failure("leg_extension", points)
+            return False
         if not self._check_distance(points):
             self.last_failure = "distance"
             self._log_failure("distance", points)
@@ -146,12 +171,20 @@ class StandingPoseGate:
                 low, self.min_confidence,
             )
         elif check_name == "knee_extension":
-            pts = data
-            l_angle = joint_angle_3_points(pts[CK.LEFT_HIP], pts[CK.LEFT_KNEE], pts[CK.LEFT_ANKLE])
-            r_angle = joint_angle_3_points(pts[CK.RIGHT_HIP], pts[CK.RIGHT_KNEE], pts[CK.RIGHT_ANKLE])
+            l_flexion, r_flexion = _frontal_knee_flexion(data)
             logger.warning(
-                "[GATE DIAG] FAIL knee — L flexion=%.1f° R flexion=%.1f° (max=%.1f°)",
-                180.0 - l_angle, 180.0 - r_angle, self.max_knee_flexion_deg,
+                "[GATE DIAG] FAIL knee — frontal L flexion=%.1f° R flexion=%.1f° (max=%.1f°)",
+                l_flexion, r_flexion, self.max_knee_flexion_deg,
+            )
+        elif check_name == "leg_extension":
+            pts = data
+            hip_mid_y = (pts[CK.LEFT_HIP][1] + pts[CK.RIGHT_HIP][1]) / 2.0
+            logger.warning(
+                "[GATE DIAG] FAIL leg_extension — ankle-to-hip span "
+                "L=%.2fm R=%.2fm (min ratio=%.2f of leg length)",
+                abs(pts[CK.LEFT_ANKLE][1] - hip_mid_y),
+                abs(pts[CK.RIGHT_ANKLE][1] - hip_mid_y),
+                self.min_leg_extension_ratio,
             )
         elif check_name == "torso_upright":
             pts = data
@@ -185,20 +218,35 @@ class StandingPoseGate:
         return True
 
     def _check_knee_extension(self, points: np.ndarray) -> bool:
-        left_angle = joint_angle_3_points(
-            points[CK.LEFT_HIP], points[CK.LEFT_KNEE], points[CK.LEFT_ANKLE],
-        )
-        left_flexion = 180.0 - left_angle
-
-        right_angle = joint_angle_3_points(
-            points[CK.RIGHT_HIP], points[CK.RIGHT_KNEE], points[CK.RIGHT_ANKLE],
-        )
-        right_flexion = 180.0 - right_angle
-
+        left_flexion, right_flexion = _frontal_knee_flexion(points)
         return (
             left_flexion < self.max_knee_flexion_deg
             and right_flexion < self.max_knee_flexion_deg
         )
+
+    def _check_leg_extension(self, points: np.ndarray) -> bool:
+        # A depth-folded hallucination (ankles near hip height) is frontally
+        # straight, so it slips past the frontal knee check. Require the
+        # ankles to extend vertically away from the shoulders by most of the
+        # leg's own length. Sign product handles Y-up and Y-down frames.
+        hip_mid = (points[CK.LEFT_HIP] + points[CK.RIGHT_HIP]) / 2.0
+        shoulder_mid = (points[CK.LEFT_SHOULDER] + points[CK.RIGHT_SHOULDER]) / 2.0
+        torso_direction = shoulder_mid[1] - hip_mid[1]
+
+        for hip_idx, knee_idx, ankle_idx in (
+            (CK.LEFT_HIP, CK.LEFT_KNEE, CK.LEFT_ANKLE),
+            (CK.RIGHT_HIP, CK.RIGHT_KNEE, CK.RIGHT_ANKLE),
+        ):
+            leg_length = float(
+                np.linalg.norm(points[hip_idx] - points[knee_idx])
+                + np.linalg.norm(points[knee_idx] - points[ankle_idx])
+            )
+            vertical_span = points[ankle_idx][1] - hip_mid[1]
+            if vertical_span * torso_direction >= 0.0:
+                return False
+            if abs(vertical_span) < self.min_leg_extension_ratio * leg_length:
+                return False
+        return True
 
     def _check_torso_upright(self, points: np.ndarray) -> bool:
         shoulder_mid = (points[CK.LEFT_SHOULDER] + points[CK.RIGHT_SHOULDER]) / 2.0

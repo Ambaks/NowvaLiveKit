@@ -8,6 +8,8 @@ This prevents message corruption when multiple messages arrive in one recv() cal
 or when a single message spans multiple recv() calls.
 """
 
+from __future__ import annotations
+
 import socket
 import struct
 import json
@@ -33,6 +35,15 @@ SENDER_JOIN_TIMEOUT_S = 2.0
 def _send_framed(sock: socket.socket, message: Dict[str, Any]) -> None:
     """Send a length-prefixed JSON message over a socket."""
     data = json.dumps(message).encode('utf-8')
+    header = struct.pack(HEADER_FORMAT, len(data))
+    sock.sendall(header + data)
+
+
+def _send_framed_raw(sock: socket.socket, data: bytes) -> None:
+    """Send pre-serialized bytes with length-prefix framing.
+
+    Skips JSON encoding -- use when forwarding an already-serialized message.
+    """
     header = struct.pack(HEADER_FORMAT, len(data))
     sock.sendall(header + data)
 
@@ -69,6 +80,29 @@ def _recv_framed(sock: socket.socket) -> Optional[Dict[str, Any]]:
     return json.loads(data.decode('utf-8'))
 
 
+def _recv_framed_with_raw(
+    sock: socket.socket,
+) -> tuple[bytes, dict[str, Any]] | tuple[bytes, None]:
+    """Receive a length-prefixed message, returning both raw bytes and parsed dict.
+
+    The raw bytes are the JSON payload *before* decoding, suitable for
+    forwarding via ``_send_framed_raw`` without re-serialization.
+
+    Returns (b'', None) if connection closed cleanly.
+    """
+    try:
+        header = _recv_exactly(sock, HEADER_SIZE)
+    except ConnectionError:
+        return b'', None
+
+    msg_len = struct.unpack(HEADER_FORMAT, header)[0]
+    if msg_len > MAX_MESSAGE_SIZE:
+        raise ValueError(f"Message too large: {msg_len} bytes (max {MAX_MESSAGE_SIZE})")
+
+    data = _recv_exactly(sock, msg_len)
+    return data, json.loads(data.decode('utf-8'))
+
+
 def _remove_socket_file(socket_path: str) -> None:
     try:
         os.unlink(socket_path)
@@ -76,8 +110,22 @@ def _remove_socket_file(socket_path: str) -> None:
         pass
 
 
+def _is_frame_data(item: dict[str, Any] | bytes) -> bool:
+    """Check whether a queued item is a frame_data message.
+
+    Raw bytes items (pre-serialized frame_data) are always treated as
+    frame_data for queue-management purposes.
+    """
+    if isinstance(item, bytes):
+        return True
+    return item.get("type") == FRAME_DATA_MESSAGE_TYPE
+
+
 class _SendQueue:
     """Bounded outbound message queue drained by a dedicated sender thread.
+
+    Items may be ``dict`` (JSON-serialized on send) or ``bytes``
+    (pre-serialized, forwarded with framing only — no re-encoding).
 
     When full: new 'frame_data' messages are dropped (debug log); other
     message types evict the oldest queued 'frame_data' if one exists,
@@ -88,7 +136,7 @@ class _SendQueue:
         self._name = name
         self._get_socket_fn = get_socket_fn
         self._condition = threading.Condition()
-        self._messages: deque = deque()
+        self._messages: deque[dict[str, Any] | bytes] = deque()
         self._stopped = False
         self._thread: Optional[threading.Thread] = None
 
@@ -119,13 +167,25 @@ class _SendQueue:
             self._messages.append(message)
             self._condition.notify()
 
+    def put_raw(self, data: bytes) -> None:
+        """Enqueue pre-serialized bytes (treated as frame_data for eviction)."""
+        with self._condition:
+            if self._stopped:
+                return
+            if len(self._messages) >= SEND_QUEUE_MAX_SIZE:
+                logger.debug(f"{self._name}: send queue full — dropping raw frame_data")
+                return
+            self._messages.append(data)
+            self._condition.notify()
+
     def stop(self) -> None:
         with self._condition:
             self._stopped = True
             # Keep control messages for a synchronous flush below — final
             # sends like 'error' or 'pipeline_status: stopped' are enqueued
-            # right before disconnect()/stop() and must not be lost
-            pending = [m for m in self._messages if m.get("type") != FRAME_DATA_MESSAGE_TYPE]
+            # right before disconnect()/stop() and must not be lost.
+            # Raw bytes items are always frame_data, so always dropped.
+            pending = [m for m in self._messages if not _is_frame_data(m)]
             self._messages.clear()
             self._condition.notify_all()
         thread = self._thread
@@ -154,7 +214,7 @@ class _SendQueue:
 
     def _evict_oldest_frame_data(self) -> bool:
         for index, queued in enumerate(self._messages):
-            if queued.get("type") == FRAME_DATA_MESSAGE_TYPE:
+            if _is_frame_data(queued):
                 del self._messages[index]
                 logger.debug(f"{self._name}: send queue full — evicted oldest frame_data")
                 return True
@@ -167,16 +227,26 @@ class _SendQueue:
                     self._condition.wait()
                 if self._stopped:
                     return
-                message = self._messages.popleft()
+                item = self._messages.popleft()
             sock = self._get_socket_fn()
             if sock is None:
-                logger.debug(
-                    f"{self._name}: no peer connected — dropping message "
-                    f"type={message.get('type')}"
-                )
+                if _is_frame_data(item):
+                    logger.debug(
+                        f"{self._name}: no peer connected — dropping frame_data"
+                    )
+                    continue
+                # Hold non-ephemeral messages until a client connects
+                with self._condition:
+                    if self._stopped:
+                        return
+                    self._messages.appendleft(item)
+                    self._condition.wait(timeout=0.1)
                 continue
             try:
-                _send_framed(sock, message)
+                if isinstance(item, bytes):
+                    _send_framed_raw(sock, item)
+                else:
+                    _send_framed(sock, item)
             except Exception as e:
                 logger.error(f"{self._name}: error sending message: {e}")
 
@@ -200,6 +270,7 @@ class IPCServer:
         self.server_socket: Optional[socket.socket] = None
         self.client_socket: Optional[socket.socket] = None
         self.message_callback: Optional[Callable[[Dict], None]] = None
+        self.raw_message_callback: Optional[Callable[[Dict, bytes], None]] = None
         self._lock = threading.Lock()
         self._running = threading.Event()
         self._sender = _SendQueue("IPCServer", self._get_client_socket)
@@ -212,8 +283,18 @@ class IPCServer:
         with self._lock:
             return self.client_socket
 
-    def bind(self, message_callback: Optional[Callable[[Dict], None]] = None):
-        """Create and bind the server socket. Connectable immediately after return."""
+    def bind(
+        self,
+        message_callback: Optional[Callable[[Dict], None]] = None,
+        raw_message_callback: Optional[Callable[[Dict, bytes], None]] = None,
+    ):
+        """Create and bind the server socket. Connectable immediately after return.
+
+        If *raw_message_callback* is provided it takes precedence over
+        *message_callback* and receives ``(parsed_dict, raw_bytes)`` so
+        the caller can forward the pre-serialized payload without
+        re-encoding.
+        """
         _remove_socket_file(self.socket_path)
 
         server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -224,6 +305,7 @@ class IPCServer:
             self.server_socket = server_socket
         self._running.set()
         self.message_callback = message_callback
+        self.raw_message_callback = raw_message_callback
         self._sender.start()
 
         logger.info(f"IPC Server bound on {self.socket_path}")
@@ -241,13 +323,22 @@ class IPCServer:
             self.client_socket = client_socket
         logger.info("Client connected!")
 
-    def start(self, message_callback: Optional[Callable[[Dict], None]] = None):
+    def start(
+        self,
+        message_callback: Optional[Callable[[Dict], None]] = None,
+        raw_message_callback: Optional[Callable[[Dict, bytes], None]] = None,
+    ):
         """Bind and wait for a client connection (convenience wrapper)."""
-        self.bind(message_callback)
+        self.bind(message_callback, raw_message_callback=raw_message_callback)
         self.accept_client()
 
     def listen(self):
-        """Receive framed messages in a loop, re-accepting a new client on disconnect."""
+        """Receive framed messages in a loop, re-accepting a new client on disconnect.
+
+        If a ``raw_message_callback`` is set, it receives ``(message, raw_bytes)``
+        instead of the default ``message_callback(message)``.  This allows
+        callers to forward the pre-serialized payload without re-encoding.
+        """
         while self._running.is_set():
             with self._lock:
                 client_socket = self.client_socket
@@ -257,25 +348,30 @@ class IPCServer:
                 continue
 
             try:
-                message = _recv_framed(client_socket)
+                raw_data, message = _recv_framed_with_raw(client_socket)
             except json.JSONDecodeError as e:
                 logger.error(f"Error decoding message: {e}")
                 continue
             except (ConnectionError, ValueError) as e:
                 logger.error(f"Error in IPC server: {e}")
-                message = None
+                raw_data, message = b'', None
             except Exception as e:
                 if not self._running.is_set():
                     return
                 logger.error(f"Unexpected error in IPC server: {e}")
-                message = None
+                raw_data, message = b'', None
 
             if message is None:
                 logger.info("Client disconnected")
                 self._close_client_socket()
                 continue
 
-            if self.message_callback:
+            if self.raw_message_callback:
+                try:
+                    self.raw_message_callback(message, raw_data)
+                except Exception as e:
+                    logger.error(f"Error in raw message callback: {e}")
+            elif self.message_callback:
                 try:
                     self.message_callback(message)
                 except Exception as e:
@@ -284,6 +380,14 @@ class IPCServer:
     def send_message(self, message: Dict[str, Any]):
         """Enqueue a framed message for the connected client (never blocks)."""
         self._sender.put(message)
+
+    def send_raw_message(self, data: bytes) -> None:
+        """Enqueue pre-serialized bytes for the connected client (never blocks).
+
+        Skips JSON encoding -- use when forwarding an already-serialized
+        message received from another IPC hop.
+        """
+        self._sender.put_raw(data)
 
     def stop(self):
         """Stop IPC server and clean up socket file."""

@@ -22,7 +22,7 @@ from livekit import agents
 from livekit.agents import AgentSession, TurnHandlingOptions, AgentStateChangedEvent, MetricsCollectedEvent, metrics
 from openai.types import Reasoning
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, openai, silero, elevenlabs, noise_cancellation
+from livekit.plugins import deepgram, openai, silero, cartesia, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from agent.core.agent_state import AgentState, set_state_notify_fd, PROJECT_ROOT
@@ -121,8 +121,8 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     llm_model = os.getenv("LLM_MODEL", "gpt-5.4-mini")
-    if llm_model.startswith("gpt-5.5"):
-        # gpt-5.5 rejects reasoning_effort + function tools on /v1/chat/completions;
+    if llm_model.startswith(("gpt-5.5", "gpt-5.6")):
+        # gpt-5.5+ rejects reasoning_effort + function tools on /v1/chat/completions;
         # OpenAI requires the Responses API for this combination.
         llm = openai.responses.LLM(
             model=llm_model,
@@ -134,16 +134,11 @@ async def entrypoint(ctx: agents.JobContext):
             reasoning_effort="low",
         )
 
-    tts = elevenlabs.TTS(
-        api_key=os.getenv("ELEVEN_API_KEY"),
-        voice_id=os.getenv("ELEVENLABS_VOICE_ID"),
-        model=os.getenv("ELEVENLABS_VOICE_MODEL", "eleven_multilingual_v2"),
-        encoding="pcm_24000",
-        voice_settings=elevenlabs.VoiceSettings(
-            stability=0.30,
-            similarity_boost=0.5,
-        ),
-        chunk_length_schedule=[50, 120, 200, 260],
+    tts = cartesia.TTS(
+        voice=os.getenv("CARTESIA_VOICE_ID", "3e39e9a5-585c-4f5f-bac6-5e4905c51095"),
+        model="sonic-3",
+        language="en",
+        speed="normal",
     )
     logger.info("[NOVA] Cascade pipeline initialized")
 

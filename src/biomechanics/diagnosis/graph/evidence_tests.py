@@ -53,18 +53,11 @@ def test_narrow_stance(
     rom: dict,
     set_summary: SetScoreSummary | None,
 ) -> float:
-    depth_signal = 0.0
-    if features.depth_class_int < 3:
-        depth_signal = (3 - features.depth_class_int) / 3.0
-
-    lean_signal = 0.0
-    if features.trunk_pitch_at_bottom > 40.0:
-        lean_signal = _clamp((features.trunk_pitch_at_bottom - 40.0) / 20.0)
-
-    symptom_severity = max(depth_signal, lean_signal)
-    if symptom_severity <= 0.0:
-        return 0.0
-
+    # Evidence is the stance gap to the personalized target alone. Whether
+    # the stance is causing a problem is established by the implicating
+    # symptom (and severity-weighted by the engine) — re-deriving it here
+    # from depth class or trunk pitch can contradict the symptom's own
+    # measure and silently zero the evidence.
     dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
     ideal_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
 
@@ -72,8 +65,7 @@ def test_narrow_stance(
     if current_ratio >= ideal_ratio:
         return 0.0
 
-    gap_factor = _clamp((ideal_ratio - current_ratio) / 0.5)
-    return symptom_severity * gap_factor
+    return _clamp((ideal_ratio - current_ratio) / 0.5)
 
 
 def test_narrow_foot_angle(

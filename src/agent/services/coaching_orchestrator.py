@@ -212,6 +212,15 @@ class CoachingOrchestrator:
         self._set_rep_count = value
 
     @property
+    def positive_cue_keys(self) -> List[str]:
+        """Cue keys eligible for positive reinforcement after clean reps."""
+        return self._positive_cue_keys
+
+    @positive_cue_keys.setter
+    def positive_cue_keys(self, value: List[str]) -> None:
+        self._positive_cue_keys = value
+
+    @property
     def rest_seconds(self) -> int:
         """Rest duration used to time set recap speech."""
         return self._rest_seconds

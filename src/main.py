@@ -698,8 +698,12 @@ class NowvaApp:
                     if not self.ipc_server:
                         print("[IPC] Starting IPC server...")
 
-                        def ipc_message_handler(message: dict):
-                            """Handle messages from pose estimation / biomechanics pipeline"""
+                        def ipc_message_handler(message: dict, raw_bytes: bytes):
+                            """Handle messages from pose estimation / biomechanics pipeline.
+
+                            Receives both the parsed dict and the raw wire bytes so
+                            frame_data can be forwarded without re-serialization.
+                            """
                             msg_type = message.get('type')
 
                             # --- New biomechanics message types ---
@@ -760,14 +764,17 @@ class NowvaApp:
                                 coaching = self.coaching_ipc
                                 if coaching and coaching.client_socket:
                                     try:
-                                        coaching.send_message(message)
+                                        if msg_type == 'frame_data':
+                                            coaching.send_raw_message(raw_bytes)
+                                        else:
+                                            coaching.send_message(message)
                                     except Exception as e:
                                         print(f"[COACHING IPC] Forward failed: {e}")
                                 else:
                                     print(f"[COACHING IPC] No voice agent connected — dropping {msg_type}")
 
                         self.ipc_server = IPCServer()
-                        self.ipc_server.bind(message_callback=ipc_message_handler)
+                        self.ipc_server.bind(raw_message_callback=ipc_message_handler)
                         print("[IPC] Server ready")
 
                         def run_server(pose_ipc=self.ipc_server):

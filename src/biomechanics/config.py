@@ -219,6 +219,9 @@ class GroundClampConfig(BaseModel):
     calibration_frames: int = 30
     stance_width_tolerance_m: float = 0.02
     ankle_y_tolerance_m: float = 0.01
+    # Stricter than the gates: real standing medians sit >= 0.87, while a
+    # held upright half-squat scores 0.62-0.85 and must not calibrate.
+    min_leg_extension_ratio: float = 0.75
 
 
 class PositionFilterConfig(BaseModel):
@@ -244,11 +247,12 @@ class PredictiveStateConfig(BaseModel):
 
 class StandingGateConfig(BaseModel):
     """Standing pose gate configuration."""
-    min_confidence: float = 0.5
+    min_confidence: float = 0.25
     max_knee_flexion_deg: float = 25.0
     max_trunk_flexion_deg: float = 25.0
     min_torso_length_m: float = 0.25
     max_torso_length_m: float = 0.80
+    min_leg_extension_ratio: float = 0.6
     required_consecutive_frames: int = 5
 
 
@@ -264,6 +268,7 @@ class ReadinessGateConfig(BaseModel):
     max_trunk_flexion_deg: float = 35.0
     min_torso_length_m: float = 0.15
     max_torso_length_m: float = 1.00
+    min_leg_extension_ratio: float = 0.5
     required_consecutive_frames: int = 5
 
 

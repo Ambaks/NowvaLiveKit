@@ -1,16 +1,16 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Plus_Jakarta_Sans, Sora } from "next/font/google";
+import { Bricolage_Grotesque, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import "./globals.css";
 import { IntroLoader } from "@/components/layout/IntroLoader";
+import { IntroStage } from "@/components/intro/IntroStage";
 import { Providers } from "@/components/layout/Providers";
 import { CookieBanner } from "@/components/layout/CookieBanner";
-import { DELIVERY, GA_ID, SITE_NAME, SITE_URL } from "@/lib/constants";
+import { GA_ID, SITE_NAME, SITE_URL } from "@/lib/constants";
 
-const sora = Sora({
+const bricolage = Bricolage_Grotesque({
   subsets: ["latin"],
-  weight: ["600", "700", "800"],
-  variable: "--font-sora",
+  variable: "--font-bricolage",
 });
 
 const jakarta = Plus_Jakarta_Sans({
@@ -26,11 +26,13 @@ const jetbrains = JetBrains_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "NOWVA — The AI Personal Trainer, Built Into a Rack",
-  description: `The Nowva Rack watches every rep with built-in cameras, diagnoses your form in real time, and coaches you out loud — 100% on-device. Reserve yours for ${DELIVERY}. $0 today.`,
+  title: "NOWVA — The First Rack That Coaches You",
+  description:
+    "Cameras in the steel. A real-time biomechanics engine underneath. A full AI strength coach that corrects your form rep by rep, programs your training, and plans your nutrition — 100% on-device. Reserve for $0.",
   openGraph: {
-    title: "NOWVA — Your Coach. Built Into the Steel.",
-    description: `The AI squat rack that sees your form, corrects it in under 50 ms, and never phones home. Reserve yours for ${DELIVERY} — $0 today.`,
+    title: "NOWVA — The First Rack That Coaches You",
+    description:
+      "The AI rack that sees your form, catches faults in under 50 ms, and coaches your whole training — programming, nutrition, progress. Never phones home. Reserve yours — $0 today.",
     url: SITE_URL,
     siteName: SITE_NAME,
     images: [{ url: "/og.png", width: 1200, height: 630 }],
@@ -38,14 +40,15 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "NOWVA — Your Coach. Built Into the Steel.",
-    description: `The AI squat rack that sees your form and corrects it in under 50 ms. Reserve yours for ${DELIVERY} — $0 today.`,
+    title: "NOWVA — The First Rack That Coaches You",
+    description:
+      "The AI rack that sees your form, catches faults in under 50 ms, and coaches your whole training. Reserve yours — $0 today.",
     images: ["/og.png"],
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0a0a0b",
+  themeColor: "#09090e",
 };
 
 /* Show the intro loader once per tab session; repeats skip it before paint. */
@@ -63,7 +66,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${sora.variable} ${jakarta.variable} ${jetbrains.variable} antialiased`}
+      className={`${bricolage.variable} ${jakarta.variable} ${jetbrains.variable} antialiased`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: INTRO_SCRIPT }} />
@@ -71,6 +74,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen font-sans">
         <IntroLoader />
+        <IntroStage />
         <Providers>
           {children}
           <CookieBanner />

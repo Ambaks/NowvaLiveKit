@@ -3,64 +3,69 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ---------------------------------------------------------------------------
-   Design tokens — "precision instrument"
-   Dark  = night gym: near-black, cyan telemetry, amber command keys.
-   Light = engineering lab: cool paper, teal ink, blueprint grid.
+   Design tokens — "ultraviolet instrument"
+   Dark  = night lab: violet-cast near-black, electric violet telemetry,
+           gold command keys.
+   Light = engineering paper: cool white, deep violet ink, blueprint grid.
 --------------------------------------------------------------------------- */
 
 :root {
-  --bg: #fafafb;
+  --bg: #fbfafd;
   --bg-2: #ffffff;
-  --bg-3: #f0f0f4;
+  --bg-3: #f2f0f7;
   --surface: #ffffff;
-  --surface-2: #f5f5f8;
-  --fg: #131316;
-  --fg-2: #5c5c64;
-  --fg-3: #9c9ca3;
-  --accent: #00b8d4;
-  --accent-ink: #00707f;
-  --accent-strong: #006064;
+  --surface-2: #f6f4fa;
+  --fg: #16131c;
+  --fg-2: #5f5b6b;
+  --fg-3: #9d99a8;
+  --accent: #8b5cf6;
+  --accent-ink: #6d28d9;
+  --accent-strong: #5b21b6;
   --cta: #ffb800;
   --cta-hover: #ffa000;
-  --on-cta: #131316;
-  --border: #e4e4e9;
-  --border-strong: #d2d2d8;
-  --grid-line: rgba(0, 112, 127, 0.08);
-  --glow: rgba(0, 151, 167, 0.14);
+  --on-cta: #16131c;
+  --border: #e7e4ee;
+  --border-strong: #d5d1de;
+  --grid-line: rgba(109, 40, 217, 0.07);
+  --glow: rgba(139, 92, 246, 0.16);
   --glow-cta: rgba(255, 160, 0, 0.18);
-  --grad-1: #00838f;
-  --grad-2: #00b8d4;
-  --grad-3: #006064;
+  --grad-1: #6d28d9;
+  --grad-2: #9333ea;
+  --grad-3: #4c1d95;
+  --aurora-1: rgba(139, 92, 246, 0.1);
+  --aurora-2: rgba(192, 132, 252, 0.08);
   --noise-opacity: 0.03;
-  --scanline: rgba(0, 122, 140, 0.35);
+  --scanline: rgba(124, 58, 237, 0.35);
   color-scheme: light;
 }
 
 .dark {
-  --bg: #0a0a0b;
-  --bg-2: #111113;
-  --bg-3: #1a1a1f;
-  --surface: #141416;
-  --surface-2: #1e1e22;
-  --fg: #f5f5f7;
-  --fg-2: #8e8e93;
-  --fg-3: #5d5d63;
-  --accent: #00e5ff;
-  --accent-ink: #00e5ff;
-  --accent-strong: #67ffff;
+  --bg: #09090e;
+  --bg-2: #0f0f16;
+  --bg-3: #17171f;
+  --surface: #121218;
+  --surface-2: #1b1b24;
+  --fg: #f6f5f8;
+  --fg-2: #928fa0;
+  --fg-3: #5c5966;
+  --accent: #a78bfa;
+  --accent-ink: #b8a1ff;
+  --accent-strong: #c4b5fd;
   --cta: #ffb800;
   --cta-hover: #ffca28;
-  --on-cta: #131316;
-  --border: #2a2a2e;
-  --border-strong: #3a3a3e;
-  --grid-line: rgba(0, 229, 255, 0.05);
-  --glow: rgba(0, 229, 255, 0.2);
+  --on-cta: #16131c;
+  --border: #26242e;
+  --border-strong: #363341;
+  --grid-line: rgba(167, 139, 250, 0.05);
+  --glow: rgba(139, 92, 246, 0.25);
   --glow-cta: rgba(255, 184, 0, 0.25);
-  --grad-1: #00e5ff;
-  --grad-2: #67ffff;
-  --grad-3: #00b8d4;
+  --grad-1: #a78bfa;
+  --grad-2: #d8b4fe;
+  --grad-3: #7c3aed;
+  --aurora-1: rgba(124, 58, 237, 0.2);
+  --aurora-2: rgba(216, 180, 254, 0.09);
   --noise-opacity: 0.055;
-  --scanline: rgba(0, 229, 255, 0.5);
+  --scanline: rgba(167, 139, 250, 0.5);
   color-scheme: dark;
 }
 
@@ -81,7 +86,7 @@
   --color-on-cta: var(--on-cta);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
-  --font-display: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
@@ -105,7 +110,7 @@ body {
 
 ::selection {
   background: var(--accent);
-  color: #0a0a0b;
+  color: #09090e;
 }
 
 :focus-visible {
@@ -138,6 +143,22 @@ body::after {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/* Slow shimmering pan across the text gradient. Pair with .gradient-text. */
+.gradient-text-animated {
+  background-size: 220% 100%;
+  animation: grad-pan 7s ease-in-out infinite;
+}
+
+@keyframes grad-pan {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
 }
 
 .grid-bg {
@@ -179,6 +200,114 @@ body::after {
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--accent-ink);
+}
+
+/* Drifting violet aurora backdrop. Parent gets the class; the light lives
+   on ::before so content stacks above it untouched. */
+.aurora-bg {
+  position: relative;
+  isolation: isolate;
+}
+
+.aurora-bg::before {
+  content: "";
+  position: absolute;
+  inset: -25%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 55% 45% at 28% 35%, var(--aurora-1), transparent 65%),
+    radial-gradient(ellipse 45% 50% at 74% 68%, var(--aurora-2), transparent 65%);
+  animation: aurora-drift 16s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift {
+  from {
+    transform: translate3d(-3%, -2%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(3%, 3%, 0) scale(1.1);
+  }
+}
+
+/* Card hover: lift, violet edge, soft glow. */
+.card-lift {
+  transition:
+    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.35s ease,
+    box-shadow 0.5s ease;
+}
+
+.card-lift:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  box-shadow: 0 24px 60px -28px var(--glow);
+}
+
+/* 1px gradient border via the padding-box/border-box double background. */
+.gradient-border {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(135deg, var(--grad-1), var(--border) 45%, var(--grad-3))
+      border-box;
+}
+
+/* Light sweep across CTA surfaces on hover. Element needs overflow-hidden
+   context — Button applies this class itself. */
+.btn-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-130%) skewX(-18deg);
+  background: linear-gradient(
+    105deg,
+    transparent 42%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 58%
+  );
+}
+
+.btn-shine:hover::after {
+  animation: shine-sweep 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes shine-sweep {
+  to {
+    transform: translateX(130%) skewX(-18deg);
+  }
+}
+
+/* Telemetry meter — a thin loading bar that fills to --meter-value (0–1).
+   Add .meter-run (e.g. once revealed) to start the fill. */
+.meter {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.meter__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--grad-1), var(--grad-2));
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.meter-run .meter__fill {
+  animation: meter-fill 1.2s cubic-bezier(0.65, 0, 0.35, 1) 0.25s forwards;
+}
+
+@keyframes meter-fill {
+  to {
+    transform: scaleX(var(--meter-value, 1));
+  }
 }
 
 /* Telemetry scan line that sweeps the hero render. The element is a
@@ -224,6 +353,47 @@ body::after {
   );
 }
 
+/* Fullscreen hero: gradient veil that keeps the left-hand copy legible
+   over the full-bleed render. Desktop reads left-to-right — solid page
+   color under the text column dissolving toward the render — plus a floor
+   fade into the next section. Mobile trades the side scrim for a uniform
+   veil since the copy sits directly over the render. */
+.hero-scrim {
+  background:
+    linear-gradient(
+      to right,
+      var(--bg) 0%,
+      color-mix(in oklab, var(--bg) 78%, transparent) 28%,
+      color-mix(in oklab, var(--bg) 34%, transparent) 52%,
+      transparent 74%
+    ),
+    linear-gradient(to top, var(--bg), transparent 16%);
+}
+
+@media (max-width: 767px) {
+  .hero-scrim {
+    background:
+      linear-gradient(
+        color-mix(in oklab, var(--bg) 68%, transparent),
+        color-mix(in oklab, var(--bg) 68%, transparent)
+      ),
+      linear-gradient(to top, var(--bg), transparent 30%);
+  }
+}
+
+/* Soft halo in the page color lifts overlaid copy off the render without
+   a hard outline. Flips with the theme automatically. */
+.hero-copy {
+  text-shadow:
+    0 1px 12px color-mix(in oklab, var(--bg) 85%, transparent),
+    0 14px 44px color-mix(in oklab, var(--bg) 65%, transparent);
+}
+
+/* Shadows show through clipped-gradient glyphs and read as emboss. */
+.hero-copy .gradient-text {
+  text-shadow: none;
+}
+
 /* Hero entrance: pure CSS so the first paint never waits for hydration.
    --rise indexes the stagger; the base delay clears the intro wipe and
    collapses when the intro is skipped. */
@@ -231,10 +401,12 @@ body::after {
   from {
     opacity: 0;
     transform: translateY(26px);
+    filter: blur(8px);
   }
   to {
     opacity: 1;
     transform: none;
+    filter: none;
   }
 }
 
@@ -271,6 +443,15 @@ html[data-intro="off"] .hero-img-in {
   .hero-img-in {
     animation: none;
   }
+  .gradient-text-animated,
+  .aurora-bg::before,
+  .btn-shine::after {
+    animation: none;
+  }
+  .meter-run .meter__fill {
+    animation: none;
+    transform: scaleX(var(--meter-value, 1));
+  }
 }
 
 @keyframes pulse-dot {
@@ -292,10 +473,11 @@ html[data-intro="off"] .hero-img-in {
    The inline script in layout.tsx sets html[data-intro="off"] on repeats.
    --intro-hold + --intro-wipe define the timeline; the hero entrance
    (--rise-base) is derived from them so the two can never drift apart.
+   Boot-status lines swap inside the hold window like firmware coming up.
 --------------------------------------------------------------------------- */
 
 :root {
-  --intro-hold: 1350ms;
+  --intro-hold: 1600ms;
   --intro-wipe: 550ms;
 }
 
@@ -308,7 +490,7 @@ html[data-intro="off"] .hero-img-in {
   align-items: center;
   justify-content: center;
   gap: 1.4rem;
-  background: #0a0a0b;
+  background: #09090e;
   animation: intro-exit var(--intro-wipe) cubic-bezier(0.76, 0, 0.24, 1)
     var(--intro-hold) forwards;
 }
@@ -318,24 +500,25 @@ html[data-intro="off"] .hero-img-in {
   height: 76px;
   opacity: 0;
   animation: intro-logo 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s forwards;
-  filter: drop-shadow(0 0 28px rgba(0, 229, 255, 0.45));
+  filter: drop-shadow(0 0 28px rgba(167, 139, 250, 0.5));
 }
 
 .intro-loader__word {
-  font-family: var(--font-sora);
+  font-family: var(--font-bricolage);
   font-weight: 800;
   font-size: 1.05rem;
   letter-spacing: 0.55em;
   text-indent: 0.55em;
-  color: #f5f5f7;
+  color: #f6f5f8;
   opacity: 0;
-  animation: intro-word 0.7s ease-out 0.5s forwards;
+  animation: intro-word 0.7s ease-out 0.45s forwards;
 }
 
 .intro-loader__bar {
-  width: 148px;
-  height: 1px;
-  background: #2a2a2e;
+  width: 168px;
+  height: 2px;
+  border-radius: 999px;
+  background: #26242e;
   position: relative;
   overflow: hidden;
 }
@@ -346,8 +529,55 @@ html[data-intro="off"] .hero-img-in {
   inset: 0;
   transform: scaleX(0);
   transform-origin: left;
-  background: linear-gradient(90deg, #00e5ff, #67ffff);
-  animation: intro-bar 1.15s cubic-bezier(0.65, 0, 0.35, 1) 0.35s forwards;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7c3aed, #a78bfa, #d8b4fe);
+  box-shadow: 0 0 16px rgba(167, 139, 250, 0.6);
+  animation: intro-bar 1.3s cubic-bezier(0.65, 0, 0.35, 1) 0.3s forwards;
+}
+
+/* Firmware boot lines: three stacked messages, each holding its window. */
+.intro-loader__status {
+  position: relative;
+  height: 1rem;
+  width: 100%;
+  font-family: var(--font-jetbrains), ui-monospace, monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #928fa0;
+  text-align: center;
+}
+
+.intro-loader__status span {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+.intro-loader__status span:nth-child(1) {
+  animation: intro-status 0.5s steps(1) 0.25s forwards;
+}
+.intro-loader__status span:nth-child(2) {
+  animation: intro-status 0.5s steps(1) 0.75s forwards;
+}
+.intro-loader__status span:nth-child(3) {
+  animation: intro-status-hold 0.45s steps(1) 1.25s forwards;
+}
+
+@keyframes intro-status {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes intro-status-hold {
+  0%,
+  100% {
+    opacity: 1;
+  }
 }
 
 @keyframes intro-logo {
@@ -390,15 +620,184 @@ html[data-intro="off"] .intro-loader {
   display: none;
 }
 
+/* ---------------------------------------------------------------------------
+   Intro stage 2 — 3D rack pan. Sits UNDER the splash (200) and over the page
+   (scroll-progress is 120), so the splash's own intro-exit wipe reveals it.
+   Only exists once JS sets html[data-intro="3d"]; the no-JS path never sees
+   any of this. "done" re-applies the hero-rise animation-name (none → rise),
+   which starts a fresh run with the short base delay.
+--------------------------------------------------------------------------- */
+
+.intro-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: #09090e;
+  touch-action: none;
+  transition: opacity 450ms ease;
+}
+
+.intro-stage--out {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.intro-stage__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.intro-stage__skip {
+  position: absolute;
+  bottom: 2rem;
+  right: 2rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(146, 143, 160, 0.35);
+  font-family: var(--font-jetbrains), ui-monospace, monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #928fa0;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  animation: intro-word 0.5s ease-out 0.8s forwards;
+}
+
+.intro-stage__skip:hover,
+.intro-stage__skip:focus-visible {
+  color: #f6f5f8;
+}
+
+html[data-intro="3d"] {
+  overflow: hidden;
+}
+
+html[data-intro="3d"] .hero-rise,
+html[data-intro="3d"] .hero-img-in {
+  animation: none;
+  opacity: 0;
+}
+
+html[data-intro="done"] .hero-rise,
+html[data-intro="done"] .hero-img-in {
+  --rise-base: 150ms;
+}
+
+/* ---------------------------------------------------------------------------
+   Scroll progress — thin gradient bar pinned above the navbar.
+--------------------------------------------------------------------------- */
+
+.scroll-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 120;
+  transform-origin: left;
+  background: linear-gradient(
+    90deg,
+    var(--grad-1),
+    var(--grad-2),
+    var(--grad-3)
+  );
+}
+
 @media (prefers-reduced-motion: reduce) {
   .intro-loader {
+    display: none;
+  }
+  .intro-stage {
     display: none;
   }
   .scanline {
     animation: none;
     opacity: 0;
   }
+  .pulse-dot {
+    animation: none;
+  }
   html {
     scroll-behavior: auto;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Rack explorer scrub
+   Styled directly on the input so the thumb tracks the finger with no wrapper
+   element between the pointer and the value.
+--------------------------------------------------------------------------- */
+
+.rack-scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.rack-scrub:active {
+  cursor: grabbing;
+}
+
+.rack-scrub::-webkit-slider-runnable-track {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 2px;
+}
+
+.rack-scrub::-moz-range-track {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 2px;
+}
+
+.rack-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 3px solid #07070b;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+
+.rack-scrub::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 3px solid #07070b;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+
+.rack-scrub:active::-webkit-slider-thumb {
+  background: var(--cta);
+}
+
+/* Dissolves a CAD render's edges into the page instead of cropping it to a
+   box. Pairs with .render-blend, which already knocks out the white plate. */
+.render-fade {
+  -webkit-mask-image: radial-gradient(
+    ellipse 76% 74% at 50% 46%,
+    #000 52%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 76% 74% at 50% 46%,
+    #000 52%,
+    transparent 100%
+  );
+}
+
+/* R3F applies Canvas `style` to the wrapper div, and OrbitControls may set
+   touch-action inline on the canvas itself — either way a one-finger drag over
+   the stage would swallow vertical page scrolling on a phone. Keep vertical
+   pans for the page and give horizontal drags to the orbit control. */
+.rack-stage canvas {
+  touch-action: pan-y !important;
 }
