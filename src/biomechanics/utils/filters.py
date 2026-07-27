@@ -14,14 +14,6 @@ from typing import Dict, Optional
 import time
 
 
-@dataclass
-class OneEuroFilterParams:
-    """Parameters for One Euro Filter."""
-    min_cutoff: float = 1.0      # Minimum cutoff frequency (Hz) - lower = smoother
-    beta: float = 0.007          # Speed coefficient - higher = more responsive to fast movements
-    d_cutoff: float = 1.0        # Cutoff for derivative filter
-
-
 class LowPassFilter:
     """Simple first-order low-pass filter."""
 
@@ -186,35 +178,6 @@ class ExponentialMovingAverage:
         self.value = None
 
 
-class MovingAverage:
-    """
-    Simple Moving Average over N samples.
-
-    Less responsive than EMA but gives uniform weighting to recent samples.
-    """
-
-    def __init__(self, window_size: int = 5):
-        """
-        Initialize moving average filter.
-
-        Args:
-            window_size: Number of samples to average.
-        """
-        self.window_size = window_size
-        self.values: list = []
-
-    def filter(self, x: float) -> float:
-        """Filter a value."""
-        self.values.append(x)
-        if len(self.values) > self.window_size:
-            self.values.pop(0)
-        return sum(self.values) / len(self.values)
-
-    def reset(self):
-        """Reset filter state."""
-        self.values.clear()
-
-
 @dataclass
 class JointAngleFilter:
     """
@@ -303,6 +266,7 @@ class JointAngleFilter:
             'knee_valgus_r': self._get_filter('knee_valgus_r').filter(angles.knee_valgus_r, timestamp),
             'foot_confidence_l': angles.foot_confidence_l,
             'foot_confidence_r': angles.foot_confidence_r,
+            'knee_ankle_sep_ratio': angles.knee_ankle_sep_ratio,
             'shoulder_flexion_l': self._get_filter('shoulder_flexion_l').filter(angles.shoulder_flexion_l, timestamp),
             'shoulder_flexion_r': self._get_filter('shoulder_flexion_r').filter(angles.shoulder_flexion_r, timestamp),
             'shoulder_abduction_l': self._get_filter('shoulder_abduction_l').filter(angles.shoulder_abduction_l, timestamp),

@@ -11,6 +11,7 @@ Key robustness features:
 - Angle-based bottom detection (max knee flexion) with velocity confirmation
 """
 
+from collections import deque
 from enum import Enum
 from typing import Optional, List, Tuple
 from dataclasses import dataclass, field
@@ -105,8 +106,14 @@ class RepCounter:
         self._angle_samples: int = 0
 
         # Velocity history for smoothing state decisions
-        self._velocity_history: List[float] = []
         self._velocity_window: int = 3  # frames
+        self._velocity_history: deque[float] = deque(maxlen=self._velocity_window)
+
+        self._assessment_mode: bool = False
+
+    def set_assessment_mode(self, enabled: bool) -> None:
+        """Bypass the min-depth validation so any completed rep counts."""
+        self._assessment_mode = enabled
 
     def reset(self) -> None:
         """Reset the counter to initial state."""
@@ -136,9 +143,7 @@ class RepCounter:
 
     def _get_smoothed_velocity(self, velocity: float) -> float:
         """Get smoothed velocity using short history."""
-        self._velocity_history.append(velocity)
-        if len(self._velocity_history) > self._velocity_window:
-            self._velocity_history.pop(0)
+        self._velocity_history.append(velocity)  # deque auto-evicts past maxlen
         return sum(self._velocity_history) / len(self._velocity_history)
 
     @property
@@ -298,7 +303,7 @@ class RepCounter:
                 if exit_condition or exit_by_hip:
                     # Validate rep
                     if self._frames_in_rep >= self.config.min_rep_duration_frames:
-                        if self._max_depth_angle >= self.config.min_depth_knee_angle:
+                        if self._assessment_mode or self._max_depth_angle >= self.config.min_depth_knee_angle:
                             self.rep_count += 1
                             completed_rep = self._create_rep_data(angles)
                         else:

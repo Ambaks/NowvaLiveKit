@@ -14,11 +14,19 @@ from biomechanics.pose.base import COCO_SKELETON_CONNECTIONS
 from biomechanics.utils.types import Skeleton2D
 
 
-# Default colors
-COLOR_HIGH_CONF = (0, 255, 0)     # Green for high confidence
-COLOR_LOW_CONF = (0, 255, 255)   # Yellow for low confidence
-COLOR_LIMB = (255, 255, 255)      # White for limb connections
-COLOR_FPS = (0, 255, 0)           # Green for FPS counter
+# Default colors — Nowva brand palette (BGR)
+COLOR_HIGH_CONF = (255, 229, 0)    # Cyan #00e5ff for high confidence
+COLOR_LOW_CONF = (110, 92, 78)     # Dim slate for low confidence
+COLOR_LIMB = (255, 229, 0)         # Cyan limb connections
+COLOR_FPS = (150, 142, 128)        # Muted slate for FPS counter
+
+# Glow pass blending (single addWeighted per frame)
+GLOW_ALPHA = 0.35
+GLOW_THICKNESS_MULT = 4
+
+
+def _brighten(color: Tuple[int, int, int], amount: float = 0.55) -> Tuple[int, int, int]:
+    return tuple(min(255, int(c + (255 - c) * amount)) for c in color)
 
 
 class FPSCounter:
@@ -90,19 +98,33 @@ def draw_skeleton(
     if skeleton is None or not skeleton.keypoints:
         return frame
 
-    # Draw limb connections first (so keypoints are on top)
+    # Collect valid limb segments and keypoints once
+    segments = []
     for start_idx, end_idx in COCO_SKELETON_CONNECTIONS:
         if start_idx < len(skeleton.keypoints) and end_idx < len(skeleton.keypoints):
             kp_start = skeleton.keypoints[start_idx]
             kp_end = skeleton.keypoints[end_idx]
-
-            # Only draw if both keypoints are valid
             if kp_start.confidence > 0 and kp_end.confidence > 0:
-                pt1 = (int(kp_start.x), int(kp_start.y))
-                pt2 = (int(kp_end.x), int(kp_end.y))
-                cv2.line(frame, pt1, pt2, color_limb, limb_thickness)
+                segments.append((
+                    (int(kp_start.x), int(kp_start.y)),
+                    (int(kp_end.x), int(kp_end.y)),
+                ))
 
-    # Draw keypoints
+    # Glow pass — thick strokes on an overlay, blended once
+    glow = frame.copy()
+    for pt1, pt2 in segments:
+        cv2.line(glow, pt1, pt2, color_limb, limb_thickness * GLOW_THICKNESS_MULT, cv2.LINE_AA)
+    for kp in skeleton.keypoints:
+        if kp.confidence > 0:
+            cv2.circle(glow, (int(kp.x), int(kp.y)), keypoint_radius * 2, color_limb, -1, cv2.LINE_AA)
+    cv2.addWeighted(glow, GLOW_ALPHA, frame, 1 - GLOW_ALPHA, 0, frame)
+
+    # Bright limb cores
+    core_color = _brighten(color_limb)
+    for pt1, pt2 in segments:
+        cv2.line(frame, pt1, pt2, core_color, limb_thickness, cv2.LINE_AA)
+
+    # Draw keypoints — filled disc + brighter ring
     for idx, kp in enumerate(skeleton.keypoints):
         if kp.confidence <= 0:
             continue
@@ -112,8 +134,8 @@ def draw_skeleton(
         # Choose color based on confidence
         color = color_high if kp.confidence >= confidence_threshold else color_low
 
-        # Draw filled circle
-        cv2.circle(frame, (x, y), keypoint_radius, color, -1)
+        cv2.circle(frame, (x, y), keypoint_radius - 1, color, -1, cv2.LINE_AA)
+        cv2.circle(frame, (x, y), keypoint_radius + 1, _brighten(color, 0.4), 1, cv2.LINE_AA)
 
         # Draw confidence value if requested
         if draw_confidence:
@@ -126,6 +148,7 @@ def draw_skeleton(
                 0.3,
                 color,
                 1,
+                cv2.LINE_AA,
             )
 
     return frame
@@ -153,15 +176,16 @@ def draw_fps(
     Returns:
         Frame with FPS overlay (same as input, modified in place)
     """
-    text = f"FPS: {fps:.1f}"
+    text = f"FPS {fps:.1f}"
     cv2.putText(
         frame,
         text,
         position,
         cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale,
+        font_scale * 0.65,
         color,
-        thickness,
+        1,
+        cv2.LINE_AA,
     )
     return frame
 
@@ -236,6 +260,7 @@ def draw_keypoint_labels(
             font_scale,
             color,
             1,
+            cv2.LINE_AA,
         )
 
     return frame

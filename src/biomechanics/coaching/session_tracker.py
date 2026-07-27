@@ -19,9 +19,12 @@ from biomechanics.diagnosis.bridge import (
     build_rom_dict,
 )
 from biomechanics.diagnosis.engine import HypothesisEngine
-from biomechanics.diagnosis.rep_scoring import score_set
+from biomechanics.diagnosis.rep_scoring import score_rep, score_set
 from biomechanics.diagnosis.types import RepKinematicSummary, SetFeatures
 from biomechanics.utils.types import RepData
+
+
+ASSESSMENT_DIAGNOSIS_WINDOW = 3
 
 
 class SessionTracker:
@@ -58,12 +61,19 @@ class SessionTracker:
 
         # Diagnosis integration (populated via set_athlete_params)
         self._rep_kinematic_buffer: list[RepKinematicSummary] = []
+        self._bottom_frame_buffer: list[tuple[int, list]] = []
         self._athlete_params: dict | None = None
         self._baseline: dict | None = None
+
+        # Assessment mode: per-rep rolling-window diagnosis
+        self._assessment_mode: bool = False
 
     def set_athlete_params(self, athlete_params: dict, baseline: dict) -> None:
         self._athlete_params = athlete_params
         self._baseline = baseline
+
+    def set_assessment_mode(self, enabled: bool) -> None:
+        self._assessment_mode = enabled
 
     # ------------------------------------------------------------------
     # Rep handling
@@ -74,6 +84,7 @@ class SessionTracker:
         rep: RepData,
         bottom_kpts: Optional[List] = None,
         bottom_angles: Optional[Dict[str, float]] = None,
+        standing_kpts: Optional[List] = None,
     ) -> None:
         """
         Process a completed rep. Detects set boundaries and forwards
@@ -92,18 +103,56 @@ class SessionTracker:
             self.set_active = True
 
         self.current_set_reps.append(rep)
+
+        # Compute kinematics before IPC send so the summary can be included.
+        # Guarded: a degenerate bottom frame must not block the rep_complete send.
+        summary: RepKinematicSummary | None = None
+        if self._athlete_params is not None and bottom_kpts is not None and bottom_angles is not None:
+            try:
+                frame = build_frame_from_live_pipeline(
+                    bottom_kpts, bottom_angles, standing_kpts=standing_kpts,
+                )
+                summary = build_rep_kinematic_summary(frame, self._athlete_params, rep.rep_number)
+                self._rep_kinematic_buffer.append(summary)
+                self._bottom_frame_buffer.append((rep.rep_number, frame["kpts"]))
+            except Exception as e:
+                summary = None
+                print(f"[SESSION TRACKER] Rep kinematics failed for rep {rep.rep_number}: {e}")
+
         self.ipc_bridge.send_rep_complete(
-            rep, bottom_kpts=bottom_kpts, bottom_angles=bottom_angles,
+            rep,
+            bottom_kpts=bottom_kpts,
+            bottom_angles=bottom_angles,
+            standing_kpts=standing_kpts,
+            rep_kinematic_summary=summary,
+            set_number=self.current_set_number,
         )
 
-        if self._athlete_params is not None and bottom_kpts is not None and bottom_angles is not None:
-            frame = build_frame_from_live_pipeline(bottom_kpts, bottom_angles)
-            summary = build_rep_kinematic_summary(frame, self._athlete_params, rep.rep_number)
-            self._rep_kinematic_buffer.append(summary)
+        if self._assessment_mode:
+            self._run_assessment_diagnosis(rep.rep_number)
 
         self.last_rep_time = now
         self.total_reps += 1
         self.all_reps.append(rep)
+
+    def _run_assessment_diagnosis(self, rep_number: int) -> None:
+        if not self._rep_kinematic_buffer or self._athlete_params is None:
+            return
+        window = self._rep_kinematic_buffer[-ASSESSMENT_DIAGNOSIS_WINDOW:]
+        anthro = build_anthro_dict(self._athlete_params)
+        rom = build_rom_dict(self._athlete_params, self._baseline or {})
+        set_features = SetFeatures(
+            user_id=0,
+            set_id=f"assessment_rep_{rep_number}",
+            rep_count=len(window),
+            per_rep_kinematics=list(window),
+            anthropometry=anthro,
+            rom=rom,
+        )
+        diagnosis_result = HypothesisEngine().diagnose(set_features)
+        latest_kin = self._rep_kinematic_buffer[-1]
+        rep_score = score_rep(latest_kin, anthro, rom)
+        self.ipc_bridge.send_rep_diagnosis(rep_number, diagnosis_result, rep_score=rep_score)
 
     # ------------------------------------------------------------------
     # Set timeout polling
@@ -158,8 +207,23 @@ class SessionTracker:
             )
 
         self._rep_kinematic_buffer = []
+        self._bottom_frame_buffer = []
         self.current_set_reps = []
         self.set_active = False
+
+    def reset_rep_buffers(self) -> None:
+        """Clear per-rep diagnosis buffers without ending the set."""
+        self._rep_kinematic_buffer = []
+        self._bottom_frame_buffer = []
+
+    def bottom_frame_for_rep(self, rep_number: int) -> list | None:
+        """Viewer-coords bottom-frame kpts for a rep, or the latest buffered frame."""
+        for buffered_rep_number, kpts in self._bottom_frame_buffer:
+            if buffered_rep_number == rep_number:
+                return kpts
+        if self._bottom_frame_buffer:
+            return self._bottom_frame_buffer[-1][1]
+        return None
 
     def _compute_set_summary(
         self, set_number: int, reps: List[RepData]
@@ -225,3 +289,4 @@ class SessionTracker:
         self.total_sets = 0
         self.all_reps = []
         self._rep_kinematic_buffer = []
+        self._bottom_frame_buffer = []

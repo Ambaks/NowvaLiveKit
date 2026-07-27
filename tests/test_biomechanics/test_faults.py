@@ -287,7 +287,9 @@ class TestKneeValgusRule:
 
     @pytest.fixture
     def knee_valgus_rule(self):
-        return KneeValgusRule()
+        rule = KneeValgusRule()
+        rule.set_frame_context(phase="bottom")
+        return rule
 
     @pytest.fixture
     def history(self):
@@ -318,33 +320,33 @@ class TestKneeValgusRule:
         assert fault is None
 
     def test_mild_valgus(self, knee_valgus_rule, history):
-        """Mild valgus (5-10° adduction) should produce MILD fault."""
+        """Mild valgus (12-17° adduction) should produce MILD fault."""
         angles = create_joint_angles(
             frame=0,
-            hip_adduction_l=7.0,
-            hip_adduction_r=6.0,
+            hip_adduction_l=14.0,
+            hip_adduction_r=13.0,
         )
         fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
         assert fault.severity == FaultSeverity.MILD
 
     def test_moderate_valgus(self, knee_valgus_rule, history):
-        """Moderate valgus (10-15° adduction) should produce MODERATE fault."""
+        """Moderate valgus (17-24° adduction) should produce MODERATE fault."""
         angles = create_joint_angles(
             frame=0,
-            hip_adduction_l=12.0,
-            hip_adduction_r=11.0,
+            hip_adduction_l=19.0,
+            hip_adduction_r=18.0,
         )
         fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
         assert fault.severity == FaultSeverity.MODERATE
 
     def test_severe_valgus(self, knee_valgus_rule, history):
-        """Severe valgus (>15° adduction) should produce SEVERE fault."""
+        """Severe valgus (>24° adduction) should produce SEVERE fault."""
         angles = create_joint_angles(
             frame=0,
-            hip_adduction_l=18.0,
-            hip_adduction_r=16.0,
+            hip_adduction_l=27.0,
+            hip_adduction_r=25.0,
         )
         fault = knee_valgus_rule.evaluate(angles, history, in_rep=True)
         assert fault is not None
@@ -562,7 +564,7 @@ class TestRuleEngine:
             hip_flexion_l=80.0,  # Asymmetry
             hip_flexion_r=65.0,
         )
-        faults = engine.evaluate(angles, in_rep=True)
+        faults = engine.evaluate(angles, in_rep=True, phase="bottom")
 
         fault_types = {f.fault_type for f in faults}
         # Should detect at least forward lean and one other

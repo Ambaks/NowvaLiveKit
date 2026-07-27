@@ -18,7 +18,6 @@ pip-delete-this-directory.txt
 
 # Node.js / Frontend
 node_modules/
-package-lock.json
 dist/
 dist-ssr/
 *.local
@@ -31,6 +30,7 @@ session.key
 
 # Agent state files (user-specific data)
 .agent_state_*.json
+.agent_state_*.json.lock
 
 # Database
 *.db
@@ -84,9 +84,9 @@ logs/
 # Session logs and program generation logs
 session_logs/
 program_generation_logs/
-src/session_logs/*.csv
-src/session_logs/*.txt
-src/program_generation_logs/*.txt
+src/session_logs/
+src/agent/session_logs/
+src/program_generation_logs/
 
 # Temporary files
 *.tmp
@@ -144,13 +144,18 @@ downloads/
 # Output files
 /output/
 
+# User test run recordings
+**/user_test_runs/
+
 # Generated program files
-src/programs/*.md
-programs/*.md
-programs/*.pdf
+src/programs/
+programs/
 
 # Build archives
 *.tar.gz
+
+# Redundant lock files
+requirements_filtered.lock
 
 # Redis dumps
 dump.rdb
@@ -173,9 +178,16 @@ graphify-out/*
 
 # Claude (local settings stay out of repo)
 .claude/settings.local.json
+.claude/skills/
 
 # Deprecated files (if any)
 deprecated/*
 
 # PNG files (if any)
 *.png
+# Screen recordings
+*.mov
+
+# Website (Vercel frontend) — keep its image assets despite the *.png rule
+!website/**/*.png
+Nowva_Full_Rack.gltf

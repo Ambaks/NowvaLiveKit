@@ -66,6 +66,21 @@ class TestBoneLengthConstraints:
 
         assert bc.is_calibrated
 
+    def test_progress_reports_calibration_frames(self):
+        """progress tracks frames collected, capped at the required total."""
+        bc = BoneLengthConstraints(calibration_frames=30)
+        skeleton_data = _standing_skeleton()
+
+        assert bc.progress == (0, 30)
+
+        for i in range(10):
+            bc.enforce(_make_skeleton(skeleton_data, frame_index=i))
+        assert bc.progress == (10, 30)
+
+        for i in range(10, 30):
+            bc.enforce(_make_skeleton(skeleton_data, frame_index=i))
+        assert bc.progress == (30, 30)
+
     def test_not_calibrated_returns_unchanged(self):
         """During calibration, skeleton passes through unmodified."""
         bc = BoneLengthConstraints(calibration_frames=30)

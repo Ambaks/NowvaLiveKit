@@ -173,7 +173,7 @@ class TestStandingGateBlocksCalibration:
         bc = BoneLengthConstraints(calibration_frames=5, standing_gate=gate)
 
         bad_pts = _standing_skeleton()
-        bad_pts[CK.LEFT_KNEE] = [0.10, 0.70, 0.30]  # bent knee
+        bad_pts[CK.LEFT_KNEE] = [0.35, 0.60, 0.0]  # bent knee (frontal plane)
 
         # 10 frames with bad pose — gate doesn't pass, calibration doesn't advance
         for i in range(10):
@@ -234,9 +234,10 @@ class TestRuleEngineProportionScaling:
         valgus_rule = engine.get_rule(
             __import__("biomechanics.faults.fault_types", fromlist=["FaultType"]).FaultType.KNEE_VALGUS
         )
-        assert valgus_rule.mild_threshold == pytest.approx(8.0 * 1.2, abs=0.1)
-        assert valgus_rule.moderate_threshold == pytest.approx(13.0 * 1.2, abs=0.1)
-        assert valgus_rule.severe_threshold == pytest.approx(18.0 * 1.2, abs=0.1)
+        # Single-camera (default) uses 2D FPPA thresholds: 6/10/16
+        assert valgus_rule.mild_threshold == pytest.approx(6.0 * 1.2, abs=0.1)
+        assert valgus_rule.moderate_threshold == pytest.approx(10.0 * 1.2, abs=0.1)
+        assert valgus_rule.severe_threshold == pytest.approx(16.0 * 1.2, abs=0.1)
 
     def test_heel_rise_threshold_scaled(self):
         engine = _make_engine_with_squat_rules()
@@ -259,8 +260,8 @@ class TestRuleEngineProportionScaling:
         heel_rule = engine.get_rule(
             __import__("biomechanics.faults.fault_types", fromlist=["FaultType"]).FaultType.HEEL_RISE
         )
-        # Default threshold = 3.0 * 5 = 15.0, scaled by 1.2 = 18.0
-        assert heel_rule.threshold_degrees == pytest.approx(15.0 * 1.2, abs=0.1)
+        # Default threshold = 20.0 deg, scaled by 1.2 = 24.0
+        assert heel_rule.threshold_degrees == pytest.approx(20.0 * 1.2, abs=0.1)
 
     def test_forward_lean_thresholds_scaled(self):
         engine = _make_engine_with_squat_rules()

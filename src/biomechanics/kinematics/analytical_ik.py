@@ -22,6 +22,13 @@ from biomechanics.utils.geometry import (
 
 logger = logging.getLogger(__name__)
 
+# Fixed reference-direction vectors, allocated once at import to avoid
+# re-creating them every frame in the IK hot path. Treated as read-only —
+# the geometry helpers never mutate their inputs in place.
+_AXIS_X = np.array([1.0, 0.0, 0.0])        # forward / sagittal-plane normal
+_VERTICAL_UP = np.array([0.0, 1.0, 0.0])     # Y-up reference
+_VERTICAL_DOWN = np.array([0.0, -1.0, 0.0])  # Y-down reference (MediaPipe "up")
+
 
 class AnalyticalIKSolver(IKSolver):
     """
@@ -83,17 +90,8 @@ class AnalyticalIKSolver(IKSolver):
         angles.hip_adduction_l = self._compute_hip_adduction(kpts, side="left")
         angles.hip_adduction_r = self._compute_hip_adduction(kpts, side="right")
 
-        # Knee valgus from toe (primary metric when foot landmarks available)
-        valgus_l, foot_conf_l = self._compute_knee_valgus_from_toe(kpts, side="left")
-        valgus_r, foot_conf_r = self._compute_knee_valgus_from_toe(kpts, side="right")
-        angles.knee_valgus_l = valgus_l
-        angles.knee_valgus_r = valgus_r
-        angles.foot_confidence_l = foot_conf_l
-        angles.foot_confidence_r = foot_conf_r
-
-        # Hip rotation (internal/external)
-        angles.hip_rotation_l = self._compute_hip_rotation(kpts, side="left")
-        angles.hip_rotation_r = self._compute_hip_rotation(kpts, side="right")
+        # Knee valgus + foot_confidence + hip_rotation: written by the
+        # pipeline's ValgusEstimator after solve() returns (mode-aware).
 
         # Knee flexion
         angles.knee_flexion_l = self._compute_knee_flexion(kpts, side="left")
@@ -185,17 +183,15 @@ class AnalyticalIKSolver(IKSolver):
         # Thigh vector (hip to knee)
         thigh_vec = knee - hip
 
-        # In standing position, thigh points downward (negative Y in Y-up coords)
-        # Measure how far the thigh deviates from the downward direction
-        # 0 degrees when standing upright, increases with flexion
+        # Sagittal-plane angle between trunk and thigh.
+        # 0° = standing (trunk and thigh aligned), increases with flexion.
+        trunk_norm = np.linalg.norm(trunk_vec)
+        thigh_norm = np.linalg.norm(thigh_vec)
+        if trunk_norm < 1e-6 or thigh_norm < 1e-6:
+            return 0.0
 
-        # Downward reference (Y-up coordinate system)
-        vertical = np.array([0, -1, 0])
-
-        # Thigh angle from vertical (0 when standing)
-        thigh_from_vertical = angle_between_vectors(thigh_vec, vertical)
-
-        return thigh_from_vertical
+        raw_angle = angle_between_vectors(trunk_vec, thigh_vec)
+        return 180.0 - raw_angle
 
     def _compute_hip_adduction(self, kpts: dict, side: str) -> float:
         """
@@ -225,7 +221,7 @@ class AnalyticalIKSolver(IKSolver):
             return 0.0
 
         # Sagittal plane normal (X-axis, pointing left)
-        sagittal_normal = np.array([1, 0, 0])
+        sagittal_normal = _AXIS_X
 
         # Project thigh vector onto frontal plane (remove X component)
         thigh_frontal = np.array([0, thigh_vec[1], thigh_vec[2]])
@@ -246,73 +242,6 @@ class AnalyticalIKSolver(IKSolver):
             sign = -1.0 if thigh_vec[0] < 0 else 1.0
 
         return angle * sign
-
-    def _compute_knee_valgus_from_toe(self, kpts: dict, side: str) -> tuple:
-        """
-        Compute knee valgus as the ground-plane deviation of the knee
-        from the hip-to-big-toe reference line.
-
-        Projects hip, knee, and foot_index onto the XZ ground plane
-        (bird's-eye view, discarding Y/height) so that knee flexion
-        depth does not conflate with medial/lateral collapse.
-
-        Returns:
-            (valgus_angle_degrees, foot_confidence)
-
-        Positive = valgus (knee medial to the hip-toe line)
-        Negative = varus (knee lateral to the hip-toe line)
-        """
-        hip = self._get_point(kpts, f"{side}_hip")
-        knee = self._get_point(kpts, f"{side}_knee")
-        foot = self._get_point(kpts, f"{side}_foot_index")
-
-        _, foot_conf = kpts.get(f"{side}_foot_index", (np.zeros(3), 0.0))
-
-        if hip is None or knee is None or foot is None:
-            return 0.0, foot_conf
-
-        # Project onto ground plane (XZ, removing Y/height) for bird's-eye view
-        hip_ground = np.array([hip[0], hip[2]])
-        knee_ground = np.array([knee[0], knee[2]])
-        foot_ground = np.array([foot[0], foot[2]])
-
-        # Reference line: hip to foot_index
-        ref_vec = foot_ground - hip_ground
-        ref_len = np.linalg.norm(ref_vec)
-        if ref_len < 1e-6:
-            return 0.0, foot_conf
-
-        # Knee vector: hip to knee
-        knee_vec = knee_ground - hip_ground
-
-        # Angle magnitude via 3D helper (pad to 3D for angle_between_vectors)
-        angle = angle_between_vectors(
-            np.array([ref_vec[0], ref_vec[1], 0.0]),
-            np.array([knee_vec[0], knee_vec[1], 0.0]),
-        )
-
-        # Sign via 2D cross product in XZ ground plane
-        cross_2d = ref_vec[0] * knee_vec[1] - ref_vec[1] * knee_vec[0]
-
-        if side == "left":
-            # Left leg: knee medial (toward center/right) → cross > 0 = valgus
-            sign = 1.0 if cross_2d > 0 else -1.0
-        else:
-            # Right leg: knee medial (toward center/left) → cross < 0 = valgus
-            sign = 1.0 if cross_2d < 0 else -1.0
-
-        return angle * sign, foot_conf
-
-    def _compute_hip_rotation(self, kpts: dict, side: str) -> float:
-        """
-        Compute hip internal/external rotation.
-
-        This is difficult to compute accurately without foot orientation.
-        Returns 0 as a placeholder.
-        """
-        # Hip rotation requires knowing foot orientation
-        # For now, return 0
-        return 0.0
 
     def _compute_knee_flexion(self, kpts: dict, side: str) -> float:
         """
@@ -355,7 +284,7 @@ class AnalyticalIKSolver(IKSolver):
             return 0.0
 
         # Upward direction (Y-down MediaPipe convention: -Y is up)
-        up = np.array([0.0, -1.0, 0.0])
+        up = _VERTICAL_DOWN
         return angle_between_vectors(shank, up)
 
     def _compute_trunk_flexion(self, kpts: dict) -> float:
@@ -381,7 +310,7 @@ class AnalyticalIKSolver(IKSolver):
         trunk_vec = shoulder_mid - hip_mid
 
         # Y-down reference (MediaPipe world coords are Y-down)
-        vertical = np.array([0, -1, 0])
+        vertical = _VERTICAL_DOWN
 
         # 180 - angle: 180° upright, decreases with lean
         angle = angle_between_vectors(trunk_vec, vertical)
@@ -412,7 +341,7 @@ class AnalyticalIKSolver(IKSolver):
         trunk_frontal = np.array([trunk_vec[0], trunk_vec[1], 0])
 
         # Upward reference in frontal plane (Y-up coordinate system)
-        vertical = np.array([0, 1, 0])
+        vertical = _VERTICAL_UP
 
         angle = angle_between_vectors(trunk_frontal, vertical)
 
@@ -443,7 +372,7 @@ class AnalyticalIKSolver(IKSolver):
         shoulder_xz = np.array([shoulder_vec[0], 0, shoulder_vec[2]])
 
         # Reference: facing forward (X-axis)
-        reference = np.array([1, 0, 0])
+        reference = _AXIS_X
 
         if np.linalg.norm(shoulder_xz) < 1e-6:
             return 0.0
@@ -483,7 +412,7 @@ class AnalyticalIKSolver(IKSolver):
         trunk_sagittal = np.array([0, trunk_vec[1], trunk_vec[2]])
 
         # Upward reference (Y-up coordinate system)
-        vertical = np.array([0, 1, 0])
+        vertical = _VERTICAL_UP
 
         if np.linalg.norm(trunk_sagittal) < 1e-6:
             return 0.0
@@ -547,7 +476,7 @@ class AnalyticalIKSolver(IKSolver):
         hip_xz = np.array([hip_vec[0], 0, hip_vec[2]])
 
         # Reference: facing forward (X-axis)
-        reference = np.array([1, 0, 0])
+        reference = _AXIS_X
 
         if np.linalg.norm(hip_xz) < 1e-6:
             return 0.0

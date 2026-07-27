@@ -18,8 +18,8 @@ def _make_skeleton(positions: np.ndarray, confidences: np.ndarray = None,
     )
 
 
-# Default max_displacement at 2.5 m/s / 30 fps ≈ 0.08333 m
-DEFAULT_MAX_DISP = 2.5 / 30
+DEFAULT_MAX_VEL = 2.5  # m/s
+DEFAULT_DT = 0.033     # seconds between test frames
 
 
 class TestVelocityClamp:
@@ -59,9 +59,10 @@ class TestVelocityClamp:
 
         result_positions = result.to_numpy()
 
-        # Keypoint 5 should be clamped
+        # Keypoint 5 should be clamped to max_velocity * dt
+        expected_disp = DEFAULT_MAX_VEL * DEFAULT_DT
         clamped_distance = np.linalg.norm(result_positions[5] - frame_a[5])
-        assert abs(clamped_distance - DEFAULT_MAX_DISP) < 1e-6
+        assert abs(clamped_distance - expected_disp) < 1e-6
 
         # Other keypoints should be unchanged (they didn't move)
         for i in range(17):
@@ -127,8 +128,9 @@ class TestVelocityClamp:
 
             distance_from_prev = np.linalg.norm(result_pos - prev_pos)
 
-            # Each frame should advance by at most max_displacement
-            assert distance_from_prev <= DEFAULT_MAX_DISP + 1e-6
+            # Each frame should advance by at most max_velocity * dt
+            expected_disp = DEFAULT_MAX_VEL * DEFAULT_DT
+            assert distance_from_prev <= expected_disp + 1e-6
 
             # Each frame should be closer to the target than the previous
             distance_to_target = np.linalg.norm(result_pos - target[9])

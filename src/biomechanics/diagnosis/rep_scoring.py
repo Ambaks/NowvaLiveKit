@@ -1,7 +1,7 @@
 """Per-rep quality scoring for squat biomechanics.
 
-Scores each rep on 5 dimensions (depth, trunk control, knee tracking,
-symmetry, ankle utilization) and produces a weighted composite score.
+Scores each rep on 4 dimensions (depth, trunk control, knee tracking,
+symmetry) and produces a weighted composite score.
 All scores are in [0, 1] where 1.0 = perfect.
 """
 
@@ -10,13 +10,10 @@ from __future__ import annotations
 from .graph.evidence_tests import _clamp, expected_trunk_lean_geometric
 from .types import RepKinematicSummary, RepScore, SetScoreSummary
 
-WEIGHT_DEPTH = 0.45
-WEIGHT_TRUNK = 0.21
-WEIGHT_KNEES = 0.17
-WEIGHT_SYMMETRY = 0.10
-WEIGHT_ANKLES = 0.07
-
-DEPTH_CLASS_SCORES = {0: 0.1, 1: 0.25, 2: 0.5, 3: 0.85, 4: 1.0}
+WEIGHT_DEPTH = 0.48
+WEIGHT_TRUNK = 0.23
+WEIGHT_KNEES = 0.18
+WEIGHT_SYMMETRY = 0.11
 
 TRUNK_TOLERANCE_DEGREES = 3.0
 TRUNK_DECAY_RANGE_DEGREES = 20.0
@@ -27,22 +24,19 @@ KNEE_DECAY_RANGE_DEGREES = 12.0
 SYMMETRY_TOLERANCE_CM = 1.0
 SYMMETRY_DECAY_RANGE_CM = 5.0
 
-ANKLE_UTILIZATION_LOW = 0.50
-ANKLE_UTILIZATION_HIGH = 0.85
-
 
 def score_depth(
     rep: RepKinematicSummary, anthro: dict, rom: dict
 ) -> float:
-    base_score = DEPTH_CLASS_SCORES.get(rep.depth_class_int, 0.1)
+    hip_y_standing = (rep.hip_y_l_at_top + rep.hip_y_r_at_top) / 2.0
+    hip_y_bottom = (rep.hip_y_l_at_bottom + rep.hip_y_r_at_bottom) / 2.0
+    knee_y_bottom = (rep.knee_y_l_at_bottom + rep.knee_y_r_at_bottom) / 2.0
 
-    average_hip_y = (rep.hip_y_l_at_bottom + rep.hip_y_r_at_bottom) / 2.0
-    average_knee_y = (rep.knee_y_l_at_bottom + rep.knee_y_r_at_bottom) / 2.0
-    hip_at_or_below_knee = average_hip_y <= average_knee_y
+    denominator = hip_y_standing - knee_y_bottom
+    if denominator <= 0.0:
+        return 0.0
 
-    if hip_at_or_below_knee:
-        return _clamp(base_score + 0.15)
-    return base_score
+    return _clamp((hip_y_standing - hip_y_bottom) / denominator)
 
 
 def score_trunk_control(
@@ -58,17 +52,19 @@ def score_trunk_control(
     )
 
 
+def _score_single_knee(deviation_deg: float) -> float:
+    abs_deviation = abs(deviation_deg)
+    if abs_deviation <= KNEE_PERFECT_ZONE_DEGREES:
+        return 1.0
+    return _clamp(
+        1.0 - (abs_deviation - KNEE_PERFECT_ZONE_DEGREES) / KNEE_DECAY_RANGE_DEGREES
+    )
+
+
 def score_knee_tracking(
     rep: RepKinematicSummary, anthro: dict, rom: dict
 ) -> float:
-    worst_deviation = max(abs(rep.knee_valgus_l), abs(rep.knee_valgus_r))
-
-    if worst_deviation <= KNEE_PERFECT_ZONE_DEGREES:
-        return 1.0
-    return _clamp(
-        1.0
-        - (worst_deviation - KNEE_PERFECT_ZONE_DEGREES) / KNEE_DECAY_RANGE_DEGREES
-    )
+    return 0.5 * _score_single_knee(rep.knee_valgus_l) + 0.5 * _score_single_knee(rep.knee_valgus_r)
 
 
 def score_symmetry(
@@ -83,22 +79,6 @@ def score_symmetry(
     )
 
 
-def score_ankle_utilization(
-    rep: RepKinematicSummary, anthro: dict, rom: dict
-) -> float:
-    dorsiflexion_capacity = rom.get("dorsiflexion_drop", 35.0)
-    average_dorsiflexion = (rep.ankle_df_l_max + rep.ankle_df_r_max) / 2.0
-    utilization = average_dorsiflexion / max(dorsiflexion_capacity, 1.0)
-
-    if ANKLE_UTILIZATION_LOW <= utilization <= ANKLE_UTILIZATION_HIGH:
-        return 1.0
-    if utilization < ANKLE_UTILIZATION_LOW:
-        return _clamp(utilization / ANKLE_UTILIZATION_LOW)
-    return _clamp(
-        1.0 - (utilization - ANKLE_UTILIZATION_HIGH) / (1.0 - ANKLE_UTILIZATION_HIGH)
-    )
-
-
 def score_rep(
     rep: RepKinematicSummary, anthro: dict, rom: dict
 ) -> RepScore:
@@ -106,14 +86,12 @@ def score_rep(
     trunk_control = score_trunk_control(rep, anthro, rom)
     knee_tracking = score_knee_tracking(rep, anthro, rom)
     symmetry = score_symmetry(rep, anthro, rom)
-    ankle_utilization = score_ankle_utilization(rep, anthro, rom)
 
     composite = (
         depth * WEIGHT_DEPTH
         + trunk_control * WEIGHT_TRUNK
         + knee_tracking * WEIGHT_KNEES
         + symmetry * WEIGHT_SYMMETRY
-        + ankle_utilization * WEIGHT_ANKLES
     )
 
     return RepScore(
@@ -122,7 +100,6 @@ def score_rep(
         trunk_control_score=round(trunk_control, 3),
         knee_tracking_score=round(knee_tracking, 3),
         symmetry_score=round(symmetry, 3),
-        ankle_utilization_score=round(ankle_utilization, 3),
         composite_score=round(composite, 3),
     )
 

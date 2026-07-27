@@ -5,13 +5,67 @@ Handles persistent state for the Nova AI voice agent across different modes
 
 from __future__ import annotations
 
+import fcntl
 import json
+import logging
 import os
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Iterator, Optional, Any
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
+# Anchor state files to the project root so main.py and the voice agent
+# (which run with different CWDs) read/write the same file.
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+VALID_MODES = frozenset({
+    "onboarding",
+    "main_menu",
+    "workout",
+    "program_creation",
+    "schedule",
+})
+
+# Top-level state keys writable via set(): the default schema keys plus
+# runtime-only sections that agents create on the fly.
+VALID_TOP_LEVEL_KEYS = frozenset({
+    "mode",
+    "user",
+    "session",
+    "workout",
+    "quick_exercise",
+    "program_creation",
+    "program_update",
+    "schedule",
+    "calibration",
+    "shutdown_requested",
+})
+
 _notify_fd: int | None = None
+
+
+def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+
+
+@contextmanager
+def _file_lock(filepath: str) -> Iterator[None]:
+    # Advisory lock on a sibling .lock file. We lock a sibling instead of the
+    # state file itself because os.replace() swaps the inode, so a lock held
+    # on the old inode would not block a writer replacing the file.
+    lock_fd = os.open(filepath + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 
 def set_state_notify_fd(fd: int) -> None:
@@ -29,13 +83,15 @@ class AgentState:
     - workout: Active workout session
     """
 
-    def __init__(self, user_id: Optional[str] = None):
+    def __init__(self, user_id: Optional[str] = None, state_dir: str | Path | None = None):
         """
         Initialize agent state
 
         Args:
             user_id: Optional user ID to load existing state
+            state_dir: Directory for the state file, defaults to the project root
         """
+        self._state_dir = Path(state_dir) if state_dir is not None else PROJECT_ROOT
         self._user_loaded_from_db = False  # Track if we've already loaded user info from DB
         self.state = {
             "mode": "onboarding",  # Current mode: onboarding, main_menu, workout
@@ -50,7 +106,6 @@ class AgentState:
             "session": {
                 "started_at": datetime.now().isoformat(),
                 "last_mode_switch": None,
-                "conversation_history": [],
             },
             "workout": {
                 "active": False,
@@ -90,6 +145,11 @@ class AgentState:
         if user_id:
             self.load_state(user_id)
 
+        # Reset session-scoped flags so they fire once per session, not once ever
+        self.state.setdefault("session", {})
+        self.state["session"]["main_menu_greeted"] = False
+        self.state["session"]["started_at"] = datetime.now().isoformat()
+
     def get(self, key: str, default: Any = None) -> Any:
         """
         Get state value by key path (supports dot notation)
@@ -121,6 +181,11 @@ class AgentState:
             value: Value to set
         """
         keys = key.split(".")
+        if keys[0] not in VALID_TOP_LEVEL_KEYS:
+            raise ValueError(
+                f"Unknown top-level state key: {keys[0]!r}. "
+                f"Valid keys: {sorted(VALID_TOP_LEVEL_KEYS)}"
+            )
         target = self.state
 
         # Navigate to parent
@@ -140,8 +205,12 @@ class AgentState:
         Switch to a new mode
 
         Args:
-            new_mode: Mode to switch to (onboarding, main_menu, workout)
+            new_mode: Mode to switch to (must be one of VALID_MODES)
         """
+        if new_mode not in VALID_MODES:
+            raise ValueError(
+                f"Unknown mode: {new_mode!r}. Valid modes: {sorted(VALID_MODES)}"
+            )
         old_mode = self.state["mode"]
         self.state["mode"] = new_mode
         self.state["session"]["last_mode_switch"] = {
@@ -184,6 +253,9 @@ class AgentState:
         """Get session information"""
         return self.state["session"]
 
+    def _state_filepath(self, user_id: str) -> str:
+        return str(self._state_dir / f".agent_state_{user_id}.json")
+
     def save_state(self, filepath: Optional[str] = None):
         """
         Save state to file using atomic write (write to temp, then rename).
@@ -194,14 +266,17 @@ class AgentState:
         """
         if filepath is None:
             user_id = self.state["user"].get("id", "guest")
-            filepath = f".agent_state_{user_id}.json"
+            filepath = self._state_filepath(user_id)
 
         try:
-            # Atomic write: write to temp file, then rename
+            # Atomic write: write to temp file, then rename.
+            # The advisory lock serializes writers across processes
+            # (main.py and the voice agent share this file).
             tmp_filepath = filepath + ".tmp"
-            with open(tmp_filepath, 'w') as f:
-                json.dump(self.state, f, indent=2)
-            os.replace(tmp_filepath, filepath)
+            with _file_lock(filepath):
+                with open(tmp_filepath, 'w') as f:
+                    json.dump(self.state, f, indent=2)
+                os.replace(tmp_filepath, filepath)
             print(f"[STATE] Saved to {filepath}")
         except Exception as e:
             print(f"[STATE] Failed to save state: {e}")
@@ -219,26 +294,27 @@ class AgentState:
         Args:
             user_id: User ID to load state for
         """
-        filepath = f".agent_state_{user_id}.json"
+        filepath = self._state_filepath(user_id)
 
         if not os.path.exists(filepath):
             print(f"[STATE] No saved state found for user {user_id}")
             # Still continue to load user info from database
         else:
             try:
-                with open(filepath, 'r') as f:
-                    content = f.read()
-                    if not content or content.strip() == '':
-                        print(f"[STATE] Empty state file, skipping load")
-                        return
-                    loaded_state = json.loads(content)
-                    self.state.update(loaded_state)
+                with _file_lock(filepath):
+                    with open(filepath, 'r') as f:
+                        content = f.read()
+                if not content or content.strip() == '':
+                    print(f"[STATE] Empty state file, skipping load")
+                    return
+                loaded_state = json.loads(content)
+                # Deep-merge so a partial nested dict in the file does not
+                # wipe sibling default keys
+                _deep_merge(self.state, loaded_state)
                 # Suppressed verbose logging - uncomment for debugging
                 # print(f"[STATE] Loaded state for user {user_id}")
             except json.JSONDecodeError as e:
-                # Silently ignore JSON errors during concurrent file access
-                # This happens when main.py reads while voice_agent.py is writing
-                pass
+                logger.warning(f"[STATE] Corrupted state file {filepath}: {e}")
             except Exception as e:
                 print(f"[STATE] Failed to load state: {e}")
 

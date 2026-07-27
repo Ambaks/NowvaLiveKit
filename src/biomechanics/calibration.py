@@ -99,7 +99,7 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
                 "severe": faults_cfg.bilateral_asymmetry.severe,
             },
             "heel_rise": {
-                "threshold_degrees": faults_cfg.heel_rise.threshold_cm * 10,
+                "threshold_degrees": faults_cfg.heel_rise.threshold_deg,
             },
             "depth": {
                 "quarter_threshold": 60.0,
@@ -215,13 +215,15 @@ class CalibrationTracker:
         # Standing knee flexion (for gate widening after calibration)
         self.standing_knee_flexion = 0.0
 
-    def record_frame(self, joint_angles) -> None:
+    def record_frame(self, joint_angles, in_rep: bool = False) -> None:
         """Record a single frame's angles during calibration."""
         ja = joint_angles
 
-        # Standing knee flexion (track max observed)
-        standing_knee = max(ja.knee_flexion_l, ja.knee_flexion_r)
-        self.standing_knee_flexion = max(self.standing_knee_flexion, standing_knee)
+        # Standing knee flexion: only track when NOT in a rep so the gate
+        # threshold reflects actual standing posture, not squat depth.
+        if not in_rep:
+            standing_knee = max(ja.knee_flexion_l, ja.knee_flexion_r)
+            self.standing_knee_flexion = max(self.standing_knee_flexion, standing_knee)
 
         # Peak trunk flexion (180-convention: track minimum = most lean)
         self.peak_trunk = min(self.peak_trunk, ja.trunk_flexion)

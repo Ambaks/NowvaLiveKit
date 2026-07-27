@@ -92,6 +92,10 @@ class BiLSTMInference:
     def current_class_probabilities(self) -> np.ndarray:
         return self._counter.smoothed_probabilities
 
+    def set_assessment_mode(self, enabled: bool) -> None:
+        """Delegate to the inner counter so any completed rep counts."""
+        self._counter.set_assessment_mode(enabled)
+
     def reset(self) -> None:
         """Reset buffer and counter state (e.g. between sets)."""
         self._buffer.reset()

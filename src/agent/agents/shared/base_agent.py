@@ -5,6 +5,7 @@ Base agent class with shared properties and helpers for all Nova agents.
 import logging
 from livekit.agents import Agent
 from agent.core.agent_state import AgentState
+from agent.agents.prompts.base_prompt import BASE_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class BaseNovaAgent(Agent):
     def __init__(self, state: AgentState, userdata, instructions: str) -> None:
         self.state = state
         self.userdata = userdata
-        super().__init__(instructions=instructions)
+        super().__init__(instructions=f"{BASE_PROMPT}\n\n{instructions}")
 
     @property
     def user_id(self) -> str:

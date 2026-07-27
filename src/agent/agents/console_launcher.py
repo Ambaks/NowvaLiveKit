@@ -20,6 +20,42 @@ from livekit.agents import AgentSession, Agent, llm
 from livekit.plugins import openai
 
 
+def _find_physical_output_device() -> Optional[str]:
+    """Return the device ID of a physical speaker if the default output is BlackHole.
+
+    When BlackHole is the macOS system output (e.g. for screen recording), the
+    LiveKit console would send all TTS audio there — inaudible. This detects
+    that case and returns the first non-virtual output device so we can pass
+    --output-device to the voice agent subprocess.
+
+    Returns None if the default output is already a physical device.
+    """
+    try:
+        import sounddevice as sd
+    except ImportError:
+        return None
+
+    try:
+        _, default_output = sd.default.device
+        default_info = sd.query_devices(default_output, kind="output")
+        if "blackhole" not in default_info["name"].lower():
+            return None
+
+        for idx, dev in enumerate(sd.query_devices()):
+            if dev["max_output_channels"] <= 0:
+                continue
+            if idx == default_output:
+                continue
+            if "blackhole" in dev["name"].lower():
+                continue
+            print(f"[AUDIO] Default output is BlackHole — using '{dev['name']}' instead")
+            return str(idx)
+
+    except Exception:
+        pass
+    return None
+
+
 def _build_subprocess_env(state_notify_fd: Optional[int] = None) -> dict:
     env = os.environ.copy()
     if state_notify_fd is not None:
@@ -31,15 +67,19 @@ def _build_subprocess_env(state_notify_fd: Optional[int] = None) -> dict:
     return env
 
 
-def terminate_process_group(process):
-    """Kill a process and all its children by sending SIGTERM to the process group."""
+def terminate_process_group(process, timeout: float = 20):
+    """Kill a process and all its children by sending SIGTERM to the process group.
+
+    LiveKit's graceful shutdown sequence (session.aclose → session_end →
+    OTel flush → shutdown callbacks) needs time to run before SIGKILL.
+    """
     try:
         pgid = os.getpgid(process.pid)
         os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, OSError):
         pass
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
             pgid = os.getpgid(process.pid)
@@ -78,9 +118,14 @@ async def run_console_voice_agent(
         if state_notify_fd is not None:
             pass_fds = (state_notify_fd,)
 
+        cmd = [sys.executable, str(voice_agent_path), 'console']
+        physical_output = _find_physical_output_device()
+        if physical_output is not None:
+            cmd.extend(['--output-device', physical_output])
+
         # Run the voice agent in its own process group so we can kill all children
         process = subprocess.Popen(
-            [sys.executable, str(voice_agent_path), 'console'],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -126,9 +171,14 @@ async def run_console_voice_onboarding(
         if state_notify_fd is not None:
             pass_fds = (state_notify_fd,)
 
+        cmd = [sys.executable, str(voice_agent_path), 'console']
+        physical_output = _find_physical_output_device()
+        if physical_output is not None:
+            cmd.extend(['--output-device', physical_output])
+
         # Run the voice agent in its own process group so we can kill all children
         process = subprocess.Popen(
-            [sys.executable, str(voice_agent_path), 'console'],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -162,8 +212,7 @@ async def run_console_voice_onboarding(
                     onboarding_complete = True
                     print("[WRAPPER] Onboarding data captured...")
                     print("[WRAPPER] Agent will continue running in main menu mode")
-                    # Wait for welcome message to finish
-                    time.sleep(11)
+                    time.sleep(3)
                     break
 
         except KeyboardInterrupt:

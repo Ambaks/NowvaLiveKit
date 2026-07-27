@@ -23,12 +23,27 @@ def _mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
     return [[pt[2], -pt[1], -pt[0]] for pt in kpts]
 
 
+def _ground_and_center(kpts: list[list[float]]) -> list[list[float]]:
+    """Ground min ankle Y to 0 and center hip midpoint in XZ.
+
+    MediaPipe world coords are hip-centered, so hip heights are meaningless
+    across frames until each frame is re-grounded to its own ankle level.
+    Matches visualize_video_squats ground_and_center preprocessing.
+    """
+    arr = np.asarray(kpts, dtype=np.float64)
+    arr[:, 1] -= min(arr[15, 1], arr[16, 1])
+    arr[:, 0] -= (arr[11, 0] + arr[12, 0]) / 2.0
+    arr[:, 2] -= (arr[11, 2] + arr[12, 2]) / 2.0
+    return arr.tolist()
+
+
 def build_frame_from_live_pipeline(
     bottom_kpts: list[list[float]],
     bottom_angles: dict[str, float],
+    standing_kpts: list[list[float]] | None = None,
 ) -> dict:
     """Convert live pipeline data to the frame dict build_rep_kinematic_summary expects."""
-    kpts_vis = _mediapipe_to_viewer_coords(bottom_kpts)
+    kpts_vis = _ground_and_center(_mediapipe_to_viewer_coords(bottom_kpts))
 
     angles = {
         "trunk_flexion": bottom_angles["trunk_flexion"],
@@ -42,12 +57,20 @@ def build_frame_from_live_pipeline(
         ),
     }
 
-    return {"angles": angles, "kpts": kpts_vis}
+    result: dict = {"angles": angles, "kpts": kpts_vis}
+    if standing_kpts is not None:
+        result["standing_kpts"] = _ground_and_center(
+            _mediapipe_to_viewer_coords(standing_kpts)
+        )
+    return result
 
 
-def find_bottom_frame(rep_frames: list[dict]) -> dict:
-    """Return the frame with maximum knee flexion (deepest squat position)."""
-    best_frame = rep_frames[0]
+def find_bottom_frame(rep_frames: list[dict]) -> dict | None:
+    """Return the frame with maximum knee flexion (deepest squat position).
+
+    Returns None if the rep contains no valid frames.
+    """
+    best_frame = None
     best_knee_flex = -1.0
     for frame in rep_frames:
         if frame is None:
@@ -128,6 +151,16 @@ def build_rep_kinematic_summary(
     shoulder_width = athlete_params.get("shoulder_width_m", 0.40)
     stance_ratio = compute_stance_width_ratio(kpts, shoulder_width)
 
+    standing_kpts = frame.get("standing_kpts")
+    top_kwargs: dict = {}
+    if standing_kpts is not None:
+        top_kwargs = {
+            "hip_y_l_at_top": standing_kpts[11][1] * 100.0,
+            "hip_y_r_at_top": standing_kpts[12][1] * 100.0,
+            "knee_y_l_at_top": standing_kpts[13][1] * 100.0,
+            "knee_y_r_at_top": standing_kpts[14][1] * 100.0,
+        }
+
     return RepKinematicSummary(
         rep_number=rep_number,
         trunk_pitch_at_bottom=trunk_pitch,
@@ -143,6 +176,7 @@ def build_rep_kinematic_summary(
         foot_direction_angle_l=foot_angle_l,
         foot_direction_angle_r=foot_angle_r,
         depth_class_int=depth_class,
+        **top_kwargs,
     )
 
 
@@ -181,8 +215,12 @@ def build_set_features(
     per_rep_kinematics = []
     for rep_idx, rep_frames in enumerate(replay_reps):
         bottom_frame = find_bottom_frame(rep_frames)
+        if bottom_frame is None:
+            continue
+        first_frame = next(f for f in rep_frames if f is not None)
+        frame = {**bottom_frame, "standing_kpts": first_frame["kpts"]}
         rep_number = rep_idx + 2
-        summary = build_rep_kinematic_summary(bottom_frame, athlete_params, rep_number)
+        summary = build_rep_kinematic_summary(frame, athlete_params, rep_number)
         per_rep_kinematics.append(summary)
 
     return SetFeatures(

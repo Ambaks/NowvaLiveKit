@@ -24,7 +24,7 @@ from biomechanics.utils.types import (
 
 logger = logging.getLogger(__name__)
 
-NUM_KEYPOINTS = 17
+NUM_KEYPOINTS = 19
 
 
 class DLTTriangulator:
@@ -107,23 +107,6 @@ class DLTTriangulator:
 
         if not any_valid:
             return None
-
-        # Pad foot_index keypoints (17, 18) — RTMPose COCO-17 doesn't have them.
-        # Estimate from ankle position: place foot index slightly forward and down.
-        for ankle_idx, foot_idx_target in [
-            (CK.LEFT_ANKLE, 17),
-            (CK.RIGHT_ANKLE, 18),
-        ]:
-            ankle = points_3d[ankle_idx]
-            if ankle.confidence > 0.0:
-                points_3d.append(Point3D(
-                    x=ankle.x,
-                    y=ankle.y + 0.02,
-                    z=ankle.z + 0.05,
-                    confidence=ankle.confidence * 0.5,
-                ))
-            else:
-                points_3d.append(Point3D(x=0.0, y=0.0, z=0.0, confidence=0.0))
 
         # Re-center at hip midpoint
         l_hip = points_3d[CK.LEFT_HIP]

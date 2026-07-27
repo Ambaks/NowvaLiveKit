@@ -33,7 +33,10 @@ def run(iterations: int = 100, warmup: int = 10) -> BenchmarkResult:
     state.state.update(generate_agent_state_dict())
 
     tmp_dir = tempfile.mkdtemp()
-    filepath = str(Path(tmp_dir) / "bench_state.json")
+    state._state_dir = Path(tmp_dir)
+    # Save to the path load_state derives, so the load benchmark measures a
+    # real file read instead of a miss
+    filepath = str(Path(tmp_dir) / ".agent_state_bench_user.json")
 
     p_save = PipelineProfiler(window_size=iterations)
     p_load = PipelineProfiler(window_size=iterations)
@@ -51,6 +54,7 @@ def run(iterations: int = 100, warmup: int = 10) -> BenchmarkResult:
 
             load_state = AgentState.__new__(AgentState)
             load_state._user_loaded_from_db = True
+            load_state._state_dir = Path(tmp_dir)
             load_state.state = {"mode": "onboarding", "user": {"id": "bench_user"}}
             with p_load.time_layer(load_name):
                 load_state.load_state("bench_user")
@@ -60,6 +64,7 @@ def run(iterations: int = 100, warmup: int = 10) -> BenchmarkResult:
     # Cleanup
     Path(filepath).unlink(missing_ok=True)
     Path(filepath + ".tmp").unlink(missing_ok=True)
+    Path(filepath + ".lock").unlink(missing_ok=True)
 
     stats_save = stats_from_profiler(p_save.get_stats(save_name))
     stats_load = stats_from_profiler(p_load.get_stats(load_name))

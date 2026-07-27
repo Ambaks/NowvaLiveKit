@@ -46,6 +46,8 @@ class LockoutRule(FaultRule):
         # Track extremes during rep
         self._min_in_rep: float = 360.0
         self._max_in_rep: float = 0.0
+        self._first_in_rep: float = 0.0
+        self._first_captured: bool = False
         self._in_rep_prev: bool = False
         self._evaluated_rep: int = -1
 
@@ -56,6 +58,8 @@ class LockoutRule(FaultRule):
     def reset(self) -> None:
         self._min_in_rep = 360.0
         self._max_in_rep = 0.0
+        self._first_in_rep = 0.0
+        self._first_captured = False
         self._in_rep_prev = False
 
     def evaluate(
@@ -68,6 +72,9 @@ class LockoutRule(FaultRule):
         value = self._joint_getter(angles)
 
         if in_rep:
+            if not self._first_captured:
+                self._first_in_rep = value
+                self._first_captured = True
             self._min_in_rep = min(self._min_in_rep, value)
             self._max_in_rep = max(self._max_in_rep, value)
             self._in_rep_prev = True
@@ -85,11 +92,12 @@ class LockoutRule(FaultRule):
             else:
                 # "bottom" lockout: at the start of the rep the joint should
                 # be near 0° (e.g. curl bottom = fully extended).
-                # First frame of the rep captured the starting position.
-                residual = self._min_in_rep
+                residual = self._first_in_rep
 
             self._min_in_rep = 360.0
             self._max_in_rep = 0.0
+            self._first_in_rep = 0.0
+            self._first_captured = False
 
             if residual <= self.threshold_deg:
                 return None  # Good lockout

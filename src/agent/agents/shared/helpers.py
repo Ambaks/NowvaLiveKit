@@ -4,12 +4,67 @@ Used by multiple agent classes.
 """
 
 import logging
+import os
 from typing import Optional
 import asyncio
 
 from db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+def service_headers() -> dict:
+    """Headers for authenticated service-to-service API calls."""
+    return {"X-Service-Key": os.getenv("SERVICE_API_KEY", "")}
+
+
+def normalize_sex(raw_sex: str) -> Optional[str]:
+    """Normalize a spoken sex value to 'male' or 'female'. Returns None if unclear."""
+    sex_lower = raw_sex.lower().strip()
+    if sex_lower in ("m", "male", "man", "boy"):
+        return "male"
+    if sex_lower in ("f", "female", "woman", "girl"):
+        return "female"
+    return None
+
+
+def build_program_generation_payload(
+    program_params: dict,
+    user_id: str,
+    name: Optional[str],
+    email: Optional[str],
+    send_email: bool,
+) -> dict:
+    """Build the request body for POST /api/programs/generate.
+
+    equipment_tier is only included when the caller captured it, so callers
+    that never set it keep the API's own default.
+    """
+    payload = {
+        "user_id": user_id,
+        "name": name,
+        "email": email,
+        "height_cm": program_params["height_cm"],
+        "weight_kg": program_params["weight_kg"],
+        "age": program_params["age"],
+        "sex": program_params["sex"],
+        "goal_category": program_params["goal_category"],
+        "goal_raw": program_params["goal_raw"],
+        "duration_weeks": program_params["duration_weeks"],
+        "days_per_week": program_params["days_per_week"],
+        "session_duration": program_params.get("session_duration", 60),
+        "injury_history": program_params.get("injury_history", "none"),
+        "specific_sport": program_params.get("specific_sport", "none"),
+        "user_notes": program_params.get("user_notes"),
+        "fitness_level": program_params["fitness_level"],
+        "has_vbt_capability": program_params.get("has_vbt_capability", False),
+        "send_email": send_email,
+        "training_season": program_params.get("training_season"),
+        "games_per_week": program_params.get("games_per_week") or 0,
+    }
+    if "equipment_tier" in program_params:
+        payload["equipment_tier"] = program_params["equipment_tier"]
+    return payload
 
 
 def normalize_exercise_name(raw_name: str) -> Optional[str]:

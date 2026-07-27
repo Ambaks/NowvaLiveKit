@@ -43,6 +43,11 @@ OPENAI_PRICING = {
         "input": 0.75 / 1_000_000,       # $0.75 per 1M tokens
         "output": 4.50 / 1_000_000,      # $4.50 per 1M tokens
         "cached_input": 0.075 / 1_000_000 # $0.075 per 1M tokens
+    },
+    "gpt-5.5": {
+        "input": 5.00 / 1_000_000,       # $5.00 per 1M tokens
+        "output": 30.00 / 1_000_000,     # $30.00 per 1M tokens
+        "cached_input": 0.50 / 1_000_000 # $0.50 per 1M tokens (90% discount)
     }
 }
 

@@ -26,6 +26,8 @@ from livekit import rtc
 from livekit.agents.utils.audio import audio_frames_from_file
 from openai import AsyncOpenAI
 
+from agent.services.coaching_constants import CUE_TEXT_MAP
+
 logger = logging.getLogger(__name__)
 
 # Directory where pre-generated cue files live
@@ -43,38 +45,6 @@ TTS_INSTRUCTIONS = (
     "Speak with high energy, urgency, and motivation — like you're right next "
     "to the lifter on the gym floor. Short, punchy, and commanding."
 )
-
-# Number words for rep cues
-_NUMBER_WORDS = {
-    1: "One!", 2: "Two!", 3: "Three!", 4: "Four!", 5: "Five!",
-    6: "Six!", 7: "Seven!", 8: "Eight!", 9: "Nine!", 10: "Ten!",
-    11: "Eleven!", 12: "Twelve!", 13: "Thirteen!", 14: "Fourteen!", 15: "Fifteen!",
-    16: "Sixteen!", 17: "Seventeen!", 18: "Eighteen!", 19: "Nineteen!", 20: "Twenty!",
-}
-
-# Cue key → spoken text mapping
-CUE_TEXT_MAP: Dict[str, str] = {
-    # Squat corrections
-    "knees_out": "Knees out!",
-    "chest_up": "Chest up!",
-    "deeper": "Get deeper!",
-    "heels_down": "Heels down!",
-    "even_it_out": "Even it out!",
-    "slow_down": "Slow down!",
-    "brace": "Brace your core!",
-    # Deadlift corrections
-    "hips_through": "Hips through!",
-    "flat_back": "Flat back!",
-    "lockout": "Lock it out!",
-    # Positive reinforcement
-    "good_rep": "Good rep!",
-    "great_depth": "Great depth!",
-    "strong": "Strong!",
-    "clean": "Clean!",
-    "perfect": "Perfect!",
-    # Rep counts
-    **{f"rep_{i}": _NUMBER_WORDS[i] for i in range(1, 21)},
-}
 
 # Audio format constants
 SAMPLE_RATE = 24000
@@ -109,6 +79,17 @@ class AudioCueService:
         # Eagerly load and pre-read all WAV cues into memory
         self._load_rep_sound()
         self._load_from_disk()
+        self._validate_expected_cues()
+
+    @property
+    def session(self):
+        """The bound AgentSession, or None before attach_session()."""
+        return self._session
+
+    @property
+    def rep_track_ready(self) -> bool:
+        """Whether the dedicated rep sound track has been published."""
+        return self._rep_track_ready
 
     def attach_session(self, session) -> None:
         """Bind a live AgentSession for audio playback (after prewarm)."""
@@ -248,6 +229,20 @@ class AudioCueService:
                 except Exception as e:
                     logger.warning(f"[AUDIO CUE] Failed to pre-load {wav_path}: {e}")
         logger.info(f"[AUDIO CUE] Pre-loaded {mem_count} WAV variants into memory")
+
+    def _validate_expected_cues(self) -> None:
+        """Log warnings for expected cue keys missing from disk (will use slow TTS fallback)."""
+        missing = [
+            k for k in CUE_TEXT_MAP
+            if not k.startswith("rep_")
+            and k not in self._memory_cache
+            and k not in self._disk_cache
+        ]
+        if missing:
+            logger.warning(
+                f"[AUDIO CUE] {len(missing)} cues missing from disk — "
+                f"will use TTS fallback (~500ms each): {missing}"
+            )
 
     async def cache_cues(self, cues: Dict[str, str]) -> None:
         """

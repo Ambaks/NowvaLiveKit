@@ -1,0 +1,91 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #09090e;
+  --color-surface: #121218;
+  --color-surface-2: #1b1b24;
+  --color-line: #26242e;
+  --color-line-strong: #363341;
+  --color-fg: #f6f5f8;
+  --color-muted: #928fa0;
+  --color-faint: #5c5966;
+  --color-accent: #a78bfa;
+  --color-cta: #ffb800;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  background: var(--color-ink);
+  color: var(--color-fg);
+  overscroll-behavior: none;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Scrub track — styled directly so the thumb tracks the finger with no
+   wrapper element between input and pointer. */
+.scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  touch-action: pan-y;
+}
+
+.scrub::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--color-line-strong);
+}
+
+.scrub::-moz-range-track {
+  height: 2px;
+  background: var(--color-line-strong);
+}
+
+.scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -8px;
+  border-radius: 9999px;
+  background: var(--color-fg);
+  border: 3px solid var(--color-ink);
+  box-shadow: 0 0 0 1px var(--color-line-strong);
+  cursor: grab;
+}
+
+.scrub::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--color-fg);
+  border: 3px solid var(--color-ink);
+  box-shadow: 0 0 0 1px var(--color-line-strong);
+  cursor: grab;
+}
+
+.scrub:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  background: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

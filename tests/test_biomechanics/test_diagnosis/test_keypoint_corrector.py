@@ -1,6 +1,8 @@
-"""Tests for keypoint corrector symmetry enforcement."""
+"""Tests for keypoint corrector symmetry enforcement and balance lean."""
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pytest
@@ -8,13 +10,19 @@ import pytest
 from biomechanics.diagnosis.keypoint_corrector import (
     ANKLE_L,
     ANKLE_R,
+    DEFAULT_FOOT_LEN_M,
     FOOT_L,
     FOOT_R,
     HIP_L,
     HIP_R,
     KNEE_L,
     KNEE_R,
+    UPPER_BODY_INDICES,
     KeypointCorrector,
+    apply_lean_to_upper_body,
+    compute_balance_target_ground,
+    compute_com_ground,
+    solve_balance_lean,
 )
 from biomechanics.diagnosis.types import (
     DiagnosisResult,
@@ -72,6 +80,8 @@ def _make_diagnosis(cause_ids: list[str]) -> DiagnosisResult:
             delta = {"L_ankle.ry": 0.15, "R_ankle.ry": -0.15}
         elif cid == "knee_track_cue":
             delta = {"L_hip.ry": -0.08, "R_hip.ry": 0.08}
+        elif cid == "weight_shift_cue":
+            delta = {"pelvis.tx": 0.02}
         causes.append(
             HypothesizedCause(
                 cause_id=cid,
@@ -248,3 +258,100 @@ class TestCorrectIntegrationSymmetry:
         assert out[HIP_L][1] == pytest.approx(out[HIP_R][1], abs=1e-4)
         assert out[ANKLE_L][1] == pytest.approx(out[ANKLE_R][1], abs=1e-4)
         assert out[KNEE_L][1] == pytest.approx(out[KNEE_R][1], abs=1e-3)
+
+
+class TestLateralComCentering:
+
+    def test_lateral_trunk_lean_centers_com_over_target(self) -> None:
+        """With a weight-shift cue, the COM ground projection must land on the
+        mid-foot balance target along the lateral axis, even when the captured
+        trunk leans sideways."""
+        kpts = _make_19pt_skeleton()
+        for idx in UPPER_BODY_INDICES:
+            kpts[idx][2] += 0.08
+
+        diagnosis = _make_diagnosis(["weight_shift_cue"])
+        corrector = KeypointCorrector()
+
+        result = corrector.correct(kpts.tolist(), diagnosis)
+
+        assert result is not None
+        out = np.array(result)
+
+        com = compute_com_ground(out, DEFAULT_FOOT_LEN_M)
+        target = compute_balance_target_ground(out, DEFAULT_FOOT_LEN_M)
+
+        hip_lateral = out[HIP_R] - out[HIP_L]
+        lat_xz = np.array([hip_lateral[0], hip_lateral[2]])
+        lat_xz /= np.linalg.norm(lat_xz)
+
+        gap_lateral = abs(float(np.dot(target - com, lat_xz)))
+        assert gap_lateral <= 0.004
+
+    def test_symmetric_pose_barely_moves(self) -> None:
+        """A laterally balanced capture needs no lateral shift."""
+        kpts = _make_19pt_skeleton()
+        diagnosis = _make_diagnosis(["weight_shift_cue"])
+        corrector = KeypointCorrector()
+
+        result = corrector.correct(kpts.tolist(), diagnosis)
+
+        assert result is not None
+        out = np.array(result)
+        hip_mid_z_before = (kpts[HIP_L][2] + kpts[HIP_R][2]) / 2.0
+        hip_mid_z_after = (out[HIP_L][2] + out[HIP_R][2]) / 2.0
+        assert hip_mid_z_after == pytest.approx(hip_mid_z_before, abs=0.005)
+
+
+class TestBalanceLean:
+
+    def test_rotation_preserves_segment_distances(self) -> None:
+        """Each spine segment preserves internal pairwise distances."""
+        kpts = _make_19pt_skeleton()
+        lean_rad = math.radians(15.0)
+
+        head_indices = list(range(5))
+        trunk_indices = list(range(5, 11))
+
+        for segment in [head_indices, trunk_indices]:
+            before_dists = []
+            for i in segment:
+                for j in segment:
+                    if i < j:
+                        before_dists.append(np.linalg.norm(kpts[i] - kpts[j]))
+
+            result = apply_lean_to_upper_body(kpts, lean_rad)
+
+            after_dists = []
+            for i in segment:
+                for j in segment:
+                    if i < j:
+                        after_dists.append(np.linalg.norm(result[i] - result[j]))
+
+            np.testing.assert_allclose(before_dists, after_dists, atol=1e-10)
+
+    def test_rotation_tilts_head_forward(self) -> None:
+        kpts = _make_19pt_skeleton()
+        hip_mid_x = (kpts[HIP_L][0] + kpts[HIP_R][0]) / 2.0
+        hip_mid_y = (kpts[HIP_L][1] + kpts[HIP_R][1]) / 2.0
+        nose_dy_before = kpts[0][1] - hip_mid_y
+
+        lean_rad = math.radians(10.0)
+        result = apply_lean_to_upper_body(kpts, lean_rad)
+
+        nose_dx_after = result[0][0] - hip_mid_x
+        nose_dy_after = result[0][1] - hip_mid_y
+        nose_dx_before = kpts[0][0] - hip_mid_x
+
+        assert nose_dx_after > nose_dx_before
+        assert nose_dy_after < nose_dy_before
+
+    def test_balance_solve_converges(self) -> None:
+        kpts = _make_19pt_skeleton()
+        foot_len = 0.29
+
+        lean = solve_balance_lean(kpts, foot_len)
+
+        assert lean is not None
+        assert math.isfinite(lean)
+        assert abs(math.degrees(lean)) < 30.0

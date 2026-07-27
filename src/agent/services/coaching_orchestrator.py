@@ -3,7 +3,7 @@ Coaching Orchestrator — Priority-based dispatch for real-time coaching cues.
 
 Separates deterministic cached audio cues (faults, rep counts, positive
 reinforcement) from LLM-generated speech (motivation, set recaps).
-Cached cues always take priority and duck the LLM audio track while playing.
+Cached cues always take priority over LLM-generated speech.
 """
 
 import asyncio
@@ -15,30 +15,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from agent.services.coaching_constants import CUE_DISPLAY_LABELS
+from agent.services.progress_context import (
+    build_progress_comparison_lines,
+    build_session_comparison_line,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# CUE DISPLAY LABELS (cue_key → human-readable label for reports)
-# =============================================================================
-
-CUE_DISPLAY_LABELS: Dict[str, str] = {
-    "knees_out": "Knees out!",
-    "chest_up": "Chest up!",
-    "deeper": "Go deeper!",
-    "heels_down": "Heels down!",
-    "even_it_out": "Even it out!",
-    "slow_down": "Slow down!",
-    "brace_core": "Brace core!",
-    "hips_through": "Hips through!",
-    "flat_back": "Flat back!",
-    "lock_out": "Lock it out!",
-    "good_rep": "Good rep!",
-    "great_depth": "Great depth!",
-    "strong": "Strong!",
-    "clean": "Clean!",
-    "perfect": "Perfect!",
-}
 
 
 # =============================================================================
@@ -87,17 +70,12 @@ class CoachingOrchestrator:
     Cached cues (faults, rep counts, positive reinforcement) play immediately
     on a secondary audio track. LLM calls (motivation, set recaps) only fire
     when the queue is clear and are secondary to cached cues.
-
-    When a cached cue plays, the LLM audio is ducked (paused) so the cue
-    is heard clearly, then resumed after playout.
     """
 
     def __init__(
         self,
         play_cached_audio_fn: Callable,
         generate_llm_reply_fn: Callable,
-        duck_llm_fn: Callable,
-        unduck_llm_fn: Callable,
         get_cue_audio_fn: Callable,
         advance_set_fn: Optional[Callable] = None,
         on_workout_complete_fn: Optional[Callable] = None,
@@ -105,8 +83,6 @@ class CoachingOrchestrator:
     ):
         self._play_cached = play_cached_audio_fn
         self._generate_llm = generate_llm_reply_fn
-        self._duck_llm = duck_llm_fn
-        self._unduck_llm = unduck_llm_fn
         self._get_cue_audio = get_cue_audio_fn
         self._advance_set = advance_set_fn
         self._on_workout_complete = on_workout_complete_fn
@@ -152,7 +128,13 @@ class CoachingOrchestrator:
         # Diagnosis data — populated by set_diagnosis_data(), consumed by recaps
         self._pending_diagnosis: Optional[Dict[str, Any]] = None
         self._pending_scoring: Optional[Dict[str, Any]] = None
-        self._diagnosis_event: asyncio.Event = asyncio.Event()
+
+        # Last-session baseline — set by CoachingService once loaded from DB
+        self.progress_baseline: Optional[Dict[str, Any]] = None
+
+        # Called with (fault_type, cue_key) after a fault cue actually plays —
+        # lets the persistence layer distinguish delivered cues from detections
+        self.on_fault_cue_delivered: Optional[Callable[[str, Optional[str]], None]] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -207,11 +189,50 @@ class CoachingOrchestrator:
         self._resting = False
         logger.info("[ORCHESTRATOR] Rest complete — resuming")
 
+    # ------------------------------------------------------------------
+    # Public state accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def resting(self) -> bool:
+        """Whether rep/fault processing is suppressed during rest."""
+        return self._resting
+
+    @resting.setter
+    def resting(self, value: bool) -> None:
+        self._resting = value
+
+    @property
+    def set_rep_count(self) -> int:
+        """Reps completed in the current set."""
+        return self._set_rep_count
+
+    @set_rep_count.setter
+    def set_rep_count(self, value: int) -> None:
+        self._set_rep_count = value
+
+    @property
+    def positive_cue_keys(self) -> List[str]:
+        """Cue keys eligible for positive reinforcement after clean reps."""
+        return self._positive_cue_keys
+
+    @positive_cue_keys.setter
+    def positive_cue_keys(self, value: List[str]) -> None:
+        self._positive_cue_keys = value
+
+    @property
+    def rest_seconds(self) -> int:
+        """Rest duration used to time set recap speech."""
+        return self._rest_seconds
+
+    @rest_seconds.setter
+    def rest_seconds(self, value: int) -> None:
+        self._rest_seconds = value
+
     def set_diagnosis_data(self, diagnosis: Dict[str, Any], scoring: Dict[str, Any]) -> None:
         """Store diagnosis results from the pipeline and signal any waiting recap."""
         self._pending_diagnosis = diagnosis
         self._pending_scoring = scoring
-        self._diagnosis_event.set()
         logger.info(
             f"[ORCHESTRATOR] Diagnosis data received: "
             f"confidence={diagnosis.get('confidence', 0):.2f} "
@@ -224,7 +245,6 @@ class CoachingOrchestrator:
         scoring = self._pending_scoring
         self._pending_diagnosis = None
         self._pending_scoring = None
-        self._diagnosis_event = asyncio.Event()
         return diagnosis, scoring
 
     # ------------------------------------------------------------------
@@ -596,7 +616,7 @@ class CoachingOrchestrator:
             logger.info("[ORCHESTRATOR] ✓ LLM exercise recap complete")
 
     async def _dispatch_cached_cue(self, event: CoachingEvent):
-        """Play a cached cue with LLM audio ducking."""
+        """Play a cached cue."""
         # Drop stale cached cues — if a cue sat in the queue too long,
         # the coaching moment has passed
         age = time.monotonic() - event.timestamp
@@ -605,19 +625,19 @@ class CoachingOrchestrator:
             return
 
         try:
-            logger.info(f"[ORCHESTRATOR] → Playing cached cue: {event.cue_key} (ducking LLM)")
-            await self._duck_llm()
+            logger.info(f"[ORCHESTRATOR] → Playing cached cue: {event.cue_key}")
             await self._play_cached(event.cue_key)
             # Log successfully played cue for set report
             self._log_dispatched_cue(event)
+            fault_type = (event.data or {}).get("fault_type")
+            if fault_type and self.on_fault_cue_delivered:
+                try:
+                    self.on_fault_cue_delivered(fault_type, event.cue_key)
+                except Exception:
+                    logger.exception("[ORCHESTRATOR] cue-delivered callback failed")
             logger.info(f"[ORCHESTRATOR] ✓ Cached cue played: {event.cue_key}")
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] Cached cue playback failed ({event.cue_key}): {e}")
-        finally:
-            try:
-                await self._unduck_llm()
-            except Exception:
-                pass
 
     def _flush_queue(self):
         """Drop all pending events — called at set boundaries to clear stale cues."""
@@ -786,6 +806,9 @@ class CoachingOrchestrator:
         # Enrich with diagnosis data if available
         if diagnosis and scoring:
             parts.extend(self._build_diagnosis_context(diagnosis, scoring))
+            parts.extend(
+                build_progress_comparison_lines(self.progress_baseline, scoring)
+            )
 
         context_str = " ".join(parts)
 
@@ -980,6 +1003,15 @@ class CoachingOrchestrator:
                     all_issues.append(f"Set {s['set_number']}: {immediate[0].get('explanation', '')}")
             if all_issues:
                 parts.append(f"Key issues by set: {'; '.join(all_issues)}.")
+
+            session_mean = statistics.mean(
+                s["scoring"].get("mean_score", 0) for s in diagnosed_sets
+            )
+            comparison = build_session_comparison_line(
+                self.progress_baseline, session_mean
+            )
+            if comparison:
+                parts.append(comparison)
 
         context_str = " ".join(parts)
 

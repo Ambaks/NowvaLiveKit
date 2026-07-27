@@ -245,11 +245,13 @@ class JointAngles(BaseModel):
     ankle_dorsiflexion_l: float = 0.0
     ankle_dorsiflexion_r: float = 0.0
 
-    # Knee valgus (toe-based)
+    # Knee valgus (mode-aware: 2D FPPA single-camera, 3D abduction triangulated)
     knee_valgus_l: float = 0.0
     knee_valgus_r: float = 0.0
     foot_confidence_l: float = 0.0
     foot_confidence_r: float = 0.0
+    # Knee-to-ankle separation ratio (bilateral; <1.0 = knees inside ankles)
+    knee_ankle_sep_ratio: float = 1.0
 
     # Shoulder angles (degrees)
     shoulder_flexion_l: float = 0.0   # arm forward/back relative to trunk
@@ -297,6 +299,7 @@ class JointAngles(BaseModel):
             "knee_valgus_r": self.knee_valgus_r,
             "foot_confidence_l": self.foot_confidence_l,
             "foot_confidence_r": self.foot_confidence_r,
+            "knee_ankle_sep_ratio": self.knee_ankle_sep_ratio,
             "shoulder_flexion_l": self.shoulder_flexion_l,
             "shoulder_flexion_r": self.shoulder_flexion_r,
             "shoulder_abduction_l": self.shoulder_abduction_l,

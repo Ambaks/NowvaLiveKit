@@ -20,6 +20,7 @@ import numpy as np
 from biomechanics.config import BiomechanicsConfig, load_pipeline_config
 from biomechanics.pose.mediapipe_fallback import MediaPipePoseEstimator
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
+from biomechanics.kinematics.valgus import build_valgus_estimator
 from biomechanics.faults import RuleEngine
 from biomechanics.profiles import get_profile
 from biomechanics.utils.types import (
@@ -38,9 +39,14 @@ from biomechanics.utils.derivatives import DerivativeTracker
 from biomechanics.utils.confidence_blend import ConfidenceBlender
 from biomechanics.utils.velocity_clamp import VelocityClamp
 from biomechanics.utils.bone_constraints import BoneLengthConstraints
-from biomechanics.utils.position_filter import KeypointPositionSmoother
+from biomechanics.utils.ground_clamp import GroundClamp
+from biomechanics.utils.position_filter import KeypointPositionSmoother, Skeleton2DSmoother
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
+from biomechanics.utils.rom_clamp import ROMClamp
 from biomechanics.utils.standing_gate import StandingPoseGate
+
+
+_MAX_DROPOUT_HOLD_FRAMES = 5
 
 
 class BiomechanicsPipeline:
@@ -74,16 +80,39 @@ class BiomechanicsPipeline:
         self._capture_running = False
         self._capture_thread = None
 
-        if not defer_capture:
+        # Multi-camera mode (env-driven)
+        self._multi_camera = os.getenv("NOWVA_MULTI_CAMERA", "false").lower() == "true"
+        self._valgus_estimator = build_valgus_estimator(self._multi_camera)
+        self._multi_camera_provider = None
+
+        if self._multi_camera:
+            from biomechanics.pose.multi_camera import MultiCameraPoseProvider
+
+            tri = self.config.triangulation
+            self._multi_camera_provider = MultiCameraPoseProvider(
+                device_ids=tri.device_ids,
+                confidence_threshold=self.config.pose.confidence_threshold,
+                model_path=self.config.pose.model_path,
+                min_views=tri.min_views,
+                max_reprojection_error=tri.max_reprojection_error,
+                max_sync_delta_ms=tri.max_sync_delta_ms,
+                resolution=self.config.capture.resolution,
+                primary_camera=tri.primary_camera,
+                focal_length_factor=tri.focal_length_factor,
+            )
+            if tri.calibration_file:
+                self._multi_camera_provider.load_calibration(tri.calibration_file)
+        elif not defer_capture:
             self._open_capture()
 
-        # Layer 2: Pose estimation
+        # Layer 2: Pose estimation (single-camera only; multi-camera owns its estimator)
         if self.config.pose.backend == "rtmpose":
             from biomechanics.pose.rtmpose import RTMPoseEstimator
 
             self._pose_estimator = RTMPoseEstimator(
                 confidence_threshold=self.config.pose.confidence_threshold,
                 model_path=self.config.pose.model_path,
+                keypoint_format=self.config.pose.keypoint_format,
             )
         else:
             model_complexity = self.config.pose.model_complexity
@@ -110,6 +139,7 @@ class BiomechanicsPipeline:
             max_trunk_flexion_deg=sg.max_trunk_flexion_deg,
             min_torso_length_m=sg.min_torso_length_m,
             max_torso_length_m=sg.max_torso_length_m,
+            min_leg_extension_ratio=sg.min_leg_extension_ratio,
             required_consecutive_frames=sg.required_consecutive_frames,
         )
 
@@ -123,6 +153,7 @@ class BiomechanicsPipeline:
             max_trunk_flexion_deg=rg.max_trunk_flexion_deg,
             min_torso_length_m=rg.min_torso_length_m,
             max_torso_length_m=rg.max_torso_length_m,
+            min_leg_extension_ratio=rg.min_leg_extension_ratio,
             required_consecutive_frames=rg.required_consecutive_frames,
         )
 
@@ -130,9 +161,13 @@ class BiomechanicsPipeline:
         self._confidence_blender = None
         self._velocity_clamp = None
         self._bone_constraints = None
+        self._ground_clamp = None
+        self._rom_clamp = None
         self._position_smoother = None
         self._predictive_estimator = None
         self._proportions_applied = False
+        self._last_valid_skeleton: Optional[Skeleton3D] = None
+        self._dropout_decay_frames: int = 0
 
         if self._preik_enabled:
             self._confidence_blender = ConfidenceBlender(
@@ -148,6 +183,14 @@ class BiomechanicsPipeline:
                 tolerance=self.config.bone_constraints.tolerance,
                 standing_gate=self._standing_gate,
             )
+            self._ground_clamp = GroundClamp(
+                calibration_frames=self.config.ground_clamp.calibration_frames,
+                stance_width_tolerance_m=self.config.ground_clamp.stance_width_tolerance_m,
+                ankle_y_tolerance_m=self.config.ground_clamp.ankle_y_tolerance_m,
+                min_leg_extension_ratio=self.config.ground_clamp.min_leg_extension_ratio,
+                standing_gate=self._standing_gate,
+            )
+            self._rom_clamp = ROMClamp()
             self._position_smoother = KeypointPositionSmoother(
                 min_cutoff=self.config.position_filter.min_cutoff,
                 beta=self.config.position_filter.beta,
@@ -156,6 +199,16 @@ class BiomechanicsPipeline:
             self._predictive_estimator = PredictiveStateEstimator(
                 horizon_seconds=self.config.predictive_state.horizon_seconds,
                 max_extrapolation_deg=self.config.predictive_state.max_extrapolation_deg,
+            )
+
+        # Display-only 2D skeleton smoothing (does not affect analysis pipeline)
+        self._display_smoother: Skeleton2DSmoother | None = None
+        if self.config.display_filter.enabled:
+            df = self.config.display_filter
+            self._display_smoother = Skeleton2DSmoother(
+                min_cutoff=df.min_cutoff,
+                beta=df.beta,
+                d_cutoff=df.d_cutoff,
             )
 
         # Layer 3b (optional): Barbell detection + Kalman-smoothed tracking.
@@ -223,6 +276,10 @@ class BiomechanicsPipeline:
         self._bottom_kpts: Optional[List[List[float]]] = None
         self._bottom_angles: Optional[dict] = None
 
+        # Standing-frame buffer: last skeleton before in_rep becomes True.
+        self._standing_kpts: Optional[List[List[float]]] = None
+        self._standing_captured: bool = False
+
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
 
@@ -245,13 +302,20 @@ class BiomechanicsPipeline:
 
     def start_capture(self) -> None:
         """Open camera and start capture thread (phase 2 for deferred init)."""
+        if self._multi_camera:
+            if self._multi_camera_provider is not None:
+                self._multi_camera_provider.start()
+            return
         if self._cap is not None:
             return
         self._open_capture()
 
     def preload_pose_model(self) -> None:
         """Eagerly load the pose estimation model instead of waiting for the first frame."""
-        self._pose_estimator.initialize()
+        if self._multi_camera and self._multi_camera_provider is not None:
+            self._multi_camera_provider.initialize()
+        else:
+            self._pose_estimator.initialize()
 
     @property
     def rep_counter(self):
@@ -268,6 +332,8 @@ class BiomechanicsPipeline:
 
         Call this when a set ends or a rest period starts so the next
         set requires the user to be fully detected for 30 frames first.
+        Also resets pre-IK filter state so set 2+ doesn't blend against
+        stale positions from the previous set.
         """
         self._readiness_gate.reset()
         self._bilstm_max_knee_flex = 0.0
@@ -276,6 +342,19 @@ class BiomechanicsPipeline:
         self._bottom_max_knee_flex = 0.0
         self._bottom_kpts = None
         self._bottom_angles = None
+        self._standing_kpts = None
+        self._standing_captured = False
+
+        if self._preik_enabled:
+            self._confidence_blender.reset()
+            self._velocity_clamp.reset()
+            self._position_smoother.reset()
+            self._bone_constraints.reset()
+            self._ground_clamp.reset()
+            self._proportions_applied = False
+
+        if self._display_smoother is not None:
+            self._display_smoother.reset()
 
     def consume_bottom_frame(self) -> tuple[Optional[List[List[float]]], Optional[dict]]:
         """Return and reset the bottom-of-rep keypoints and angles.
@@ -289,6 +368,12 @@ class BiomechanicsPipeline:
         self._bottom_kpts = None
         self._bottom_angles = None
         return kpts, angles
+
+    def consume_standing_frame(self) -> Optional[List[List[float]]]:
+        """Return the standing keypoints captured just before the rep started."""
+        kpts = self._standing_kpts
+        self._standing_captured = False
+        return kpts
 
     def _capture_loop(self) -> None:
         """Continuously read frames from the camera in a background thread."""
@@ -308,11 +393,30 @@ class BiomechanicsPipeline:
         latency_ms = {}
         now = time.time()
 
-        # --- Capture (grab latest frame from capture thread) ---
-        t0 = time.perf_counter()
-        with self._frame_lock:
-            frame = self._latest_frame
-        latency_ms["capture"] = (time.perf_counter() - t0) * 1000.0
+        # --- Capture + Pose estimation ---
+        skeleton_2d: Optional[Skeleton2D] = None
+        skeleton_3d: Optional[Skeleton3D] = None
+        bar_detection: Optional[BarbellDetection] = None
+        bar_track: Optional[BarTrackState] = None
+
+        if self._multi_camera and self._multi_camera_provider is not None:
+            t0 = time.perf_counter()
+            frame, skeleton_2d, skeleton_3d = self._multi_camera_provider.get_pose()
+            latency_ms["capture"] = 0.0
+            latency_ms["pose"] = (time.perf_counter() - t0) * 1000.0
+        else:
+            t0 = time.perf_counter()
+            with self._frame_lock:
+                frame = self._latest_frame
+            latency_ms["capture"] = (time.perf_counter() - t0) * 1000.0
+
+            if frame is not None:
+                t0 = time.perf_counter()
+                try:
+                    skeleton_2d, skeleton_3d = self._pose_estimator.estimate_both(frame)
+                except Exception:
+                    pass
+                latency_ms["pose"] = (time.perf_counter() - t0) * 1000.0
 
         if frame is None:
             self._frame_index += 1
@@ -322,10 +426,10 @@ class BiomechanicsPipeline:
                 latency_ms=latency_ms,
             )
 
-        bar_detection: Optional[BarbellDetection] = None
-        bar_track: Optional[BarTrackState] = None
-
         self.last_frame = frame
+
+        if skeleton_2d is not None and self._display_smoother is not None:
+            skeleton_2d = self._display_smoother.smooth(skeleton_2d)
 
         # --- Barbell detection + tracking (independent of pose) ---
         if self._barbell_detector is not None:
@@ -340,29 +444,35 @@ class BiomechanicsPipeline:
                 bar_track = self._bar_tracker.update(bar_detection, timestamp=now)
             latency_ms["barbell"] = (time.perf_counter() - t0) * 1000.0
 
-        # --- Pose estimation ---
-        t0 = time.perf_counter()
-        skeleton_2d: Optional[Skeleton2D] = None
-        skeleton_3d: Optional[Skeleton3D] = None
-
-        try:
-            skeleton_2d, skeleton_3d = self._pose_estimator.estimate_both(frame)
-        except Exception:
-            pass  # pose failed — skip downstream
-
-        latency_ms["pose"] = (time.perf_counter() - t0) * 1000.0
-
         if skeleton_3d is None:
-            # No pose detected — return early with what we have
-            self._frame_index += 1
-            return PipelineFrame(
-                frame_index=self._frame_index,
-                timestamp=now,
-                skeleton_2d=skeleton_2d,
-                bar_detection=bar_detection,
-                bar_track=bar_track,
-                latency_ms=latency_ms,
-            )
+            if (
+                self._last_valid_skeleton is not None
+                and self._dropout_decay_frames < _MAX_DROPOUT_HOLD_FRAMES
+            ):
+                self._dropout_decay_frames += 1
+                decay = 1.0 - (self._dropout_decay_frames / _MAX_DROPOUT_HOLD_FRAMES)
+                held = self._last_valid_skeleton
+                skeleton_3d = Skeleton3D.from_numpy(
+                    held.to_numpy(),
+                    confidences=[
+                        kp.confidence * decay for kp in held.keypoints
+                    ],
+                    timestamp=now,
+                    frame_index=self._frame_index,
+                )
+            else:
+                self._frame_index += 1
+                return PipelineFrame(
+                    frame_index=self._frame_index,
+                    timestamp=now,
+                    skeleton_2d=skeleton_2d,
+                    bar_detection=bar_detection,
+                    bar_track=bar_track,
+                    latency_ms=latency_ms,
+                )
+        else:
+            self._dropout_decay_frames = 0
+            self._last_valid_skeleton = skeleton_3d
 
         # --- BiLSTM rep counting (runs on raw skeleton, before IK) ---
         bilstm_rep_data = None
@@ -402,6 +512,8 @@ class BiomechanicsPipeline:
             skeleton_3d = self._confidence_blender.blend(skeleton_3d)
             skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+            skeleton_3d = self._rom_clamp.clamp(skeleton_3d)
+            skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
             skeleton_3d = self._position_smoother.smooth(skeleton_3d)
             skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
@@ -421,6 +533,21 @@ class BiomechanicsPipeline:
         t0 = time.perf_counter()
         raw_angles = self._ik_solver.solve(skeleton_3d)
 
+        # Mode-aware valgus estimation (2D FPPA or 3D abduction)
+        vr = self._valgus_estimator.estimate(skeleton_2d, skeleton_3d)
+        raw_angles.knee_valgus_l = vr.valgus_l
+        raw_angles.knee_valgus_r = vr.valgus_r
+        raw_angles.foot_confidence_l = vr.foot_confidence_l
+        raw_angles.foot_confidence_r = vr.foot_confidence_r
+        raw_angles.knee_ankle_sep_ratio = vr.kasr
+        raw_angles.hip_rotation_l = vr.hip_rotation_l
+        raw_angles.hip_rotation_r = vr.hip_rotation_r
+
+        # Update phase-aware smoothing BEFORE filtering so the current
+        # frame uses the correct parameters (not the previous frame's).
+        if self._preik_enabled:
+            self._angle_filter.update_phase(self._rep_counter.phase)
+
         # Apply temporal filter for stability
         angles = self._angle_filter.filter_angles(raw_angles)
 
@@ -430,6 +557,13 @@ class BiomechanicsPipeline:
 
         # --- Compute rep signal (exercise-specific, from profile) ---
         rep_signal = self._profile.get_rep_signal(skeleton_3d, angles)
+
+        # --- Buffer standing frame: last skeleton before rep starts ---
+        if not self._rep_counter.in_rep:
+            self._standing_kpts = skeleton_3d.to_numpy().tolist()
+            self._standing_captured = False
+        elif not self._standing_captured:
+            self._standing_captured = True
 
         # --- Buffer bottom-of-rep frame for diagnosis engine ---
         if self._rep_counter.in_rep:
@@ -454,6 +588,8 @@ class BiomechanicsPipeline:
             in_rep=self._rep_counter.in_rep,
             rep_number=self._rep_counter.rep_count + 1,
             bar_detection=bar_detection,
+            derivatives=derivatives,
+            phase=self._rep_counter.phase,
         )
 
         # Calibration uses ACTUAL angles
@@ -468,16 +604,16 @@ class BiomechanicsPipeline:
             faults=faults,
         )
 
-        # Phase-aware smoothing only when pre-IK filters are active
-        if self._preik_enabled:
-            self._angle_filter.update_phase(self._rep_counter.phase)
-
         # If rep completed, check depth faults and advance calibration
         if rep_data is not None:
-            depth_faults = self._rule_engine.evaluate_rep_complete(
-                rep_data.max_depth_angle, angles, rep_data.rep_number
-            )
-            faults.extend(depth_faults)
+            # Only evaluate depth here when BiLSTM is NOT active.
+            # When BiLSTM is active, depth evaluation happens in the BiLSTM
+            # path below to avoid double-counting.
+            if self._bilstm is None:
+                depth_faults = self._rule_engine.evaluate_rep_complete(
+                    rep_data.max_depth_angle, angles, rep_data.rep_number
+                )
+                faults.extend(depth_faults)
             self._rule_engine.on_rep_complete_calibration(is_clean=rep_data.is_clean)
 
             # When BiLSTM is active the hip counter's rep_data is suppressed
@@ -560,10 +696,13 @@ class BiomechanicsPipeline:
 
     def release(self):
         """Release all resources."""
-        self._capture_running = False
-        if self._capture_thread is not None:
-            self._capture_thread.join(timeout=2.0)
-        if self._cap is not None:
-            self._cap.release()
+        if self._multi_camera and self._multi_camera_provider is not None:
+            self._multi_camera_provider.release()
+        else:
+            self._capture_running = False
+            if self._capture_thread is not None:
+                self._capture_thread.join(timeout=2.0)
+            if self._cap is not None:
+                self._cap.release()
         if self._pose_estimator is not None:
             self._pose_estimator.release()

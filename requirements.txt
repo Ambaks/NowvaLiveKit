@@ -10,6 +10,7 @@ livekit-plugins-openai>=1.5.1          # OpenAI API client
 livekit-plugins-google>=1.5.1          # Google Gemini LLM (native plugin)
 livekit-plugins-deepgram>=1.5.1        # Deepgram Nova-3 STT
 livekit-plugins-cartesia>=1.5.1        # Cartesia Sonic TTS
+livekit-plugins-elevenlabs>=1.5.1      # ElevenLabs TTS
 livekit-plugins-silero>=1.5.1          # Silero VAD (local)
 livekit-plugins-turn-detector>=1.5.1   # MultilingualModel end-of-turn detection
 livekit-plugins-noise-cancellation~=0.2 # Krisp BVC server-side noise cancellation
@@ -52,6 +53,9 @@ pandas>=2.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 
+# macOS Development (optional)
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+
 # =============================================================================
 # FASTAPI BACKEND (for program generation)
 # =============================================================================
@@ -90,7 +94,7 @@ anthropic>=0.18.0                      # Claude API for contextualization
 # =============================================================================
 # UTILITIES
 # =============================================================================
-python-dotenv>=1.0.0                   # Environment variables
+python-dotenv>=1.2.2                   # Environment variables
 aiohttp>=3.9.0                         # Async HTTP
 tqdm>=4.65.0                           # Progress bars
 websockets>=12.0                       # WebSocket support

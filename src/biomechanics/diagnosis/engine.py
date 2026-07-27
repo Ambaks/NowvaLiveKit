@@ -13,13 +13,32 @@ from typing import Any
 import numpy as np
 
 from .graph.loader import SYMPTOM_GRAPH, CAUSE_GRAPH
+from .graph.parameter_deltas import (
+    expected_trunk_lean_geometric,
+    foot_angle_target_deg,
+    stance_target_ratio,
+)
+from .rep_scoring import score_set
 from .types import (
     DetectedSymptom,
     DiagnosisResult,
     HypothesizedCause,
     RepKinematicSummary,
     SetFeatures,
+    SetScoreSummary,
 )
+
+# Pseudo-posterior mass for "none of the candidate causes explains this
+# symptom" — keeps weak evidence from being normalized into confidence.
+UNEXPLAINED_LEAK_SCORE = 0.10
+
+HYPOTHESIS_SCORE_THRESHOLD = 0.15
+
+# Turning the feet out to the target angle is a safe, universally beneficial
+# cue. Whenever one of these faults fires and the feet are turned out less than
+# the target, narrow_foot_angle is surfaced even if the Bayesian competition
+# ranked it below the hypothesis threshold.
+FOOT_ANGLE_LINKED_SYMPTOMS = ("depth_limit", "excessive_trunk_lean")
 
 
 class HypothesisEngine:
@@ -28,15 +47,26 @@ class HypothesisEngine:
         anthro = set_features.anthropometry
         rom = set_features.rom
 
+        set_summary = score_set(reps, anthro, rom) if len(reps) >= 2 else None
+        representative_rep = self._pick_representative_rep(reps, set_summary)
+
         detected_symptoms = self._detect_symptoms(reps, anthro)
-        cause_scores = self._score_causes(detected_symptoms, reps, anthro, rom)
+        cause_scores = self._score_causes(
+            detected_symptoms, representative_rep, anthro, rom, set_summary
+        )
+        force_foot_angle = self._foot_angle_cue_forced(
+            detected_symptoms, representative_rep, anthro, rom
+        )
         filtered_causes = {
             cause_id: info
             for cause_id, info in cause_scores.items()
-            if info["aggregate_score"] > 0.25
+            if info["aggregate_score"] > HYPOTHESIS_SCORE_THRESHOLD
+            or (cause_id == "narrow_foot_angle" and force_foot_angle)
         }
 
-        hypotheses = self._build_hypotheses(filtered_causes, reps, anthro, rom)
+        hypotheses = self._build_hypotheses(
+            filtered_causes, representative_rep, anthro, rom, set_summary
+        )
         combined_perturbation = self._merge_perturbations(hypotheses)
 
         immediate = [h for h in hypotheses if h.tier == 1]
@@ -56,6 +86,25 @@ class HypothesisEngine:
             combined_perturbation=combined_perturbation,
             confidence=confidence,
         )
+
+    def _foot_angle_cue_forced(
+        self,
+        detected_symptoms: list[DetectedSymptom],
+        representative_rep: RepKinematicSummary,
+        anthro: dict,
+        rom: dict,
+    ) -> bool:
+        linked_fired = any(
+            symptom.symptom_id in FOOT_ANGLE_LINKED_SYMPTOMS
+            for symptom in detected_symptoms
+        )
+        if not linked_fired:
+            return False
+        avg_foot_angle = (
+            representative_rep.foot_direction_angle_l
+            + representative_rep.foot_direction_angle_r
+        ) / 2.0
+        return avg_foot_angle < foot_angle_target_deg(anthro, rom)
 
     def _detect_symptoms(
         self, reps: list[RepKinematicSummary], anthro: dict
@@ -102,14 +151,13 @@ class HypothesisEngine:
     def _score_causes(
         self,
         detected_symptoms: list[DetectedSymptom],
-        reps: list[RepKinematicSummary],
+        representative_rep: RepKinematicSummary,
         anthro: dict,
         rom: dict,
+        set_summary: SetScoreSummary | None,
     ) -> dict[str, dict[str, Any]]:
         cause_posteriors: dict[str, list[float]] = {}
         cause_implicated_by: dict[str, list[str]] = {}
-
-        representative_rep = self._pick_representative_rep(reps)
 
         for symptom in detected_symptoms:
             symptom_def = SYMPTOM_GRAPH[symptom.symptom_id]
@@ -121,13 +169,15 @@ class HypothesisEngine:
                 prior = candidate["prior"]
                 cause_def = CAUSE_GRAPH[cause_id]
                 evidence_fn = cause_def["evidence_test_fn"]
-                evidence_score = evidence_fn(representative_rep, anthro, rom)
+                evidence_score = evidence_fn(
+                    representative_rep, anthro, rom, set_summary
+                )
                 posterior = prior * evidence_score
                 raw_scores.append((cause_id, posterior))
 
-            total = sum(score for _, score in raw_scores)
+            total = sum(score for _, score in raw_scores) + UNEXPLAINED_LEAK_SCORE
             for cause_id, posterior in raw_scores:
-                normalized = posterior / total if total > 0 else 0.0
+                normalized = (posterior / total) * symptom.severity
                 cause_posteriors.setdefault(cause_id, []).append(normalized)
                 cause_implicated_by.setdefault(cause_id, []).append(
                     symptom.symptom_id
@@ -147,18 +197,20 @@ class HypothesisEngine:
     def _build_hypotheses(
         self,
         filtered_causes: dict[str, dict[str, Any]],
-        reps: list[RepKinematicSummary],
+        representative_rep: RepKinematicSummary,
         anthro: dict,
         rom: dict,
+        set_summary: SetScoreSummary | None,
     ) -> list[HypothesizedCause]:
-        representative_rep = self._pick_representative_rep(reps)
         hypotheses = []
 
         for cause_id, info in filtered_causes.items():
             cause_def = CAUSE_GRAPH[cause_id]
             tier = cause_def["tier"]
             evidence_fn = cause_def["evidence_test_fn"]
-            evidence_score = evidence_fn(representative_rep, anthro, rom)
+            evidence_score = evidence_fn(
+                representative_rep, anthro, rom, set_summary
+            )
 
             parameter_delta = None
             if tier == 1 and cause_def["parameter_delta_fn"] is not None:
@@ -170,7 +222,7 @@ class HypothesisEngine:
                 representative_rep,
                 anthro,
                 rom,
-                info,
+                set_summary,
             )
 
             avg_prior = (
@@ -283,12 +335,24 @@ class HypothesisEngine:
         return 0.0
 
     def _pick_representative_rep(
-        self, reps: list[RepKinematicSummary]
+        self,
+        reps: list[RepKinematicSummary],
+        set_summary: SetScoreSummary | None,
     ) -> RepKinematicSummary:
         if len(reps) == 1:
             return reps[0]
+        if set_summary is not None:
+            for rep in reps:
+                if rep.rep_number == set_summary.worst_rep_number:
+                    return rep
         sorted_reps = sorted(reps, key=lambda r: r.trunk_pitch_at_bottom)
         return sorted_reps[len(sorted_reps) // 2]
+
+    def _first_degraded_rep(self, set_summary: SetScoreSummary) -> int:
+        for rep_score in set_summary.per_rep_scores:
+            if rep_score.composite_score < set_summary.mean_score:
+                return rep_score.rep_number
+        return set_summary.worst_rep_number
 
     def _fill_template(
         self,
@@ -296,19 +360,20 @@ class HypothesisEngine:
         rep: RepKinematicSummary,
         anthro: dict,
         rom: dict,
-        cause_info: dict[str, Any],
+        set_summary: SetScoreSummary | None,
     ) -> str:
         fill_values = {
             "ratio": anthro.get("femur_torso_ratio", 1.0),
-            "expected_lean": 30.0
-            + (anthro.get("femur_torso_ratio", 1.0) - 1.0) * 120.0,
+            "expected_lean": expected_trunk_lean_geometric(anthro),
             "current_ratio": rep.stance_width_ratio,
-            "recommended_ratio": max(1.0, rep.stance_width_ratio + 0.15),
+            "recommended_ratio": stance_target_ratio(
+                rep.stance_width_ratio, anthro, rom
+            ),
             "current_angle": (
                 rep.foot_direction_angle_l + rep.foot_direction_angle_r
             )
             / 2.0,
-            "recommended_angle": 22.0,
+            "recommended_angle": foot_angle_target_deg(anthro, rom),
             "current_df": max(rep.ankle_df_l_max, rep.ankle_df_r_max),
             "expected_df": rom.get("dorsiflexion_drop", 35.0),
             "heavier_side": "left"
@@ -317,7 +382,9 @@ class HypothesisEngine:
             "tighter_side": "left"
             if rep.hip_y_l_at_bottom > rep.hip_y_r_at_bottom
             else "right",
-            "first_bad_rep": rep.rep_number,
+            "first_bad_rep": self._first_degraded_rep(set_summary)
+            if set_summary is not None
+            else rep.rep_number,
             "reduction_pct": 10.0,
         }
         try:

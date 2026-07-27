@@ -15,6 +15,7 @@ import signal
 import sys
 import os
 import time
+import webbrowser
 from pathlib import Path
 
 # Add src/ to path
@@ -37,10 +38,12 @@ from biomechanics.coaching.session_tracker import SessionTracker
 from biomechanics.config import load_pipeline_config
 from biomechanics.utils.types import CocoKeypoints as CK
 from biomechanics.diagnosis.bridge import build_anthro_dict, build_rom_dict
+from biomechanics.diagnosis.demo_builder import build_demo_data
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
-from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
+from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
+from biomechanics.viz.demo_ws_bridge import DemoWSBridge, DEMO_WS_PORT
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
 from biomechanics.viz.html_dashboard import generate_session_dashboard
@@ -48,6 +51,86 @@ from biomechanics.viz.html_dashboard import generate_session_dashboard
 
 # Ensure gate diagnostics are visible on stderr
 logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
+
+DEMO_START_TIMEOUT_S = 10.0
+DEMO_INACTIVITY_TIMEOUT_S = 45.0
+# Covers settle + final hold + morph-out (~2.2s) plus browser latency.
+DEMO_FINISH_TIMEOUT_S = 6.0
+
+# --- HUD styling (BGR brand palette) ---
+HUD_CYAN = (255, 229, 0)
+HUD_VIOLET = (246, 92, 139)
+HUD_INK = (245, 240, 235)
+HUD_PANEL = (16, 5, 5)
+HUD_PANEL_ALPHA = 0.62
+HUD_FONT = cv2.FONT_HERSHEY_DUPLEX
+
+# On-screen hints for why the standing gate is rejecting frames.
+GATE_FAILURE_HINTS = {
+    "visibility": "STEP BACK - FULL BODY IN VIEW",
+    "knee_extension": "STAND TALL - STRAIGHTEN KNEES",
+    "torso_upright": "STAND UPRIGHT",
+    "distance": "ADJUST DISTANCE FROM CAMERA",
+}
+
+
+def _draw_rounded_rect(img, pt1, pt2, color, radius, thickness):
+    x1, y1 = pt1
+    x2, y2 = pt2
+    if thickness < 0:
+        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
+        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
+        for cx, cy in ((x1 + radius, y1 + radius), (x2 - radius, y1 + radius),
+                       (x1 + radius, y2 - radius), (x2 - radius, y2 - radius)):
+            cv2.circle(img, (cx, cy), radius, color, -1, cv2.LINE_AA)
+    else:
+        cv2.line(img, (x1 + radius, y1), (x2 - radius, y1), color, thickness, cv2.LINE_AA)
+        cv2.line(img, (x1 + radius, y2), (x2 - radius, y2), color, thickness, cv2.LINE_AA)
+        cv2.line(img, (x1, y1 + radius), (x1, y2 - radius), color, thickness, cv2.LINE_AA)
+        cv2.line(img, (x2, y1 + radius), (x2, y2 - radius), color, thickness, cv2.LINE_AA)
+        cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness, cv2.LINE_AA)
+        cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness, cv2.LINE_AA)
+        cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness, cv2.LINE_AA)
+        cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness, cv2.LINE_AA)
+
+
+def _draw_hud_pill(frame, text, align="right", accent=HUD_CYAN, font_scale=0.55, y=16):
+    """Glass HUD pill: dark alpha-blended rounded rect, accent dot, uppercase text."""
+    label = text.upper()
+    text_thickness = 2 if font_scale > 0.8 else 1
+    (tw, th), _ = cv2.getTextSize(label, HUD_FONT, font_scale, text_thickness)
+    pad_x = max(14, int(th * 0.9))
+    pad_y = max(10, int(th * 0.55))
+    dot_gap = pad_x - 2
+    pill_h = th + pad_y * 2
+    pill_w = tw + pad_x * 2 + dot_gap
+    frame_h, frame_w = frame.shape[:2]
+    x = frame_w - pill_w - 16 if align == "right" else 16
+    x2, y2 = x + pill_w, y + pill_h
+    if x < 0 or y < 0 or x2 > frame_w or y2 > frame_h:
+        return frame
+    radius = pill_h // 2
+
+    # Alpha-blend the panel over the frame (ROI-only — cheap)
+    roi = frame[y:y2, x:x2]
+    panel = roi.copy()
+    _draw_rounded_rect(panel, (0, 0), (pill_w - 1, pill_h - 1), HUD_PANEL, radius, -1)
+    cv2.addWeighted(panel, HUD_PANEL_ALPHA, roi, 1 - HUD_PANEL_ALPHA, 0, dst=roi)
+
+    border = tuple(int(c * 0.5) for c in accent)
+    _draw_rounded_rect(frame, (x, y), (x2 - 1, y2 - 1), border, radius, 1)
+
+    cy = y + pill_h // 2
+    cv2.circle(frame, (x + pad_x, cy), 3, accent, -1, cv2.LINE_AA)
+    cv2.putText(frame, label, (x + pad_x + dot_gap, y + pad_y + th),
+                HUD_FONT, font_scale, HUD_INK, text_thickness, cv2.LINE_AA)
+    return frame
+
+
+def _draw_wordmark(frame):
+    frame_h = frame.shape[0]
+    cv2.putText(frame, "N O W V A", (18, frame_h - 18),
+                HUD_FONT, 0.5, (150, 138, 112), 1, cv2.LINE_AA)
 
 
 def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir: str):
@@ -176,13 +259,35 @@ def _serialize_diagnosis(diagnosis_result, score_summary) -> tuple[dict, dict]:
             "trunk_control": round(sum(r.trunk_control_score for r in per_rep) / n, 3) if n else 0,
             "knee_tracking": round(sum(r.knee_tracking_score for r in per_rep) / n, 3) if n else 0,
             "symmetry": round(sum(r.symmetry_score for r in per_rep) / n, 3) if n else 0,
-            "ankle": round(sum(r.ankle_utilization_score for r in per_rep) / n, 3) if n else 0,
         },
         "best_rep": score_summary.best_rep_number,
         "worst_rep": score_summary.worst_rep_number,
         "trend_slope": score_summary.trend_slope,
     }
     return diagnosis_dict, scoring_dict
+
+
+def _poll_incoming_message(ipc_client: IPCClient):
+    """Non-blocking check for a message from main.py."""
+    try:
+        sock = ipc_client.client_socket
+        if sock is None:
+            return None
+        ready, _, _ = select.select([sock], [], [], 0)
+        if ready:
+            return _recv_framed(sock)
+    except Exception:
+        pass
+    return None
+
+
+def _skeleton_pixels(skeleton_2d) -> np.ndarray | None:
+    keypoints = skeleton_2d.keypoints
+    if len(keypoints) < 17:
+        return None
+    if any(kp.confidence <= 0 for kp in keypoints[:17]):
+        return None
+    return np.array([[kp.x, kp.y] for kp in keypoints[:17]], dtype=np.float32)
 
 
 def _wait_for_start_capture(ipc_client: IPCClient) -> bool:
@@ -260,6 +365,17 @@ def run_biomechanics_pipeline(
             pipeline.start_capture()
             print("[PRELOAD] Camera opened — entering frame loop")
 
+        # Multi-camera calibration (if needed)
+        if pipeline._multi_camera and pipeline._multi_camera_provider is not None:
+            if not pipeline._multi_camera_provider.is_calibrated:
+                height_m = float(os.getenv("NOWVA_USER_HEIGHT_M", "1.885"))
+                print(f"[MULTI-CAM] Running T-pose calibration (height={height_m}m)...")
+                pipeline._multi_camera_provider.calibrate(
+                    height_m=height_m,
+                    save_path="outputs/calibration.json",
+                )
+                print("[MULTI-CAM] Calibration complete")
+
         bridge = IPCBridge(ipc_client)
         session_tracker = SessionTracker(bridge, config=config.coaching)
 
@@ -281,7 +397,10 @@ def run_biomechanics_pipeline(
 
     fps_counter = FPSCounter()
     window_name = f"Nowva — {exercise_name}"
-    out_dir = make_output_dir()
+    precreate_window(window_name)
+    _window_animated = False
+    session_output = os.environ.get("NOWVA_SESSION_OUTPUT_DIR")
+    out_dir = make_output_dir(base=os.path.join(session_output, "output") if session_output else "output")
 
     # --- Apply existing calibration if provided ---
     if calibration_file and os.path.exists(calibration_file):
@@ -300,7 +419,7 @@ def run_biomechanics_pipeline(
         # ============================================================
         #  PHASE 1: PRE-WORKOUT FORM ASSESSMENT (2-rep loop)
         # ============================================================
-        ASSESSMENT_TARGET_REPS = 2
+        ASSESSMENT_TARGET_REPS = 1
 
         print(f"\n{'='*60}")
         print(f"  ASSESSMENT PHASE ({ASSESSMENT_TARGET_REPS} bodyweight squats)")
@@ -320,15 +439,20 @@ def run_biomechanics_pipeline(
                     fps_counter.update()
                     draw_fps(display, fps_counter.fps)
 
-                    h, w = display.shape[:2]
-                    current, required = pipeline._readiness_gate.progress
-                    text = f"WAITING {current}/{required}"
-                    color = (0, 200, 255)
-                    ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-                    x = w - ts[0] - 15
-                    cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
-                    cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                    standing_gate = pipeline._standing_gate
+                    if not standing_gate.is_ready:
+                        current, required = standing_gate.progress
+                        hint = GATE_FAILURE_HINTS.get(standing_gate.last_failure, "HOLD STILL")
+                        pill_text = f"{hint}  {current}/{required}"
+                    else:
+                        current, required = pipeline._bone_constraints.progress
+                        pill_text = f"CALIBRATING {current}/{required}"
+                    _draw_hud_pill(display, pill_text, accent=HUD_VIOLET)
+                    _draw_wordmark(display)
 
+                    if not _window_animated:
+                        animate_window_fullscreen(window_name)
+                        _window_animated = True
                     cv2.imshow(window_name, display)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         print("\nAssessment stopped early by user")
@@ -348,6 +472,10 @@ def run_biomechanics_pipeline(
             ipc_client.disconnect()
             return
 
+        # Tracking is locked in — tell the agent it can cue the first squat
+        ipc_client.send_message({"type": "assessment_ready"})
+        print("  [ASSESSMENT] Gate passed + bones calibrated — sent assessment_ready")
+
         # Extract athlete params from bone constraints
         athlete_params = _extract_athlete_params(pipeline)
         if athlete_params is not None:
@@ -362,16 +490,99 @@ def run_biomechanics_pipeline(
         else:
             print("  [ASSESSMENT] WARNING: Bone constraints not calibrated — diagnosis unavailable")
 
+        def _run_demo_phase(demo_data) -> bool:
+            """Drive the choreographed demo from agent messages. Returns False if user quit."""
+            bridge = DemoWSBridge()
+            bridge.start()
+            time.sleep(0.3)
+            webbrowser.open(f"http://localhost:{DEMO_WS_PORT}")
+            time.sleep(1.0)
+            bridge.send_init(demo_data)
+
+            phase_start = time.time()
+            last_message_time = phase_start
+            finishing = False
+            finish_deadline = 0.0
+            demo_started = False
+            started_ack_sent = False
+
+            try:
+                while True:
+                    result = pipeline.process_frame()
+
+                    if result.skeleton_3d is not None:
+                        bridge.send_live_pose(result.skeleton_3d.to_numpy())
+
+                    if not started_ack_sent and bridge.wait_started(timeout=0):
+                        ipc_client.send_message({"type": "demo_started"})
+                        started_ack_sent = True
+
+                    incoming = _poll_incoming_message(ipc_client)
+                    if incoming is not None:
+                        last_message_time = time.time()
+                        msg_type = incoming.get("type")
+                        if msg_type == "demo_start":
+                            bridge.send_event({"type": "demo_start"})
+                            demo_started = True
+                        elif msg_type == "demo_cue":
+                            bridge.send_event({
+                                "type": "demo_cue",
+                                "cue_index": int(incoming.get("cue_index", 0)),
+                            })
+                        elif msg_type == "demo_end":
+                            bridge.send_event({"type": "demo_end"})
+                            finishing = True
+                            finish_deadline = time.time() + DEMO_FINISH_TIMEOUT_S
+
+                    now = time.time()
+                    if finishing:
+                        if bridge.wait_done(timeout=0):
+                            return True
+                        if now > finish_deadline:
+                            print("  [DEMO] Viewer never confirmed done — ending demo")
+                            return True
+                    if not demo_started and now - phase_start > DEMO_START_TIMEOUT_S:
+                        print("  [DEMO] No demo_start received — skipping demo")
+                        return True
+                    if demo_started and not finishing and now - last_message_time > DEMO_INACTIVITY_TIMEOUT_S:
+                        print("  [DEMO] Agent went silent mid-demo — ending demo")
+                        bridge.send_event({"type": "demo_end"})
+                        finishing = True
+                        finish_deadline = now + DEMO_FINISH_TIMEOUT_S
+
+                    frame = pipeline.last_frame
+                    if frame is not None:
+                        display = frame.copy()
+                        if result.skeleton_2d is not None:
+                            draw_skeleton(display, result.skeleton_2d)
+                        fps_counter.update()
+                        cv2.imshow(window_name, display)
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            print("\nDemo stopped early by user")
+                            return False
+
+                    total_ms = sum(result.latency_ms.values())
+                    target_ms = 1000.0 / config.target_fps
+                    if total_ms < target_ms:
+                        time.sleep((target_ms - total_ms) / 1000.0)
+            finally:
+                bridge.stop()
+
         # Assessment loop: collect reps, diagnose, repeat until no immediate causes
         assessment_passed = False
         assessment_round = 0
+        demo_played = False
 
         try:
             while not assessment_passed:
                 assessment_round += 1
                 assessment_reps_done = 0
                 pipeline.rep_counter.reset()
-                session_tracker._rep_kinematic_buffer = []
+                pipeline.rep_counter.set_assessment_mode(True)
+                if pipeline._bilstm is not None:
+                    pipeline._bilstm.set_assessment_mode(True)
+                session_tracker.set_assessment_mode(True)
+                session_tracker.reset_rep_buffers()
                 session_tracker.current_set_reps = []
                 session_tracker.set_active = False
 
@@ -388,13 +599,17 @@ def run_biomechanics_pipeline(
                         if result.rep_data is not None:
                             bottom_kpts = None
                             bottom_angles = None
+                            standing_kpts = None
                             if hasattr(pipeline, 'consume_bottom_frame'):
                                 bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
+                            if hasattr(pipeline, 'consume_standing_frame'):
+                                standing_kpts = pipeline.consume_standing_frame()
 
                             session_tracker.on_rep_complete(
                                 result.rep_data,
                                 bottom_kpts=bottom_kpts,
                                 bottom_angles=bottom_angles,
+                                standing_kpts=standing_kpts,
                             )
                             assessment_reps_done += 1
 
@@ -418,18 +633,17 @@ def run_biomechanics_pipeline(
                         fps_counter.update()
                         draw_fps(display, fps_counter.fps)
 
-                        h, w = display.shape[:2]
-                        text = f"ASSESSMENT  Round {assessment_round}  Rep {assessment_reps_done}/{ASSESSMENT_TARGET_REPS}"
-                        color = (255, 165, 0)
-                        ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-                        x = w - ts[0] - 15
-                        cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
-                        cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-
-                        cv2.putText(
-                            display, f"ASSESSMENT  {assessment_reps_done}/{ASSESSMENT_TARGET_REPS}",
-                            (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 165, 0), 3,
+                        _draw_hud_pill(
+                            display,
+                            f"ASSESSMENT  ROUND {assessment_round}",
+                            accent=HUD_CYAN,
                         )
+                        _draw_hud_pill(
+                            display,
+                            f"REP {assessment_reps_done}/{ASSESSMENT_TARGET_REPS}",
+                            align="left", accent=HUD_CYAN, font_scale=1.1, y=48,
+                        )
+                        _draw_wordmark(display)
 
                         cv2.imshow(window_name, display)
                         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -469,12 +683,31 @@ def run_biomechanics_pipeline(
                     print(f"  [ASSESSMENT] Session causes: {len(diagnosis_result.session_causes)}")
                     print(f"  [ASSESSMENT] Form score: {round(score_summary.mean_score * 100)}/100")
 
+                    # Build demo data before announcing the result so the
+                    # choreography is ready the moment the agent reacts.
+                    pending_demo = None
+                    if has_immediate and not demo_played:
+                        observed_kpts = session_tracker.bottom_frame_for_rep(
+                            score_summary.worst_rep_number
+                        )
+                        if observed_kpts is not None:
+                            pending_demo = build_demo_data(
+                                observed_kpts, diagnosis_result, anthro=anthro, rom=rom,
+                            )
+                    if pending_demo is not None:
+                        print(f"  [DEMO] Pose stack ready: {len(pending_demo.cues)} cue(s)")
+
                     ipc_client.send_message({
                         "type": "assessment_result",
                         "round": assessment_round,
                         "passed": not has_immediate,
                         "diagnosis": diagnosis_dict,
                         "scoring": scoring_dict,
+                        "demo": {
+                            "available": pending_demo is not None,
+                            "cues": [cue.model_dump() for cue in pending_demo.cues]
+                            if pending_demo is not None else [],
+                        },
                     })
 
                     if not has_immediate:
@@ -482,6 +715,13 @@ def run_biomechanics_pipeline(
                         print(f"\n  [ASSESSMENT] PASSED after {assessment_round} round(s)")
                     else:
                         print(f"  [ASSESSMENT] Issues found — user needs to correct and retry")
+                        if pending_demo is not None:
+                            demo_played = True
+                            if not _run_demo_phase(pending_demo):
+                                cv2.destroyAllWindows()
+                                pipeline.release()
+                                ipc_client.disconnect()
+                                return
                         pipeline.reset_readiness_gate()
                         # Wait for readiness gate again before next round
                         while not pipeline.is_ready:
@@ -493,6 +733,11 @@ def run_biomechanics_pipeline(
                                     draw_skeleton(display, result.skeleton_2d)
                                 fps_counter.update()
                                 draw_fps(display, fps_counter.fps)
+
+                                current, required = pipeline._readiness_gate.progress
+                                _draw_hud_pill(display, f"WAITING {current}/{required}", accent=HUD_VIOLET)
+                                _draw_wordmark(display)
+
                                 cv2.imshow(window_name, display)
                                 if cv2.waitKey(1) & 0xFF == ord('q'):
                                     cv2.destroyAllWindows()
@@ -525,9 +770,12 @@ def run_biomechanics_pipeline(
         # Reset pipeline state for calibration
         pipeline.reset_readiness_gate()
         pipeline.rep_counter.reset()
+        pipeline.rep_counter.set_assessment_mode(False)
         if pipeline._bilstm is not None:
             pipeline._bilstm.reset()
-        session_tracker._rep_kinematic_buffer = []
+            pipeline._bilstm.set_assessment_mode(False)
+        session_tracker.set_assessment_mode(False)
+        session_tracker.reset_rep_buffers()
         session_tracker.current_set_reps = []
         session_tracker.set_active = False
         session_tracker.current_set_number = 0
@@ -550,7 +798,7 @@ def run_biomechanics_pipeline(
                     cal_set_collector.record_frame(result, result.skeleton_3d)
 
                     if result.joint_angles is not None:
-                        tracker.record_frame(result.joint_angles)
+                        tracker.record_frame(result.joint_angles, in_rep=pipeline.rep_counter.in_rep)
 
                     # Count reps but do NOT report faults during calibration
                     if result.rep_data is not None:
@@ -575,24 +823,18 @@ def run_biomechanics_pipeline(
                     fps_counter.update()
                     draw_fps(display, fps_counter.fps)
 
-                    h, w = display.shape[:2]
                     if pipeline.is_ready:
-                        text = f"CALIBRATING  Rep {tracker.reps_completed}/{calibration_reps}"
-                        color = (0, 200, 255)
+                        _draw_hud_pill(display, "CALIBRATING", accent=HUD_CYAN)
                     else:
                         current, required = pipeline._readiness_gate.progress
-                        text = f"WAITING {current}/{required}"
-                        color = (0, 200, 255)
+                        _draw_hud_pill(display, f"WAITING {current}/{required}", accent=HUD_VIOLET)
 
-                    ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-                    x = w - ts[0] - 15
-                    cv2.rectangle(display, (x - 5, 5), (x + ts[0] + 5, 35), (0, 0, 0), -1)
-                    cv2.putText(display, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-
-                    cv2.putText(
-                        display, f"CALIBRATION  {tracker.reps_completed}/{calibration_reps}",
-                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 255), 3,
+                    _draw_hud_pill(
+                        display,
+                        f"REP {tracker.reps_completed}/{calibration_reps}",
+                        align="left", accent=HUD_CYAN, font_scale=1.1, y=48,
                     )
+                    _draw_wordmark(display)
 
                     cv2.imshow(window_name, display)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -676,71 +918,57 @@ def run_biomechanics_pipeline(
     # Rest timer state
     resting = False
     rest_end_time = 0.0
+    rest_total_seconds = 0.0
     workout_finished = False
 
     def _check_incoming_message():
         """Non-blocking check for messages from main.py."""
-        try:
-            sock = ipc_client.client_socket
-            if sock is None:
-                return None
-            ready, _, _ = select.select([sock], [], [], 0)
-            if ready:
-                return _recv_framed(sock)
-        except Exception:
-            pass
-        return None
+        return _poll_incoming_message(ipc_client)
 
-    def _draw_rest_timer(frame, remaining_seconds):
-        """Draw a centered rest countdown timer on the video frame."""
+    def _draw_rest_timer(frame, remaining_seconds, total_seconds=0.0):
+        """Draw a centered rest countdown with a remaining-time progress arc."""
         h, w = frame.shape[:2]
         mins = int(remaining_seconds) // 60
         secs = int(remaining_seconds) % 60
         timer_text = f"{mins}:{secs:02d}" if mins > 0 else f"{secs}"
 
-        # Semi-transparent dark overlay
+        # Semi-transparent dark navy overlay
         overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        cv2.rectangle(overlay, (0, 0), (w, h), HUD_PANEL, -1)
+        cv2.addWeighted(overlay, 0.68, frame, 0.32, 0, frame)
 
-        # "REST" label
-        label = "REST"
-        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 4)[0]
-        label_x = (w - label_size[0]) // 2
+        cx, cy = w // 2, h // 2
+        ring_radius = min(160, h // 3)
+
+        # Track ring + remaining-time arc (clockwise from 12 o'clock)
+        cv2.circle(frame, (cx, cy), ring_radius, (70, 55, 45), 2, cv2.LINE_AA)
+        if total_seconds > 0:
+            frac = max(0.0, min(1.0, remaining_seconds / total_seconds))
+            cv2.ellipse(
+                frame, (cx, cy), (ring_radius, ring_radius),
+                -90, 0, 360 * frac, HUD_CYAN, 4, cv2.LINE_AA,
+            )
+
+        label = " ".join("REST")
+        (label_w, _), _ = cv2.getTextSize(label, HUD_FONT, 0.9, 1)
         cv2.putText(
-            frame, label, (label_x, h // 2 - 50),
-            cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 255, 255), 4,
+            frame, label, (cx - label_w // 2, cy - ring_radius // 3),
+            HUD_FONT, 0.9, (205, 195, 175), 1, cv2.LINE_AA,
         )
 
-        # Countdown number
-        timer_size = cv2.getTextSize(timer_text, cv2.FONT_HERSHEY_SIMPLEX, 4.0, 6)[0]
-        timer_x = (w - timer_size[0]) // 2
+        (timer_w, timer_h), _ = cv2.getTextSize(timer_text, HUD_FONT, 3.0, 4)
         cv2.putText(
-            frame, timer_text, (timer_x, h // 2 + 80),
-            cv2.FONT_HERSHEY_SIMPLEX, 4.0, (0, 255, 0), 6,
+            frame, timer_text, (cx - timer_w // 2, cy + timer_h // 2 + ring_radius // 6),
+            HUD_FONT, 3.0, HUD_INK, 4, cv2.LINE_AA,
         )
 
     def _draw_readiness_indicator(frame, is_ready, progress):
-        """Draw a readiness gate status indicator in the top-right corner."""
-        h, w = frame.shape[:2]
+        """Draw a readiness gate status pill in the top-right corner."""
         if is_ready:
-            text = "COLLECTING"
-            color = (0, 255, 0)  # green
+            _draw_hud_pill(frame, "COLLECTING", accent=HUD_CYAN)
         else:
             current, required = progress
-            text = f"WAITING {current}/{required}"
-            color = (0, 200, 255)  # yellow
-
-        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-        x = w - text_size[0] - 15
-        y = 30
-
-        # Background for readability
-        cv2.rectangle(
-            frame, (x - 5, y - text_size[1] - 5), (x + text_size[0] + 5, y + 5),
-            (0, 0, 0), -1,
-        )
-        cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            _draw_hud_pill(frame, f"WAITING {current}/{required}", accent=HUD_VIOLET)
 
     def _format_set_summary(summary):
         """Format a set summary dict into a context_str-style log line."""
@@ -783,6 +1011,7 @@ def run_biomechanics_pipeline(
                 if incoming.get("type") == "rest_start":
                     rest_seconds = incoming.get("rest_seconds", 30)
                     rest_end_time = time.time() + rest_seconds
+                    rest_total_seconds = float(rest_seconds)
                     resting = True
                     pipeline.reset_readiness_gate()
 
@@ -801,6 +1030,9 @@ def run_biomechanics_pipeline(
                         set_collector.reset()
 
                     print(f"[REST] Starting {rest_seconds}s rest timer")
+                elif incoming.get("type") == "assessment_mode":
+                    session_tracker.set_assessment_mode(incoming.get("enabled", False))
+                    print(f"[PIPELINE] Assessment mode {'enabled' if incoming.get('enabled') else 'disabled'}")
                 elif incoming.get("type") == "workout_complete":
                     workout_finished = True
                     print("[PIPELINE] Workout complete — stopping rep counting")
@@ -862,10 +1094,12 @@ def run_biomechanics_pipeline(
 
                 if result.rep_data:
                     bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
+                    standing_kpts = pipeline.consume_standing_frame()
                     session_tracker.on_rep_complete(
                         result.rep_data,
                         bottom_kpts=bottom_kpts,
                         bottom_angles=bottom_angles,
+                        standing_kpts=standing_kpts,
                     )
 
                 if session_tracker.check_set_timeout(time.time()):
@@ -904,15 +1138,19 @@ def run_biomechanics_pipeline(
                         ipc_client.send_message({"type": "rest_complete"})
                         print("[REST] Timer expired — sent rest_complete")
                     else:
-                        _draw_rest_timer(display, remaining)
+                        _draw_rest_timer(display, remaining, rest_total_seconds)
                 else:
                     # Show rep count overlay
                     rep_count = pipeline.rep_counter.rep_count
-                    cv2.putText(
-                        display, f"Reps: {rep_count}", (20, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3,
+                    _draw_hud_pill(
+                        display, f"REPS {rep_count}",
+                        align="left", accent=HUD_CYAN, font_scale=1.1, y=48,
                     )
+                _draw_wordmark(display)
 
+                if not _window_animated:
+                    animate_window_fullscreen(window_name)
+                    _window_animated = True
                 cv2.imshow(window_name, display)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print("\nStopped by user (pressed 'q')")
@@ -932,10 +1170,18 @@ def run_biomechanics_pipeline(
         print(f"\nPipeline error: {e}")
         ipc_client.send_message({"type": "error", "value": str(e)})
     finally:
+        # Block further shutdown signals so the data saving below cannot be
+        # interrupted by main.py's terminate() arriving mid-save.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
         cv2.destroyAllWindows()
         pipeline.release()
-        bridge.send_pipeline_status("stopped", {})
-        ipc_client.disconnect()
+        try:
+            bridge.send_pipeline_status("stopped", {})
+            ipc_client.disconnect()
+        except Exception:
+            pass
         print("Biomechanics pipeline stopped")
 
         # Finalize any in-progress set

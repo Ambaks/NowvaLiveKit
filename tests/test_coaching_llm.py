@@ -38,6 +38,7 @@ import numpy as np
 import openai
 import sounddevice as sd
 
+from agent.services.coaching_constants import COACHING_PERSONA
 from biomechanics.analysis import segment_set, write_set_report
 
 # ---------------------------------------------------------------------------
@@ -55,13 +56,7 @@ TTS_INSTRUCTIONS = (
 # ---------------------------------------------------------------------------
 # System prompt (same as production coaching_service.py)
 # ---------------------------------------------------------------------------
-COACHING_SYSTEM_PROMPT = """You are Nova, an energetic, world-class fitness coach on the Nowva smart squat rack.
-
-Voice & Delivery:
-- HIGH energy, motivating, supportive
-- SHORT responses only — follow the word limits given
-- Sound like a real coach in the gym
-— keep it human"""
+COACHING_SYSTEM_PROMPT = COACHING_PERSONA
 
 # ---------------------------------------------------------------------------
 # Prompt templates (mirroring coaching_orchestrator.py patterns)

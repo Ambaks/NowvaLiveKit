@@ -44,33 +44,19 @@ class EccentricTempoRule(FaultRule):
         history: deque,
         in_rep: bool = False,
         rep_number: int = 0,
-        derivatives=None,
-        phase: str = None,
     ) -> Optional[FaultEvent]:
-        """
-        Evaluate for too-fast eccentric movement.
-
-        Args:
-            angles: Current joint angles
-            history: History of angles
-            in_rep: Whether in rep
-            rep_number: Current rep number
-            derivatives: AngleDerivatives with velocity data
-            phase: Current rep phase (descending, bottom, ascending)
-
-        Returns:
-            FaultEvent if descent is too fast, None otherwise
-        """
+        """Evaluate for too-fast eccentric movement."""
         # Cooldown check
         if self._cooldown_frames > 0:
             self._cooldown_frames -= 1
             return None
 
         # Only check during descending phase
-        if not in_rep or phase != "descending":
+        if not in_rep or self._phase != "descending":
             return None
 
-        # Need derivatives
+        # Need derivatives (set via set_frame_context)
+        derivatives = self._derivatives
         if derivatives is None:
             return None
 
@@ -144,30 +130,16 @@ class StallingRule(FaultRule):
         history: deque,
         in_rep: bool = False,
         rep_number: int = 0,
-        derivatives=None,
-        phase: str = None,
     ) -> Optional[FaultEvent]:
-        """
-        Evaluate for stalling during ascent.
-
-        Args:
-            angles: Current joint angles
-            history: History of angles
-            in_rep: Whether in rep
-            rep_number: Current rep number
-            derivatives: AngleDerivatives with velocity data
-            phase: Current rep phase
-
-        Returns:
-            FaultEvent if stalling detected, None otherwise
-        """
+        """Evaluate for stalling during ascent."""
         # Only check during ascending phase
-        if not in_rep or phase != "ascending":
+        if not in_rep or self._phase != "ascending":
             self._slow_frame_count = 0
             self._triggered = False
             return None
 
-        # Need derivatives
+        # Need derivatives (set via set_frame_context)
+        derivatives = self._derivatives
         if derivatives is None:
             return None
 

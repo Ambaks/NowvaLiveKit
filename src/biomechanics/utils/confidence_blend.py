@@ -57,7 +57,10 @@ class ConfidenceBlender:
         confidences = np.array([kp.confidence for kp in skeleton.keypoints])
 
         if self._prev_positions is None:
-            self._prev_positions = current.copy()
+            # `current` is freshly allocated by to_numpy() and not aliased into
+            # the skeleton (from_numpy copies into Point3D floats), so storing
+            # it directly is safe — no defensive copy needed.
+            self._prev_positions = current
             return skeleton
 
         # Compute blend weights: map [min_confidence, max_confidence] → [0, 1]
@@ -75,7 +78,9 @@ class ConfidenceBlender:
             + (1.0 - weights[:, np.newaxis]) * self._prev_positions
         )
 
-        self._prev_positions = blended.copy()
+        # `blended` is a fresh array each frame and is only read (not mutated)
+        # downstream, so it can back _prev_positions without a copy.
+        self._prev_positions = blended
 
         return Skeleton3D.from_numpy(
             blended,

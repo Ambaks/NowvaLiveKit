@@ -36,6 +36,7 @@ class PoseConfig(BaseModel):
     confidence_threshold: float = 0.3
     model_complexity: int = 2  # 0=lite, 1=full, 2=heavy (mediapipe only)
     model_path: Optional[str] = None  # Path to ONNX model (rtmpose only)
+    keypoint_format: str = "coco17"  # coco17 | halpe26
 
 
 class TriangulationConfig(BaseModel):
@@ -70,8 +71,8 @@ class BilateralAsymmetryConfig(BaseModel):
 
 
 class HeelRiseConfig(BaseModel):
-    """Heel rise fault thresholds."""
-    threshold_cm: float = 3.0
+    """Heel rise fault thresholds (degrees of dorsiflexion decrease from baseline)."""
+    threshold_deg: float = 20.0
 
 
 class ForwardLeanConfig(BaseModel):
@@ -82,10 +83,13 @@ class ForwardLeanConfig(BaseModel):
 
 
 class KneeValgusConfig(BaseModel):
-    """Knee valgus fault thresholds."""
-    mild: float = 8.0
-    moderate: float = 13.0
-    severe: float = 18.0
+    """Knee valgus fault thresholds (3D triangulated and 2D FPPA)."""
+    mild: float = 12.0
+    moderate: float = 17.0
+    severe: float = 24.0
+    mild_2d: float = 6.0
+    moderate_2d: float = 10.0
+    severe_2d: float = 16.0
 
 
 class FaultsConfig(BaseModel):
@@ -210,10 +214,28 @@ class ConfidenceBlendConfig(BaseModel):
     max_confidence: float = 0.9
 
 
+class GroundClampConfig(BaseModel):
+    """Ground plane clamping configuration."""
+    calibration_frames: int = 30
+    stance_width_tolerance_m: float = 0.02
+    ankle_y_tolerance_m: float = 0.01
+    # Stricter than the gates: real standing medians sit >= 0.87, while a
+    # held upright half-squat scores 0.62-0.85 and must not calibrate.
+    min_leg_extension_ratio: float = 0.75
+
+
 class PositionFilterConfig(BaseModel):
     """One Euro Filter for 3D keypoint position smoothing."""
     min_cutoff: float = 0.8
     beta: float = 4.0
+    d_cutoff: float = 1.0
+
+
+class DisplayFilterConfig(BaseModel):
+    """One Euro Filter for 2D skeleton overlay smoothing (display-only)."""
+    enabled: bool = True
+    min_cutoff: float = 1.5
+    beta: float = 0.5
     d_cutoff: float = 1.0
 
 
@@ -225,11 +247,12 @@ class PredictiveStateConfig(BaseModel):
 
 class StandingGateConfig(BaseModel):
     """Standing pose gate configuration."""
-    min_confidence: float = 0.5
-    max_knee_flexion_deg: float = 20.0
+    min_confidence: float = 0.25
+    max_knee_flexion_deg: float = 25.0
     max_trunk_flexion_deg: float = 25.0
     min_torso_length_m: float = 0.25
     max_torso_length_m: float = 0.80
+    min_leg_extension_ratio: float = 0.6
     required_consecutive_frames: int = 5
 
 
@@ -245,7 +268,8 @@ class ReadinessGateConfig(BaseModel):
     max_trunk_flexion_deg: float = 35.0
     min_torso_length_m: float = 0.15
     max_torso_length_m: float = 1.00
-    required_consecutive_frames: int = 30
+    min_leg_extension_ratio: float = 0.5
+    required_consecutive_frames: int = 5
 
 
 # =============================================================================
@@ -267,8 +291,10 @@ class BiomechanicsConfig(BaseModel):
     barbell_tracking: BarbellTrackingConfig = Field(default_factory=BarbellTrackingConfig)
     velocity_clamp: VelocityClampConfig = Field(default_factory=VelocityClampConfig)
     bone_constraints: BoneConstraintsConfig = Field(default_factory=BoneConstraintsConfig)
+    ground_clamp: GroundClampConfig = Field(default_factory=GroundClampConfig)
     confidence_blend: ConfidenceBlendConfig = Field(default_factory=ConfidenceBlendConfig)
     position_filter: PositionFilterConfig = Field(default_factory=PositionFilterConfig)
+    display_filter: DisplayFilterConfig = Field(default_factory=DisplayFilterConfig)
     predictive_state: PredictiveStateConfig = Field(default_factory=PredictiveStateConfig)
     standing_gate: StandingGateConfig = Field(default_factory=StandingGateConfig)
     readiness_gate: ReadinessGateConfig = Field(default_factory=ReadinessGateConfig)
@@ -388,11 +414,17 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
     if "bone_constraints" in raw_config:
         config_dict["bone_constraints"] = BoneConstraintsConfig(**raw_config["bone_constraints"])
 
+    if "ground_clamp" in raw_config:
+        config_dict["ground_clamp"] = GroundClampConfig(**raw_config["ground_clamp"])
+
     if "confidence_blend" in raw_config:
         config_dict["confidence_blend"] = ConfidenceBlendConfig(**raw_config["confidence_blend"])
 
     if "position_filter" in raw_config:
         config_dict["position_filter"] = PositionFilterConfig(**raw_config["position_filter"])
+
+    if "display_filter" in raw_config:
+        config_dict["display_filter"] = DisplayFilterConfig(**raw_config["display_filter"])
 
     if "predictive_state" in raw_config:
         config_dict["predictive_state"] = PredictiveStateConfig(**raw_config["predictive_state"])

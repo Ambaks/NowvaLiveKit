@@ -599,7 +599,7 @@ class TestDiagnosisIntegration:
         assert len(diag_msgs) == 1
 
         per_dim = diag_msgs[0]["scoring"]["per_dimension"]
-        assert set(per_dim.keys()) == {"depth", "trunk_control", "knee_tracking", "symmetry", "ankle"}
+        assert set(per_dim.keys()) == {"depth", "trunk_control", "knee_tracking", "symmetry"}
         for key, value in per_dim.items():
             assert 0.0 <= value <= 1.0, f"{key} score {value} out of [0, 1] range"
 
@@ -677,3 +677,41 @@ class TestDiagnosisIntegration:
         types = [m["type"] for m in mock_ipc_client.messages]
         assert "set_complete" in types
         assert "diagnosis_complete" not in types
+
+
+class TestBottomFrameTracking:
+
+    def _complete_rep(self, session_tracker, rep_number: int) -> None:
+        session_tracker.on_rep_complete(
+            make_rep(rep_number, start_time=(rep_number - 1) * 3.0),
+            bottom_kpts=_squat_bottom_kpts_mediapipe(),
+            bottom_angles=_squat_bottom_angles(),
+        )
+
+    def test_bottom_frame_for_rep_returns_viewer_kpts(self, session_tracker, mock_ipc_client):
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+        self._complete_rep(session_tracker, 1)
+        self._complete_rep(session_tracker, 2)
+
+        frame = session_tracker.bottom_frame_for_rep(1)
+
+        assert frame is not None
+        assert len(frame) == 19
+        assert len(frame[0]) == 3
+
+    def test_unknown_rep_falls_back_to_latest_frame(self, session_tracker, mock_ipc_client):
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+        self._complete_rep(session_tracker, 1)
+
+        assert session_tracker.bottom_frame_for_rep(99) is not None
+
+    def test_empty_buffer_returns_none(self, session_tracker, mock_ipc_client):
+        assert session_tracker.bottom_frame_for_rep(1) is None
+
+    def test_reset_rep_buffers_clears_frames(self, session_tracker, mock_ipc_client):
+        session_tracker.set_athlete_params(_default_athlete_params(), {})
+        self._complete_rep(session_tracker, 1)
+
+        session_tracker.reset_rep_buffers()
+
+        assert session_tracker.bottom_frame_for_rep(1) is None

@@ -52,7 +52,14 @@ class WorkoutAgent(BaseNovaAgent):
             audio_cue_service=self.userdata.audio_cue_service,
         )
         await coaching_service.start()
+        coaching_service._workout_active = True
         self.userdata.coaching_service = coaching_service
+
+        # Last-session progress context for the greeting (None on first workout)
+        from agent.services.progress_context import build_greeting_progress_line
+        baseline = await coaching_service.wait_progress_baseline()
+        progress_line = build_greeting_progress_line(baseline)
+        progress_suffix = f" {progress_line}" if progress_line else ""
 
         # Generate context-aware greeting BEFORE starting wake word system.
         # _say() suppresses turn detection so the greeting can't be interrupted.
@@ -66,7 +73,8 @@ class WorkoutAgent(BaseNovaAgent):
             if is_quick:
                 await self._say(
                     f"Quick exercise started! First up: {first_desc}. "
-                    f"Tell the user enthusiastically that you're ready to go — get them going for the first set ",
+                    f"Tell the user enthusiastically that you're ready to go — get them going for the first set "
+                    f"{progress_suffix}",
                     restore=False,
                 )
             else:
@@ -74,12 +82,14 @@ class WorkoutAgent(BaseNovaAgent):
                 await self._say(
                     f"Workout started! Today's workout: {workout_name}. "
                     f"First exercise: {first_desc}. Inform the user enthusiastically "
-                    f"and let them know you're tracking their form",
+                    f"and let them know you're tracking their form"
+                    f"{progress_suffix}",
                     restore=False,
                 )
         else:
             await self._say(
-                f"Workout mode is starting. Psych the user up and get them ready to workout!",
+                f"Workout mode is starting. Psych the user up and get them ready to workout!"
+                f"{progress_suffix}",
                 restore=False,
             )
 
@@ -204,8 +214,13 @@ class WorkoutAgent(BaseNovaAgent):
             f"transcript='{getattr(ev, 'transcript', '')[:50]}'"
         )
 
-        if not self._wake_word_active or self._wake_word_listening:
-            logger.info(f"[WAKE WORD] Skipping (active={self._wake_word_active}, listening={self._wake_word_listening})")
+        if not self._wake_word_active:
+            return
+
+        if self._wake_word_listening:
+            if not ev.is_final and self._wake_word_timeout_task:
+                self._wake_word_timeout_task.cancel()
+                self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
             return
 
         if not ev.is_final:
@@ -318,6 +333,9 @@ class WorkoutAgent(BaseNovaAgent):
 
     async def _start_wake_word_system(self):
         """Activate wake word detection for workout mode."""
+        if self._wake_word_active:
+            await self._stop_wake_word_system()
+
         logger.info("[WAKE WORD] === Starting wake word system ===")
         self._wake_word_active = True
         self._wake_word_listening = False
@@ -347,6 +365,11 @@ class WorkoutAgent(BaseNovaAgent):
         except Exception as e:
             logger.error(f"[WAKE WORD] Failed to disable preemptive_generation: {e}")
 
+        try:
+            self.session.options.turn_handling["endpointing"]["min_delay"] = 0.2
+        except Exception:
+            pass
+
         self._set_workout_turn_detection()
         logger.info("[WAKE WORD] === Wake word system ACTIVE ===")
 
@@ -372,6 +395,11 @@ class WorkoutAgent(BaseNovaAgent):
             logger.info("[WAKE WORD] Re-enabled preemptive_generation")
         except Exception as e:
             logger.error(f"[WAKE WORD] Failed to re-enable preemptive_generation: {e}")
+
+        try:
+            self.session.options.turn_handling["endpointing"]["min_delay"] = 0.3
+        except Exception:
+            pass
 
         self._set_conversational_turn_detection()
         logger.info("[WAKE WORD] System deactivated")

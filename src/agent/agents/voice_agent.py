@@ -3,6 +3,8 @@ Nova Voice Agent - Multi-Agent Entrypoint
 Routes to the appropriate agent based on persisted mode.
 """
 
+import asyncio
+import glob
 import logging
 import os
 import signal
@@ -17,12 +19,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 load_dotenv()
 
 from livekit import agents
-from livekit.agents import AgentSession, TurnHandlingOptions
+from livekit.agents import AgentSession, TurnHandlingOptions, AgentStateChangedEvent, MetricsCollectedEvent, metrics
+from openai.types import Reasoning
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, openai, silero, noise_cancellation
+from livekit.plugins import deepgram, openai, silero, cartesia, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from agent.core.agent_state import AgentState, set_state_notify_fd
+from agent.core.agent_state import AgentState, set_state_notify_fd, PROJECT_ROOT
 from agent.agents.onboarding_agent import OnboardingAgent
 from agent.agents.main_menu_agent import MainMenuAgent
 from agent.agents.workout_agent import WorkoutAgent
@@ -42,6 +45,15 @@ async def entrypoint(ctx: agents.JobContext):
 
     logger.info("[NOVA] Entrypoint function called")
 
+    usage_collector = metrics.UsageCollector()
+
+    async def log_usage(reason: str):
+        summary = usage_collector.get_summary()
+        logger.info("Usage summary: %s", summary)
+
+    ctx.add_shutdown_callback(log_usage)
+
+
     notify_fd_str = os.environ.get("NOWVA_STATE_NOTIFY_FD")
     if notify_fd_str is not None:
         set_state_notify_fd(int(notify_fd_str))
@@ -53,13 +65,13 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info(f"[NOVA] user_id from metadata: {user_id}")
 
     if not user_id:
-        import glob
         logger.info("[NOVA] Searching for state files...")
-        state_files = glob.glob('.agent_state_*.json')
+        # Anchor to the project root — AgentState writes there regardless of CWD
+        state_files = glob.glob(str(PROJECT_ROOT / '.agent_state_*.json'))
         logger.info(f"[NOVA] Found {len(state_files)} state files")
         if state_files:
             latest_state = max(state_files, key=os.path.getmtime)
-            user_id = latest_state.replace('.agent_state_', '').replace('.json', '')
+            user_id = Path(latest_state).name.replace('.agent_state_', '').replace('.json', '')
             logger.info(f"[NOVA] Found recent state file for user: {user_id}")
 
     # Initialize state
@@ -71,6 +83,23 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Create shared userdata
     userdata = UserData(state=state, room=ctx.room)
+
+    # Data-flush safety net: the session "close" event does not always fire
+    # when the process is terminated during shutdown, but shutdown callbacks
+    # run during LiveKit's graceful drain. All stop() methods are idempotent,
+    # so running both paths is safe.
+    async def flush_session_services(reason: str):
+        for name in ("context_viewer", "compaction_service", "coaching_service"):
+            obj = getattr(userdata, name, None)
+            if obj:
+                try:
+                    await obj.stop()
+                    setattr(userdata, name, None)
+                    logger.info(f"[SHUTDOWN] {name} stopped via shutdown callback")
+                except Exception as e:
+                    logger.error(f"[SHUTDOWN] Failed to stop {name}: {e}")
+
+    ctx.add_shutdown_callback(flush_session_services)
 
     # Retrieve prewarmed AudioCueService (if available)
     prewarmed_cue_svc = ctx.proc.userdata.get("audio_cue_service")
@@ -91,12 +120,26 @@ async def entrypoint(ctx: agents.JobContext):
         ],
     )
 
-    llm = openai.LLM(
-        model=os.getenv("LLM_MODEL", "gpt-5.4-mini"),
-        reasoning_effort="low",
-    )
+    llm_model = os.getenv("LLM_MODEL", "gpt-5.4-mini")
+    if llm_model.startswith(("gpt-5.5", "gpt-5.6")):
+        # gpt-5.5+ rejects reasoning_effort + function tools on /v1/chat/completions;
+        # OpenAI requires the Responses API for this combination.
+        llm = openai.responses.LLM(
+            model=llm_model,
+            reasoning=Reasoning(effort="low"),
+        )
+    else:
+        llm = openai.LLM(
+            model=llm_model,
+            reasoning_effort="low",
+        )
 
-    tts = "cartesia/sonic-2"
+    tts = cartesia.TTS(
+        voice=os.getenv("CARTESIA_VOICE_ID", "3e39e9a5-585c-4f5f-bac6-5e4905c51095"),
+        model="sonic-3",
+        language="en",
+        speed="normal",
+    )
     logger.info("[NOVA] Cascade pipeline initialized")
 
     # Retrieve prewarmed VAD or load fresh as fallback
@@ -224,9 +267,12 @@ async def entrypoint(ctx: agents.JobContext):
     _lk_logger = logging.getLogger("livekit.agents.voice.agent_session")
     _prev_level = _lk_logger.level
     _lk_logger.setLevel(logging.ERROR)
-
+            
     @session.on("metrics_collected")
-    def _on_metrics(ev):
+    def _on_metrics(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
+
         m = ev.metrics
         if hasattr(m, "ttft"):
             logger.info(
@@ -305,55 +351,42 @@ async def entrypoint(ctx: agents.JobContext):
     @session.on("close")
     def _on_close(ev):
         logger.info(f"[SESSION] Session closed — reason={ev.reason.value}, error={ev.error}")
-        # Log final latency summary
         latency_tracker.log_summary()
-        # Flush session profiler data to disk
         profiler.stop()
 
-        # Stop context viewer
         try:
-            viewer = getattr(userdata, 'context_viewer', None)
-            if viewer:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(viewer.stop(), loop)
-                userdata.context_viewer = None
-        except Exception as e:
-            logger.error(f"[SESSION] Failed to stop context viewer: {e}")
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("[SESSION] No running event loop — skipping async cleanup")
+            if state.get_mode() == "workout":
+                state.save_state()
+            return
 
-        # Stop compaction service
-        try:
-            compaction = userdata.compaction_service
-            if compaction:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(compaction.stop(), loop)
-                userdata.compaction_service = None
-                logger.info("[SESSION] Compaction service stopped on close")
-        except Exception as e:
-            logger.error(f"[SESSION] Failed to stop compaction service: {e}")
-
-        # Graceful cleanup if session closes during workout
-        if state.get_mode() == "workout":
-            logger.info("[SESSION] Session closed during workout — saving state")
-            try:
-                coaching = userdata.coaching_service
-                if coaching:
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.run_coroutine_threadsafe(coaching.stop(), loop)
-                    userdata.coaching_service = None
+        async def _async_cleanup():
+            for name, obj in [
+                ("context_viewer", getattr(userdata, 'context_viewer', None)),
+                ("compaction_service", getattr(userdata, 'compaction_service', None)),
+                ("coaching_service", getattr(userdata, 'coaching_service', None) if state.get_mode() == "workout" else None),
+            ]:
+                if obj:
+                    try:
+                        await obj.stop()
+                        setattr(userdata, name, None)
+                        logger.info(f"[SESSION] {name} stopped on close")
+                    except Exception as e:
+                        logger.error(f"[SESSION] Failed to stop {name}: {e}")
+            if state.get_mode() == "workout":
                 state.save_state()
                 logger.info("[SESSION] Workout state saved on close")
-            except Exception as e:
-                logger.error(f"[SESSION] Failed to save workout state on close: {e}")
+
+        asyncio.run_coroutine_threadsafe(_async_cleanup(), loop)
+
+    await ctx.connect()
 
     await session.start(
         room=ctx.room,
         agent=agent,
+        record=True,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
             pre_connect_audio=True,
