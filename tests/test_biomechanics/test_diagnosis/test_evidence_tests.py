@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from biomechanics.diagnosis.graph.evidence_tests import (
+    ankle_df_limitation,
+    test_limited_ankle_df as limited_ankle_df_evidence,
     test_narrow_stance as narrow_stance_evidence,
     test_progressive_degradation as progressive_degradation_evidence,
 )
@@ -16,7 +18,7 @@ from biomechanics.diagnosis.types import (
 )
 
 ANTHRO = {"femur_torso_ratio": 0.93}
-ROM = {"dorsiflexion_drop": 35.0, "avg_depth": 120.0}
+ROM = {"peak_dorsiflexion": 35.0, "avg_depth": 120.0}
 
 EVIDENCE_TOLERANCE = 1e-6
 
@@ -75,7 +77,7 @@ class TestNarrowStance:
     depth measure and silently zero the evidence."""
 
     def _ideal_ratio(self, rom: dict = ROM) -> float:
-        ideal, _ = dorsi_driven_targets(rom["dorsiflexion_drop"], ANTHRO)
+        ideal, _ = dorsi_driven_targets(rom["peak_dorsiflexion"], ANTHRO)
         return ideal
 
     def test_stance_at_target_gives_zero(self):
@@ -144,3 +146,42 @@ class TestProgressiveDegradation:
         summary = _make_summary([0.9, 0.7], trend_slope=-0.2)
         evidence = progressive_degradation_evidence(_make_rep(), ANTHRO, ROM, summary)
         assert evidence == pytest.approx(0.0, abs=EVIDENCE_TOLERANCE)
+
+
+class TestAnkleDorsiflexionLimitation:
+    """Ankle limitation is measured against absolute anatomical bounds. It used
+    to be observed_peak / capacity where capacity WAS the athlete's own
+    observed peak, so utilization was ~1.0 and limited_ankle_df fired at full
+    evidence for essentially every athlete."""
+
+    def test_restricted_ankle_reads_fully_limited(self):
+        rep = _make_rep(ankle_df_l_max=18.0, ankle_df_r_max=18.0)
+        assert ankle_df_limitation(rep) == pytest.approx(1.0)
+
+    def test_normal_ankle_reads_unrestricted(self):
+        rep = _make_rep(ankle_df_l_max=34.0, ankle_df_r_max=34.0)
+        assert ankle_df_limitation(rep) == pytest.approx(0.0)
+
+    def test_borderline_ankle_scales_linearly(self):
+        rep = _make_rep(ankle_df_l_max=25.0, ankle_df_r_max=25.0)
+        assert ankle_df_limitation(rep) == pytest.approx(0.5)
+
+    def test_uses_the_better_ankle(self):
+        """One restricted ankle is not a bilateral ROM limit."""
+        rep = _make_rep(ankle_df_l_max=15.0, ankle_df_r_max=34.0)
+        assert ankle_df_limitation(rep) == pytest.approx(0.0)
+
+    def test_typical_athlete_is_not_flagged(self):
+        """The default rep reaches 25 deg with a 35 deg observed peak — the
+        old ratio gave 0.71 utilization here and any deeper rep gave 1.0."""
+        assert limited_ankle_df_evidence(_make_rep(), ANTHRO, ROM, None) < 1.0
+
+    def test_evidence_is_independent_of_observed_peak(self):
+        rep = _make_rep(ankle_df_l_max=22.0, ankle_df_r_max=22.0)
+        shallow_baseline = {"peak_dorsiflexion": 22.0, "avg_depth": 120.0}
+        deep_baseline = {"peak_dorsiflexion": 45.0, "avg_depth": 120.0}
+        assert limited_ankle_df_evidence(
+            rep, ANTHRO, shallow_baseline, None,
+        ) == pytest.approx(
+            limited_ankle_df_evidence(rep, ANTHRO, deep_baseline, None)
+        )

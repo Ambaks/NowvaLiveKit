@@ -42,7 +42,7 @@ from biomechanics.utils.bone_constraints import BoneLengthConstraints
 from biomechanics.utils.ground_clamp import GroundClamp
 from biomechanics.utils.position_filter import KeypointPositionSmoother, Skeleton2DSmoother
 from biomechanics.utils.predictive_state import PredictiveStateEstimator
-from biomechanics.utils.rom_clamp import ROMClamp
+from biomechanics.utils.preik_chain import apply_preik_filters
 from biomechanics.utils.standing_gate import StandingPoseGate
 
 
@@ -162,7 +162,6 @@ class BiomechanicsPipeline:
         self._velocity_clamp = None
         self._bone_constraints = None
         self._ground_clamp = None
-        self._rom_clamp = None
         self._position_smoother = None
         self._predictive_estimator = None
         self._proportions_applied = False
@@ -190,7 +189,6 @@ class BiomechanicsPipeline:
                 min_leg_extension_ratio=self.config.ground_clamp.min_leg_extension_ratio,
                 standing_gate=self._standing_gate,
             )
-            self._rom_clamp = ROMClamp()
             self._position_smoother = KeypointPositionSmoother(
                 min_cutoff=self.config.position_filter.min_cutoff,
                 beta=self.config.position_filter.beta,
@@ -509,13 +507,14 @@ class BiomechanicsPipeline:
         # --- Pre-IK filtering layers (optional) ---
         if self._preik_enabled:
             t0 = time.perf_counter()
-            skeleton_3d = self._confidence_blender.blend(skeleton_3d)
-            skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
-            skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
-            skeleton_3d = self._rom_clamp.clamp(skeleton_3d)
-            skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
-            skeleton_3d = self._position_smoother.smooth(skeleton_3d)
-            skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+            skeleton_3d = apply_preik_filters(
+                skeleton_3d,
+                confidence_blender=self._confidence_blender,
+                velocity_clamp=self._velocity_clamp,
+                bone_constraints=self._bone_constraints,
+                ground_clamp=self._ground_clamp,
+                position_smoother=self._position_smoother,
+            )
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
 
             # Apply body-proportion scaling once after bone calibration

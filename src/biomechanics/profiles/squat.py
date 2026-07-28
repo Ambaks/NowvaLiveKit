@@ -125,11 +125,9 @@ class SquatProfile(ExerciseProfile):
         # Initialise state on first call
         if "baseline_set" not in state:
             state["baseline_set"] = True
-            state["baseline_dorsiflexion_l"] = angles.ankle_dorsiflexion_l
-            state["baseline_dorsiflexion_r"] = angles.ankle_dorsiflexion_r
             state["peak_trunk_flexion"] = 180.0
             state["peak_asymmetry"] = 0.0
-            state["peak_dorsiflexion_drop"] = 0.0
+            state["peak_dorsiflexion"] = 0.0
             state["current_rep_peak_adduction"] = 0.0
             state["rep_peak_hip_adductions"] = []
             state["current_rep_peak_valgus"] = 0.0
@@ -163,10 +161,13 @@ class SquatProfile(ExerciseProfile):
             abs(angles.knee_flexion_l - angles.knee_flexion_r),
         )
 
-        drop_l = state["baseline_dorsiflexion_l"] - angles.ankle_dorsiflexion_l
-        drop_r = state["baseline_dorsiflexion_r"] - angles.ankle_dorsiflexion_r
-        state["peak_dorsiflexion_drop"] = max(
-            state["peak_dorsiflexion_drop"], max(drop_l, drop_r)
+        # Peak dorsiflexion reached. Previously computed as
+        # baseline - current, but dorsiflexion increases during the descent,
+        # so that expression was negative every frame and never moved off 0.
+        state["peak_dorsiflexion"] = max(
+            state["peak_dorsiflexion"],
+            angles.ankle_dorsiflexion_l,
+            angles.ankle_dorsiflexion_r,
         )
 
     def apply_baseline(self, rules: List[FaultRule], state: Dict) -> None:
@@ -238,11 +239,11 @@ class SquatProfile(ExerciseProfile):
                 )
 
             elif ft_val == "heel_rise" and hasattr(rule, "threshold_degrees"):
-                peak_drop = state["peak_dorsiflexion_drop"]
+                peak_dorsi = state["peak_dorsiflexion"]
                 rule.threshold_degrees = max(
-                    rule.threshold_degrees, peak_drop + 20.0
+                    rule.threshold_degrees, peak_dorsi + 20.0
                 )
                 logger.info(
-                    "[SQUAT] Heel rise baseline: drop=%.1f° → threshold %.1f°",
-                    peak_drop, rule.threshold_degrees,
+                    "[SQUAT] Heel rise baseline: peak dorsiflexion=%.1f° → threshold %.1f°",
+                    peak_dorsi, rule.threshold_degrees,
                 )

@@ -21,6 +21,26 @@ from .parameter_deltas import (
     foot_angle_target_deg,
 )
 
+# Ankle dorsiflexion at the bottom of a squat, measured as shank tilt from
+# vertical. Clinically restricted ankles reach under ~20°; ~30° and above is
+# a normal, unrestricted squat. These are absolute anatomical bounds on
+# purpose: the athlete's own observed peak was previously used as their
+# "capacity", which made utilization ~1.0 for everyone and fired the
+# limited-ankle hypothesis on every athlete.
+ANKLE_DF_LIMITED_DEG = 20.0
+ANKLE_DF_UNRESTRICTED_DEG = 30.0
+
+
+def ankle_df_limitation(features: RepKinematicSummary) -> float:
+    """How restricted the ankle looks, 0 (unrestricted) to 1 (clearly limited)."""
+    peak_tilt = max(features.ankle_df_l_max, features.ankle_df_r_max)
+    if peak_tilt >= ANKLE_DF_UNRESTRICTED_DEG:
+        return 0.0
+    if peak_tilt <= ANKLE_DF_LIMITED_DEG:
+        return 1.0
+    span = ANKLE_DF_UNRESTRICTED_DEG - ANKLE_DF_LIMITED_DEG
+    return (ANKLE_DF_UNRESTRICTED_DEG - peak_tilt) / span
+
 
 def expected_knee_valgus_baseline(anthro: dict) -> float:
     hip_width = anthro.get("hip_width", 0.30)
@@ -58,7 +78,7 @@ def test_narrow_stance(
     # symptom (and severity-weighted by the engine) — re-deriving it here
     # from depth class or trunk pitch can contradict the symptom's own
     # measure and silently zero the evidence.
-    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    dorsi_capacity = rom.get("peak_dorsiflexion", 35.0)
     ideal_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
 
     current_ratio = features.stance_width_ratio
@@ -96,12 +116,11 @@ def test_bracing_failure(
     if excess_lean <= 5.0:
         return 0.0
 
-    ankle_df_max = max(features.ankle_df_l_max, features.ankle_df_r_max)
-    dorsiflexion_capacity = rom.get("dorsiflexion_drop", 35.0)
-    ankle_is_limited = ankle_df_max >= (dorsiflexion_capacity * 0.9)
-
-    if ankle_is_limited:
-        return _clamp(excess_lean / 20.0) * 0.3
+    # A restricted ankle forces forward lean, so it explains the excess and
+    # bracing is discounted proportionally rather than by a fixed factor.
+    ankle_limitation = ankle_df_limitation(features)
+    if ankle_limitation > 0.5:
+        return _clamp(excess_lean / 20.0) * (1.0 - ankle_limitation * 0.7)
 
     stance_narrow = test_narrow_stance(features, anthro, rom, set_summary)
     lean_discount = stance_narrow * 0.6
@@ -148,9 +167,7 @@ def test_depth_unfamiliarity(
     if features.depth_class_int >= 3:
         return 0.0
 
-    ankle_df_max = max(features.ankle_df_l_max, features.ankle_df_r_max)
-    dorsiflexion_capacity = rom.get("dorsiflexion_drop", 35.0)
-    ankle_ok = ankle_df_max < (dorsiflexion_capacity * 0.85)
+    ankle_ok = ankle_df_limitation(features) < 0.5
 
     hip_rom = rom.get("avg_depth", 120.0)
     hip_ok = hip_rom > 100.0
@@ -189,16 +206,7 @@ def test_limited_ankle_df(
     rom: dict,
     set_summary: SetScoreSummary | None,
 ) -> float:
-    ankle_df_max = max(features.ankle_df_l_max, features.ankle_df_r_max)
-    dorsiflexion_capacity = rom.get("dorsiflexion_drop", 35.0)
-
-    if dorsiflexion_capacity <= 0:
-        return 0.5
-
-    utilization = ankle_df_max / dorsiflexion_capacity
-    if utilization < 0.85:
-        return 0.0
-    return _clamp((utilization - 0.85) / 0.15)
+    return ankle_df_limitation(features)
 
 
 def test_limited_hip_flexion(

@@ -106,7 +106,7 @@ def save_calibration_report(peaks: dict, profile: dict, out_dir: str):
         *[f"| Hip Adduction Rep {i+1} | {p:.1f}° |" for i, p in enumerate(peaks.get('hip_adduction_per_rep', []))],
         f"| **Hip Adduction (avg → band)** | **±{peaks['hip_adduction']:.1f}°** |",
         f"| Bilateral Asymmetry (peak) | {peaks['asymmetry']:.1f}° |",
-        f"| Dorsiflexion Drop (peak) | {peaks['dorsiflexion_drop']:.1f}° |",
+        f"| Peak Dorsiflexion | {peaks['peak_dorsiflexion']:.1f}° |",
         f"| **Avg Squat Depth** | **{peaks.get('avg_depth', 0):.1f}°** |",
         *[f"| Squat Depth Rep {i+1} | {d:.1f}° |" for i, d in enumerate(peaks.get('depth_per_rep', []))],
         "",
@@ -265,7 +265,7 @@ def run_test():
             print(f"  Hip adduction rep {i+1}:      {p:.1f}°")
         print(f"  Avg hip adduction (band): {avg_peak_adduction:.1f}°")
         print(f"  Peak asymmetry:           {peaks['asymmetry']:.1f}°")
-        print(f"  Peak dorsiflexion drop:   {peaks['dorsiflexion_drop']:.1f}°")
+        print(f"  Peak dorsiflexion:        {peaks['peak_dorsiflexion']:.1f}°")
         print(f"  {'─'*56}")
         kv = profile["knee_valgus"]
         print(f"  Knee Valgus band: ±{avg_peak_adduction:.1f}°  thresholds: {kv['mild']:.1f}° / {kv['moderate']:.1f}° / {kv['severe']:.1f}°")

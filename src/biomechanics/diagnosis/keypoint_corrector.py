@@ -43,6 +43,18 @@ SEGMENT_JOINTS: dict[str, tuple[int, int]] = {
     "shank_l": (KNEE_L, ANKLE_L), "shank_r": (KNEE_R, ANKLE_R),
 }
 
+# Kinematic tree as (parent_index, child_index), ordered parent-before-child
+# so a single forward pass rebuilds every position. The root is the pelvis
+# midpoint, which is not a keypoint — the hips hang off it.
+KINEMATIC_BONES: list[tuple[int, int]] = [
+    (HIP_L, KNEE_L), (KNEE_L, ANKLE_L), (ANKLE_L, FOOT_L),
+    (HIP_R, KNEE_R), (KNEE_R, ANKLE_R), (ANKLE_R, FOOT_R),
+    (HIP_L, 5), (HIP_R, 6),
+    (5, 7), (7, 9),
+    (6, 8), (8, 10),
+    (5, 0), (0, 1), (0, 2), (1, 3), (2, 4),
+]
+
 BALANCE_FRAC = 0.35
 HEEL_OFFSET_M = 0.06
 BALANCE_TARGET_EPS_M = 0.002
@@ -114,6 +126,40 @@ def rotate_about_axis(vec: np.ndarray, axis: np.ndarray, angle_rad: float) -> np
     cross = np.cross(k, vec)
     dot = np.dot(k, vec)
     return vec * cos_a + cross * sin_a + k * dot * (1.0 - cos_a)
+
+
+def _equalize_lengths(
+    vec_l: np.ndarray, vec_r: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rescale a left/right bone pair to their mean length, keeping directions."""
+    length_l = float(np.linalg.norm(vec_l))
+    length_r = float(np.linalg.norm(vec_r))
+    if length_l < 1e-9 or length_r < 1e-9:
+        return (vec_l.copy(), vec_r.copy())
+    target = (length_l + length_r) / 2.0
+    return (vec_l * (target / length_l), vec_r * (target / length_r))
+
+
+def _mirror_average(
+    vec_l: np.ndarray, vec_r: np.ndarray, lat_unit: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Average a left/right bone pair into one mirrored shape (full symmetry)."""
+    averaged = (vec_l + _mirror_vec(vec_r, lat_unit)) / 2.0
+    return (averaged, _mirror_vec(averaged, lat_unit))
+
+
+def _cap_dorsiflexion(shin: np.ndarray, max_dorsi_deg: float) -> np.ndarray:
+    """Tilt a shin back toward vertical if it exceeds the dorsiflexion cap."""
+    max_dorsi_rad = math.radians(max_dorsi_deg)
+    horizontal = math.sqrt(shin[0] ** 2 + shin[2] ** 2)
+    dorsi_rad = math.atan2(horizontal, max(shin[1], 1e-9))
+    if dorsi_rad <= max_dorsi_rad:
+        return shin
+
+    tilt_axis = np.cross(shin, np.array([0.0, 1.0, 0.0]))
+    if np.linalg.norm(tilt_axis) < 1e-9:
+        return shin
+    return rotate_about_axis(shin, tilt_axis, dorsi_rad - max_dorsi_rad)
 
 
 def _mirror_vec(vec: np.ndarray, lat_unit: np.ndarray) -> np.ndarray:
@@ -390,16 +436,22 @@ class KeypointCorrector:
         observed_kpts: list[list[float]],
         rom: dict | None = None,
     ) -> list[list[float]]:
-        """Symmetrized canonical form of an observed pose.
+        """Canonical form of an observed pose: matched bone lengths, own shape.
 
         Bone lengths must be captured from THIS pose, not the raw observation:
-        symmetry averages L/R bone vectors and therefore changes their lengths,
-        so it has to run before the lengths are locked. Every correction step
-        downstream of canonicalization preserves the canonical lengths exactly.
+        equalizing left/right segment lengths changes them, so it has to run
+        before the lengths are locked. Every correction step downstream of
+        canonicalization preserves the canonical lengths exactly.
+
+        The athlete's asymmetry is kept. This pose is shown to them as their
+        own, so symmetrizing it would erase the very fault a weight-shift cue
+        is describing before they ever see it.
         """
         kpts = np.array(observed_kpts, dtype=float)
-        max_dorsi_deg = rom.get("dorsiflexion_drop") if rom else None
-        self._enforce_symmetry(kpts, max_dorsi_deg=max_dorsi_deg)
+        max_dorsi_deg = rom.get("peak_dorsiflexion") if rom else None
+        self._enforce_symmetry(
+            kpts, max_dorsi_deg=max_dorsi_deg, preserve_asymmetry=True,
+        )
         return kpts.tolist()
 
     def correct(
@@ -427,7 +479,7 @@ class KeypointCorrector:
         if not tier1_causes:
             return None
 
-        max_dorsi_deg = rom.get("dorsiflexion_drop") if rom else None
+        max_dorsi_deg = rom.get("peak_dorsiflexion") if rom else None
 
         # 1. Canonicalize BEFORE capturing bone lengths. Idempotent, so
         # passing an already-canonical pose (demo_builder) is a no-op.
@@ -895,8 +947,15 @@ class KeypointCorrector:
         self,
         kpts: np.ndarray,
         max_dorsi_deg: float | None = None,
+        preserve_asymmetry: bool = False,
     ) -> None:
-        """Enforce bilateral symmetry via FK rebuild with averaged bone vectors."""
+        """Rebuild the lower body with matched left/right bone lengths.
+
+        With preserve_asymmetry the athlete's own bone DIRECTIONS are kept, so
+        only segment lengths are equalized. That is the form used for the pose
+        presented to the athlete as their own; full symmetry is for the
+        corrected target pose.
+        """
         hip_lateral = kpts[HIP_R] - kpts[HIP_L]
         hip_lateral[1] = 0.0
         lat_len = np.linalg.norm(hip_lateral)
@@ -916,44 +975,54 @@ class KeypointCorrector:
             kpts[r_idx] = mid + lateral_half
             kpts[r_idx][1] = y_avg
 
-        # Average bone vectors (mirror R to L orientation before averaging)
-        shin_l = kpts[KNEE_L] - kpts[ANKLE_L]
-        shin_r = kpts[KNEE_R] - kpts[ANKLE_R]
-        shin_avg = (shin_l + _mirror_vec(shin_r, lat_unit)) / 2.0
+        # Equalize bone LENGTHS left to right, keeping each side's own bone
+        # DIRECTIONS. Averaging the whole vector also averages the directions,
+        # which erases the athlete's actual asymmetry from the pose presented
+        # as "this is you at the bottom" — including the hip drop that
+        # weight_shift_cue exists to explain, leaving it rendering a near-zero
+        # shift for the fault it is describing. Only length has to match: that
+        # is what the locked-length invariant downstream depends on.
+        if preserve_asymmetry:
+            shin_l, shin_r = _equalize_lengths(
+                kpts[KNEE_L] - kpts[ANKLE_L], kpts[KNEE_R] - kpts[ANKLE_R],
+            )
+            thigh_l, thigh_r = _equalize_lengths(
+                kpts[HIP_L] - kpts[KNEE_L], kpts[HIP_R] - kpts[KNEE_R],
+            )
+            foot_l, foot_r = _equalize_lengths(
+                kpts[FOOT_L] - kpts[ANKLE_L], kpts[FOOT_R] - kpts[ANKLE_R],
+            )
+        else:
+            shin_l, shin_r = _mirror_average(
+                kpts[KNEE_L] - kpts[ANKLE_L], kpts[KNEE_R] - kpts[ANKLE_R],
+                lat_unit,
+            )
+            thigh_l, thigh_r = _mirror_average(
+                kpts[HIP_L] - kpts[KNEE_L], kpts[HIP_R] - kpts[KNEE_R], lat_unit,
+            )
+            foot_l, foot_r = _mirror_average(
+                kpts[FOOT_L] - kpts[ANKLE_L], kpts[FOOT_R] - kpts[ANKLE_R],
+                lat_unit,
+            )
 
-        thigh_l = kpts[HIP_L] - kpts[KNEE_L]
-        thigh_r = kpts[HIP_R] - kpts[KNEE_R]
-        thigh_avg = (thigh_l + _mirror_vec(thigh_r, lat_unit)) / 2.0
-
-        foot_l = kpts[FOOT_L] - kpts[ANKLE_L]
-        foot_r = kpts[FOOT_R] - kpts[ANKLE_R]
-        foot_avg = (foot_l + _mirror_vec(foot_r, lat_unit)) / 2.0
-
-        # Cap dorsiflexion on the averaged shin before rebuild
-        # shin_avg points upward (knee - ankle), so Y is positive when vertical
+        # Cap dorsiflexion per side before rebuild. Each shin points upward
+        # (knee - ankle), so Y is positive when vertical.
         if max_dorsi_deg is not None:
-            max_dorsi_rad = math.radians(max_dorsi_deg)
-            shin_vert = shin_avg[1]
-            shin_horiz = math.sqrt(shin_avg[0] ** 2 + shin_avg[2] ** 2)
-            dorsi_rad = math.atan2(shin_horiz, max(shin_vert, 1e-9))
-            if dorsi_rad > max_dorsi_rad:
-                excess = dorsi_rad - max_dorsi_rad
-                tilt_axis = np.cross(shin_avg, np.array([0.0, 1.0, 0.0]))
-                if np.linalg.norm(tilt_axis) > 1e-9:
-                    shin_avg = rotate_about_axis(shin_avg, tilt_axis, excess)
+            shin_l = _cap_dorsiflexion(shin_l, max_dorsi_deg)
+            shin_r = _cap_dorsiflexion(shin_r, max_dorsi_deg)
 
-        # Build synthetic captured skeleton with averaged vectors
+        # Build synthetic captured skeleton with the length-matched vectors
         old_hip_mid = (kpts[HIP_L] + kpts[HIP_R]) / 2.0
 
         synthetic = kpts.copy()
         synthetic[ANKLE_L] = kpts[ANKLE_L].copy()
         synthetic[ANKLE_R] = kpts[ANKLE_R].copy()
-        synthetic[FOOT_L] = kpts[ANKLE_L] + foot_avg
-        synthetic[FOOT_R] = kpts[ANKLE_R] + _mirror_vec(foot_avg, lat_unit)
-        synthetic[KNEE_L] = kpts[ANKLE_L] + shin_avg
-        synthetic[KNEE_R] = kpts[ANKLE_R] + _mirror_vec(shin_avg, lat_unit)
-        synthetic[HIP_L] = synthetic[KNEE_L] + thigh_avg
-        synthetic[HIP_R] = synthetic[KNEE_R] + _mirror_vec(thigh_avg, lat_unit)
+        synthetic[FOOT_L] = kpts[ANKLE_L] + foot_l
+        synthetic[FOOT_R] = kpts[ANKLE_R] + foot_r
+        synthetic[KNEE_L] = kpts[ANKLE_L] + shin_l
+        synthetic[KNEE_R] = kpts[ANKLE_R] + shin_r
+        synthetic[HIP_L] = synthetic[KNEE_L] + thigh_l
+        synthetic[HIP_R] = synthetic[KNEE_R] + thigh_r
 
         # FK rebuild with identity parameters
         span_dx = kpts[ANKLE_R][0] - kpts[ANKLE_L][0]
@@ -986,22 +1055,105 @@ class KeypointCorrector:
         kpts[FOOT_R][1] = 0.0
 
 
+def slerp_unit(from_unit: np.ndarray, to_unit: np.ndarray, weight: float) -> np.ndarray:
+    """Interpolate along the arc between two unit vectors."""
+    cos_angle = float(np.clip(np.dot(from_unit, to_unit), -1.0, 1.0))
+
+    # Nearly parallel: the arc and the chord agree, and sin(angle) underflows.
+    if cos_angle > 1.0 - 1e-9:
+        return from_unit
+
+    angle = math.acos(cos_angle)
+
+    # Antiparallel: the arc is undefined, so pick any perpendicular axis.
+    if cos_angle < -1.0 + 1e-9:
+        axis = np.cross(from_unit, np.array([1.0, 0.0, 0.0]))
+        if np.linalg.norm(axis) < 1e-9:
+            axis = np.cross(from_unit, np.array([0.0, 1.0, 0.0]))
+        axis = axis / np.linalg.norm(axis)
+        return rotate_about_axis(from_unit, axis, angle * weight)
+
+    sin_angle = math.sin(angle)
+    return (
+        from_unit * (math.sin((1.0 - weight) * angle) / sin_angle)
+        + to_unit * (math.sin(weight * angle) / sin_angle)
+    )
+
+
+def _interpolate_pose(
+    observed: np.ndarray, corrected: np.ndarray, weight: float,
+) -> np.ndarray:
+    """Blend two poses by rotating bones, so segment lengths stay valid."""
+    out = observed.copy()
+
+    # Root: the pelvis midpoint translates, and the hips keep their offsets
+    # from it. Both are rigid-body motion, so linear interpolation is exact.
+    observed_pelvis = (observed[HIP_L] + observed[HIP_R]) / 2.0
+    corrected_pelvis = (corrected[HIP_L] + corrected[HIP_R]) / 2.0
+    pelvis = observed_pelvis + weight * (corrected_pelvis - observed_pelvis)
+
+    for hip in (HIP_L, HIP_R):
+        observed_offset = observed[hip] - observed_pelvis
+        corrected_offset = corrected[hip] - corrected_pelvis
+        out[hip] = pelvis + _interpolate_segment(
+            observed_offset, corrected_offset, weight,
+        )
+
+    for parent, child in KINEMATIC_BONES:
+        out[child] = out[parent] + _interpolate_segment(
+            observed[child] - observed[parent],
+            corrected[child] - corrected[parent],
+            weight,
+        )
+
+    return out
+
+
+def _interpolate_segment(
+    observed_vec: np.ndarray, corrected_vec: np.ndarray, weight: float,
+) -> np.ndarray:
+    observed_length = float(np.linalg.norm(observed_vec))
+    corrected_length = float(np.linalg.norm(corrected_vec))
+
+    if observed_length < 1e-9 or corrected_length < 1e-9:
+        return observed_vec + weight * (corrected_vec - observed_vec)
+
+    direction = slerp_unit(
+        observed_vec / observed_length, corrected_vec / corrected_length, weight,
+    )
+    length = observed_length + weight * (corrected_length - observed_length)
+    return direction * length
+
+
 def build_morph_frames(
     observed_kpts: list[list[float]],
     corrected_kpts: list[list[float]],
     num_frames: int = 60,
 ) -> list[list[list[float]]]:
-    """Generate morph frames using Gaussian-tapered interpolation."""
-    observed = np.array(observed_kpts)
-    corrected = np.array(corrected_kpts)
+    """Generate morph frames that interpolate bone directions, not positions.
+
+    Rotating a limb and interpolating its endpoint positions cuts the chord
+    of the arc, so bones shrink mid-morph — a measured 19.8% on the torso and
+    ~8% on the thighs, i.e. every intermediate frame the athlete sees is a
+    skeleton that cannot exist. Slerping each bone direction down the
+    kinematic chain keeps segment lengths correct by construction.
+    """
+    observed = np.array(observed_kpts, dtype=float)
+    corrected = np.array(corrected_kpts, dtype=float)
 
     sigma = num_frames / 5.0
     mid = num_frames / 2.0
+    # Normalize so the peak of the taper reaches the corrected pose exactly
+    # and frame 0 starts at the observed pose (it used to start at weight
+    # 0.044, so the "before" frame was already part-way corrected).
+    peak = math.exp(-((round(mid) - mid) ** 2) / (2.0 * sigma**2))
+    edge = math.exp(-(mid**2) / (2.0 * sigma**2))
 
     frames = []
     for frame_index in range(num_frames):
-        weight = math.exp(-((frame_index - mid) ** 2) / (2.0 * sigma**2))
-        interpolated = observed + weight * (corrected - observed)
-        frames.append(interpolated.tolist())
+        raw = math.exp(-((frame_index - mid) ** 2) / (2.0 * sigma**2))
+        weight = (raw - edge) / (peak - edge) if peak > edge else raw
+        weight = min(max(weight, 0.0), 1.0)
+        frames.append(_interpolate_pose(observed, corrected, weight).tolist())
 
     return frames

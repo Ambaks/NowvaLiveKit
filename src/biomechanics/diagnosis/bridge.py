@@ -198,7 +198,7 @@ def build_anthro_dict(athlete_params: dict) -> dict[str, float]:
 def build_rom_dict(athlete_params: dict, baseline: dict) -> dict[str, float]:
     """Build ROM dict from baseline peak values."""
     return {
-        "dorsiflexion_drop": baseline.get("peakDorsi", 35.0),
+        "peak_dorsiflexion": baseline.get("peakDorsi", 35.0),
         "avg_depth": baseline.get("peakKneeFlex", 120.0),
     }
 

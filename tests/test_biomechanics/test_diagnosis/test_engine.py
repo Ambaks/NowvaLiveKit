@@ -26,8 +26,8 @@ ANTHRO = {
     "foot_length": 0.26,
 }
 
-ROM = {"dorsiflexion_drop": 35.0, "avg_depth": 120.0}
-ROM_LIMITED_DORSIFLEXION = {"dorsiflexion_drop": 15.0, "avg_depth": 120.0}
+ROM = {"peak_dorsiflexion": 35.0, "avg_depth": 120.0}
+ROM_LIMITED_DORSIFLEXION = {"peak_dorsiflexion": 15.0, "avg_depth": 120.0}
 
 # Trunk pitch matching expected_trunk_lean_geometric(ANTHRO) = 30 + (0.93-1)*120
 GOOD_TRUNK_PITCH = 21.6
@@ -235,7 +235,7 @@ class TestNarrowStanceSurfacesUnderDepthLimit:
         assert "narrow_stance" in [h.cause_id for h in result.immediate_causes]
 
     def test_wide_stance_is_not_diagnosed(self):
-        target_ratio, _ = dorsi_driven_targets(ROM["dorsiflexion_drop"], ANTHRO)
+        target_ratio, _ = dorsi_driven_targets(ROM["peak_dorsiflexion"], ANTHRO)
         reps = [
             self._depth_limited_rep(n, target_ratio + 0.1) for n in (1, 2, 3)
         ]
@@ -245,10 +245,12 @@ class TestNarrowStanceSurfacesUnderDepthLimit:
         ]
 
 
-class TestFootAngleAlwaysCued:
-    """When a depth or trunk-lean fault fires and the feet are turned out less
-    than the target (>=30 deg), widening the feet is force-cued even when the
-    Bayesian competition would rank it below the hypothesis threshold."""
+class TestFootAngleCompetesOnEvidence:
+    """The toe-out cue used to be force-surfaced past the hypothesis threshold
+    as "a safe, universally beneficial cue", on top of a target floored at 30
+    deg. Natural toe-out is 5-15 deg, so it fired for nearly everyone and
+    prescribed 30-40 deg of external rotation that no measured hip ROM
+    supported. It now competes on evidence like every other cause."""
 
     def _immediate_ids(self, result) -> list[str]:
         return [h.cause_id for h in result.immediate_causes]
@@ -268,31 +270,34 @@ class TestFootAngleAlwaysCued:
             for rep_number in (1, 2, 3)
         ]
 
-    def test_target_is_at_least_30_degrees(self):
-        assert foot_angle_target_deg(ANTHRO, ROM) >= 30.0
+    def test_target_is_the_personalized_value_not_a_floor(self):
+        target = foot_angle_target_deg(ANTHRO, ROM)
+        _, personalized = dorsi_driven_targets(ROM["peak_dorsiflexion"], ANTHRO)
+        assert target == pytest.approx(personalized)
 
-    def test_barely_narrow_feet_are_force_cued(self):
-        # 29 deg gives near-zero evidence, so without the override the cause
-        # would never clear the 0.15 hypothesis threshold.
-        result = _diagnose(self._shallow_feet_at(29.0))
-        assert "narrow_foot_angle" in self._immediate_ids(result)
+    def test_target_can_fall_below_thirty_degrees(self):
+        """A max(30.0, ...) floor discarded the bottom half of the 15-40 range."""
+        assert foot_angle_target_deg(ANTHRO, ROM) < 30.0
 
-    def test_recommended_angle_is_at_least_30(self):
-        result = _diagnose(self._shallow_feet_at(29.0))
-        hypothesis = next(
-            h for h in result.immediate_causes if h.cause_id == "narrow_foot_angle"
-        )
-        target_angle = foot_angle_target_deg(ANTHRO, ROM)
-        assert target_angle >= 30.0
-        assert f"~{target_angle:.0f}°" in hypothesis.explanation
-
-    def test_adequately_turned_out_feet_are_not_cued(self):
-        result = _diagnose(self._shallow_feet_at(32.0))
+    def test_barely_narrow_feet_are_not_force_cued(self):
+        """Just under target gives near-zero evidence, so the cause must not
+        clear the hypothesis threshold on its own."""
+        target = foot_angle_target_deg(ANTHRO, ROM)
+        result = _diagnose(self._shallow_feet_at(target - 1.0))
         assert "narrow_foot_angle" not in self._immediate_ids(result)
 
-    def test_narrow_feet_without_linked_fault_are_not_cued(self):
-        # Deep rep with knee valgus only: knee_not_tracking_toes fires, but it
-        # is not a linked symptom, so foot angle stays silent despite 29 deg.
+    def test_clearly_narrow_feet_still_surface(self):
+        result = _diagnose(self._shallow_feet_at(2.0))
+        assert "narrow_foot_angle" in self._immediate_ids(result)
+
+    def test_adequately_turned_out_feet_are_not_cued(self):
+        target = foot_angle_target_deg(ANTHRO, ROM)
+        result = _diagnose(self._shallow_feet_at(target + 3.0))
+        assert "narrow_foot_angle" not in self._immediate_ids(result)
+
+    def test_narrow_feet_without_supporting_evidence_are_not_cued(self):
+        # Deep rep with knee valgus only: no depth or lean symptom implicates
+        # the foot angle, so it stays silent.
         reps = [
             _make_rep(
                 rep_number,

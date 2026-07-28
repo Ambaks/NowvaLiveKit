@@ -622,43 +622,36 @@ class NowvaApp:
         # Set stdout to line-buffered mode for immediate output
         sys.stdout.flush()
 
+        # Pump agent stdout from a dedicated thread. select()+readline() on a
+        # buffered stream hides lines the buffer already holds, so a crashed
+        # agent's traceback would sit invisible until new output arrived.
+        def _pump_agent_output():
+            for line in iter(self._voice_agent_process.stdout.readline, ''):
+                print(line, end='', flush=True)
+
+        agent_output_thread = threading.Thread(target=_pump_agent_output, daemon=True)
+        agent_output_thread.start()
+
         try:
             while True:
                 # Check if voice agent is still running
                 if self._voice_agent_process.poll() is not None:
-                    # Drain remaining output so the agent's dying traceback is visible
-                    if self._voice_agent_process.stdout:
-                        remaining_output = self._voice_agent_process.stdout.read()
-                        if remaining_output:
-                            print(remaining_output, end='')
+                    # Let the pump thread finish printing the agent's dying traceback
+                    agent_output_thread.join(timeout=2.0)
                     print(f"\n[SYSTEM] Voice agent terminated (exit code {self._voice_agent_process.returncode})")
                     break
 
-                # Monitor voice agent stdout + state notification pipe
+                # Monitor state notification pipe
                 state_notified = False
-                had_output = False
                 try:
-                    read_fds = []
-                    if self._voice_agent_process.stdout:
-                        read_fds.append(self._voice_agent_process.stdout)
                     if self._state_pipe_r is not None:
-                        read_fds.append(self._state_pipe_r)
-
-                    if read_fds:
-                        ready, _, _ = select.select(read_fds, [], [], 0.05)
-                        for fd in ready:
-                            if fd is self._voice_agent_process.stdout:
-                                line = self._voice_agent_process.stdout.readline()
-                                if line:
-                                    print(line, end='')
-                                    sys.stdout.flush()
-                                    had_output = True
-                            elif fd == self._state_pipe_r:
-                                try:
-                                    os.read(self._state_pipe_r, 1024)
-                                except BlockingIOError:
-                                    pass
-                                state_notified = True
+                        ready, _, _ = select.select([self._state_pipe_r], [], [], 0.05)
+                        if ready:
+                            try:
+                                os.read(self._state_pipe_r, 1024)
+                            except BlockingIOError:
+                                pass
+                            state_notified = True
                 except (OSError, ValueError):
                     # Expected when an fd closes mid-select during shutdown.
                     # Anything else is a real bug — let it propagate instead
@@ -856,7 +849,7 @@ class NowvaApp:
                     pose_running = False
                     print("[POSE] Pose estimation stopped")
 
-                if had_output or state_notified:
+                if state_notified:
                     continue
                 # Nothing happened — long fallback poll for safety
                 await asyncio.sleep(2.0)

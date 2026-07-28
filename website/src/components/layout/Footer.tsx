@@ -7,7 +7,6 @@ const COLUMNS = [
     links: [
       { label: "The Rack", href: "#rack" },
       { label: "The Coach", href: "#coach" },
-      { label: "Technology", href: "#technology" },
       { label: "FAQ", href: "#faq" },
       { label: "Reserve", href: "#reserve" },
     ],
@@ -34,7 +33,7 @@ export function Footer() {
         className="h-px w-full bg-linear-to-r from-border via-accent/60 to-border"
       />
 
-      <div className="mx-auto max-w-6xl px-5 pt-16 md:px-8">
+      <div className="mx-auto max-w-6xl px-5 pb-12 pt-16 md:px-8">
         <div className="flex flex-col gap-12 md:flex-row md:justify-between">
           <div className="max-w-xs">
             <div className="flex items-center gap-3">
@@ -73,7 +72,7 @@ export function Footer() {
                 until your rack ships — cancel anytime with one email to{" "}
                 <a
                   href={`mailto:${CONTACT_EMAIL}`}
-                  className="text-accent-ink underline decoration-accent-ink/30 underline-offset-2 transition-colors duration-200 hover:text-accent-strong hover:decoration-accent-strong/60"
+                  className="text-accent-ink wrap-anywhere underline decoration-accent-ink/30 underline-offset-2 transition-colors duration-200 hover:text-accent-strong hover:decoration-accent-strong/60"
                 >
                   {CONTACT_EMAIL}
                 </a>
@@ -92,13 +91,6 @@ export function Footer() {
             renders; final design and specifications may change.
           </p>
         </div>
-      </div>
-
-      {/* Oversized wordmark, clipped at the page's bottom edge. Decorative only. */}
-      <div aria-hidden className="pointer-events-none mt-10 select-none">
-        <p className="translate-y-[0.3em] pl-[0.16em] text-center font-display text-[clamp(4.5rem,15vw,11.5rem)] font-extrabold leading-none tracking-[0.16em] text-fg/5">
-          NOWVA
-        </p>
       </div>
     </footer>
   );

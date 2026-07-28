@@ -11,9 +11,14 @@ import {
   type Framing,
 } from "./introTimeline";
 
-/* Module scope: fires when the dynamic chunk evaluates, so the GLB and the
-   self-hosted Draco decoder start fetching during the CSS splash hold. */
-useGLTF.preload(MODEL_URL, DRACO_PATH);
+/* Called by the orchestrator as soon as the chunk lands, so the GLB and the
+   self-hosted Draco decoder start fetching during the CSS splash hold. Not a
+   module-scope side effect: the chunk graph is shared with the rack stage
+   (see components/three/scenes.ts), and evaluating it for the rack section
+   must not fetch the intro's model. */
+export function preloadIntroAssets(): void {
+  useGLTF.preload(MODEL_URL, DRACO_PATH);
+}
 
 /* Called by the orchestrator after the scene unmounts. Dropping the cache
    entry releases the decoded scene graph to GC; GPU memory dies with the

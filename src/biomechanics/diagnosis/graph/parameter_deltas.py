@@ -62,19 +62,31 @@ def dorsi_driven_targets(
 
 def stance_target_ratio(current_ratio: float, anthro: dict, rom: dict) -> float:
     """Single source of truth for the stance-width target — used by both the
-    geometric correction and the spoken explanation."""
-    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    geometric correction and the spoken explanation.
+
+    The target is whatever the athlete's dorsiflexion and femur proportions
+    imply. It used to be max(..., current_ratio + 0.15), which recommended
+    widening by at least 0.15 shoulder-widths no matter what was measured —
+    including for athletes already standing wider than their own target,
+    where the evidence test that justified the cue returns zero.
+    """
+    dorsi_capacity = rom.get("peak_dorsiflexion", 35.0)
     dorsi_target_ratio, _ = dorsi_driven_targets(dorsi_capacity, anthro)
-    target_ratio = max(dorsi_target_ratio, current_ratio + 0.15, 1.0)
-    return min(target_ratio, 2.5)
+    return min(dorsi_target_ratio, 2.5)
 
 
 def foot_angle_target_deg(anthro: dict, rom: dict) -> float:
     """Single source of truth for the toe-out target — used by both the
-    geometric correction and the spoken explanation."""
-    dorsi_capacity = rom.get("dorsiflexion_drop", 35.0)
+    geometric correction and the spoken explanation.
+
+    Returns the personalized target from dorsi_driven_targets as computed.
+    A max(30.0, ...) floor used to discard the bottom half of that range;
+    since natural toe-out is 5-15°, that made the cue fire for nearly
+    everyone and prescribed 30-40° of forced external rotation.
+    """
+    dorsi_capacity = rom.get("peak_dorsiflexion", 35.0)
     _, dorsi_target_angle = dorsi_driven_targets(dorsi_capacity, anthro)
-    return max(30.0, dorsi_target_angle)
+    return dorsi_target_angle
 
 
 def delta_widen_stance(
@@ -136,8 +148,10 @@ def delta_brace_trunk(
 ) -> dict[str, float]:
     expected_lean = expected_trunk_lean_geometric(anthro)
     excess_lean = features.trunk_pitch_at_bottom - expected_lean
-    correction_degrees = min(excess_lean * 0.4, 8.0)
-    correction_degrees = max(correction_degrees, 3.0)
+    # Proportional to the measured excess only. A 3° floor used to apply a
+    # correction to athletes whose lean was already at or below what their
+    # own proportions predict.
+    correction_degrees = _clamp(excess_lean * 0.4, 0.0, 8.0)
 
     return {
         "trunk.rx": -math.radians(correction_degrees),
@@ -148,8 +162,10 @@ def delta_knees_out(
     features: RepKinematicSummary, anthro: dict, rom: dict
 ) -> dict[str, float]:
     max_valgus = max(features.knee_valgus_l, features.knee_valgus_r)
-    correction_degrees = min(max_valgus * 0.5, 8.0)
-    correction_degrees = max(correction_degrees, 4.0)
+    # Proportional to the measured valgus only. A 4° floor used to push the
+    # knees out by 4° (about 3 cm per side) for a rep with 4.1° of valgus —
+    # a correction as large as the fault it was correcting.
+    correction_degrees = _clamp(max_valgus * 0.5, 0.0, 8.0)
     correction_radians = math.radians(correction_degrees)
 
     return {

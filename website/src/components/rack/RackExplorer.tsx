@@ -8,10 +8,30 @@
  * has no edge to smear. The WebGL bundle and the 1.1 MB model are only fetched
  * once the section is close to the viewport. */
 
-import { useEffect, useRef, useState } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 
-const RackStage = dynamic(() => import("./RackStage"), { ssr: false });
+const RackStage = dynamic(
+  () => import("@/components/three/scenes").then((m) => m.loadRackStage()),
+  { ssr: false },
+);
+
+/* A crashed stage (WebGL context loss, failed GLB fetch) degrades to the
+   static backdrop instead of unmounting the whole page. */
+class StageErrorBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 /* Start loading this far before the section scrolls in. */
 const PRELOAD_MARGIN = "600px";
@@ -32,15 +52,29 @@ export function RackExplorer() {
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
+    /* three r163+ requires WebGL2; without it the renderer constructor
+       throws, so unsupported browsers keep the static backdrop. */
+    if (!document.createElement("canvas").getContext("webgl2")) return;
+
+    /* Preflight the chunk before mounting: rendering a failed next/dynamic
+       rethrows the load error, and a fetch failure (offline, stale deploy,
+       blocker) must not take the page down for a decorative section. */
+    const arm = () => {
+      import("@/components/three/scenes")
+        .then((m) => m.loadRackStage())
+        .then(() => setArmed(true))
+        .catch(() => {});
+    };
+
     if (typeof IntersectionObserver === "undefined") {
-      const id = window.setTimeout(() => setArmed(true), 0);
+      const id = window.setTimeout(arm, 0);
       return () => window.clearTimeout(id);
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          setArmed(true);
+          arm();
           observer.disconnect();
         }
       },
@@ -69,7 +103,11 @@ export function RackExplorer() {
           style={{ background: FLOOR_GLOW }}
         />
 
-        {armed && <RackStage />}
+        {armed && (
+          <StageErrorBoundary>
+            <RackStage />
+          </StageErrorBoundary>
+        )}
       </div>
     </div>
   );

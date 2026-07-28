@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from biomechanics.kinematics.base import IKSolver
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
+from biomechanics.utils.geometry import WORLD_UP
 from biomechanics.utils.types import Skeleton3D, JointAngles, Point3D
 
 
@@ -35,27 +36,28 @@ def standing_skeleton():
     Create a 3D skeleton in standing position.
 
     All joints should be roughly at 0 degrees flexion.
-    Coordinate system: Y-up, Z-forward
+    Coordinate system: the production Y-down frame (see geometry.WORLD_UP)
+    — a keypoint that is physically higher has a SMALLER y. Hips at y = 0.
     """
     # Standing pose with arms down
     keypoints = [
-        Point3D(x=0.0, y=1.70, z=0.0, confidence=1.0),      # 0: nose
-        Point3D(x=0.03, y=1.72, z=-0.02, confidence=1.0),   # 1: left_eye
-        Point3D(x=-0.03, y=1.72, z=-0.02, confidence=1.0),  # 2: right_eye
-        Point3D(x=0.06, y=1.70, z=0.0, confidence=1.0),     # 3: left_ear
-        Point3D(x=-0.06, y=1.70, z=0.0, confidence=1.0),    # 4: right_ear
-        Point3D(x=0.18, y=1.50, z=0.0, confidence=1.0),     # 5: left_shoulder
-        Point3D(x=-0.18, y=1.50, z=0.0, confidence=1.0),    # 6: right_shoulder
-        Point3D(x=0.20, y=1.20, z=0.0, confidence=1.0),     # 7: left_elbow
-        Point3D(x=-0.20, y=1.20, z=0.0, confidence=1.0),    # 8: right_elbow
-        Point3D(x=0.22, y=0.90, z=0.0, confidence=1.0),     # 9: left_wrist
-        Point3D(x=-0.22, y=0.90, z=0.0, confidence=1.0),    # 10: right_wrist
-        Point3D(x=0.12, y=1.00, z=0.0, confidence=1.0),     # 11: left_hip
-        Point3D(x=-0.12, y=1.00, z=0.0, confidence=1.0),    # 12: right_hip
+        Point3D(x=0.0, y=-0.70, z=0.0, confidence=1.0),     # 0: nose
+        Point3D(x=0.03, y=-0.72, z=-0.02, confidence=1.0),  # 1: left_eye
+        Point3D(x=-0.03, y=-0.72, z=-0.02, confidence=1.0), # 2: right_eye
+        Point3D(x=0.06, y=-0.70, z=0.0, confidence=1.0),    # 3: left_ear
+        Point3D(x=-0.06, y=-0.70, z=0.0, confidence=1.0),   # 4: right_ear
+        Point3D(x=0.18, y=-0.50, z=0.0, confidence=1.0),    # 5: left_shoulder
+        Point3D(x=-0.18, y=-0.50, z=0.0, confidence=1.0),   # 6: right_shoulder
+        Point3D(x=0.20, y=-0.20, z=0.0, confidence=1.0),    # 7: left_elbow
+        Point3D(x=-0.20, y=-0.20, z=0.0, confidence=1.0),   # 8: right_elbow
+        Point3D(x=0.22, y=0.10, z=0.0, confidence=1.0),     # 9: left_wrist
+        Point3D(x=-0.22, y=0.10, z=0.0, confidence=1.0),    # 10: right_wrist
+        Point3D(x=0.12, y=0.0, z=0.0, confidence=1.0),      # 11: left_hip
+        Point3D(x=-0.12, y=0.0, z=0.0, confidence=1.0),     # 12: right_hip
         Point3D(x=0.12, y=0.50, z=0.0, confidence=1.0),     # 13: left_knee
         Point3D(x=-0.12, y=0.50, z=0.0, confidence=1.0),    # 14: right_knee
-        Point3D(x=0.12, y=0.05, z=0.0, confidence=1.0),     # 15: left_ankle
-        Point3D(x=-0.12, y=0.05, z=0.0, confidence=1.0),    # 16: right_ankle
+        Point3D(x=0.12, y=0.95, z=0.0, confidence=1.0),     # 15: left_ankle
+        Point3D(x=-0.12, y=0.95, z=0.0, confidence=1.0),    # 16: right_ankle
     ]
     return Skeleton3D(keypoints=keypoints, timestamp=0.0, frame_index=0)
 
@@ -66,28 +68,103 @@ def symmetric_squat_skeleton():
     Create a symmetric squat pose.
 
     Both sides should have identical angles.
+    Production Y-down frame, hips at y = 0.
     """
     # Symmetric half-squat
     keypoints = [
-        Point3D(x=0.0, y=1.50, z=0.05, confidence=1.0),     # 0: nose
-        Point3D(x=0.03, y=1.52, z=0.03, confidence=1.0),    # 1: left_eye
-        Point3D(x=-0.03, y=1.52, z=0.03, confidence=1.0),   # 2: right_eye
-        Point3D(x=0.06, y=1.50, z=0.05, confidence=1.0),    # 3: left_ear
-        Point3D(x=-0.06, y=1.50, z=0.05, confidence=1.0),   # 4: right_ear
-        Point3D(x=0.18, y=1.35, z=0.0, confidence=1.0),     # 5: left_shoulder
-        Point3D(x=-0.18, y=1.35, z=0.0, confidence=1.0),    # 6: right_shoulder
-        Point3D(x=0.25, y=1.10, z=0.10, confidence=1.0),    # 7: left_elbow
-        Point3D(x=-0.25, y=1.10, z=0.10, confidence=1.0),   # 8: right_elbow
-        Point3D(x=0.28, y=0.90, z=0.15, confidence=1.0),    # 9: left_wrist
-        Point3D(x=-0.28, y=0.90, z=0.15, confidence=1.0),   # 10: right_wrist
-        Point3D(x=0.12, y=0.90, z=0.0, confidence=1.0),     # 11: left_hip
-        Point3D(x=-0.12, y=0.90, z=0.0, confidence=1.0),    # 12: right_hip
-        Point3D(x=0.14, y=0.50, z=0.15, confidence=1.0),    # 13: left_knee
-        Point3D(x=-0.14, y=0.50, z=0.15, confidence=1.0),   # 14: right_knee
-        Point3D(x=0.14, y=0.05, z=0.05, confidence=1.0),    # 15: left_ankle
-        Point3D(x=-0.14, y=0.05, z=0.05, confidence=1.0),   # 16: right_ankle
+        Point3D(x=0.0, y=-0.60, z=0.05, confidence=1.0),    # 0: nose
+        Point3D(x=0.03, y=-0.62, z=0.03, confidence=1.0),   # 1: left_eye
+        Point3D(x=-0.03, y=-0.62, z=0.03, confidence=1.0),  # 2: right_eye
+        Point3D(x=0.06, y=-0.60, z=0.05, confidence=1.0),   # 3: left_ear
+        Point3D(x=-0.06, y=-0.60, z=0.05, confidence=1.0),  # 4: right_ear
+        Point3D(x=0.18, y=-0.45, z=0.0, confidence=1.0),    # 5: left_shoulder
+        Point3D(x=-0.18, y=-0.45, z=0.0, confidence=1.0),   # 6: right_shoulder
+        Point3D(x=0.25, y=-0.20, z=0.10, confidence=1.0),   # 7: left_elbow
+        Point3D(x=-0.25, y=-0.20, z=0.10, confidence=1.0),  # 8: right_elbow
+        Point3D(x=0.28, y=0.0, z=0.15, confidence=1.0),     # 9: left_wrist
+        Point3D(x=-0.28, y=0.0, z=0.15, confidence=1.0),    # 10: right_wrist
+        Point3D(x=0.12, y=0.0, z=0.0, confidence=1.0),      # 11: left_hip
+        Point3D(x=-0.12, y=0.0, z=0.0, confidence=1.0),     # 12: right_hip
+        Point3D(x=0.14, y=0.40, z=0.15, confidence=1.0),    # 13: left_knee
+        Point3D(x=-0.14, y=0.40, z=0.15, confidence=1.0),   # 14: right_knee
+        Point3D(x=0.14, y=0.85, z=0.05, confidence=1.0),    # 15: left_ankle
+        Point3D(x=-0.14, y=0.85, z=0.05, confidence=1.0),   # 16: right_ankle
     ]
     return Skeleton3D(keypoints=keypoints, timestamp=0.0, frame_index=0)
+
+
+def _shift(skeleton: Skeleton3D, index: int, axis: int, delta: float) -> Skeleton3D:
+    points = skeleton.to_numpy()
+    points[index][axis] += delta
+    confidences = np.array([kp.confidence for kp in skeleton.keypoints])
+    return Skeleton3D.from_numpy(points, confidences=confidences)
+
+
+# =============================================================================
+# COORDINATE FRAME TESTS
+# =============================================================================
+
+class TestCoordinateFrame:
+    """The solver had per-method Y-up and Y-down constants applied
+    inconsistently, and every fixture here was Y-up, so two angles were
+    wrong in production without a single failing test. These pin the frame."""
+
+    def test_world_up_is_negative_y(self):
+        np.testing.assert_array_equal(WORLD_UP, np.array([0.0, -1.0, 0.0]))
+
+    def test_fixtures_are_in_the_production_frame(self, standing_skeleton):
+        """Ankles must be BELOW hips, which in a Y-down frame is a larger y."""
+        points = standing_skeleton.to_numpy()
+        hip_mid_y = (points[11][1] + points[12][1]) / 2.0
+        shoulder_mid_y = (points[5][1] + points[6][1]) / 2.0
+        assert points[15][1] > hip_mid_y
+        assert points[16][1] > hip_mid_y
+        assert shoulder_mid_y < hip_mid_y
+
+    def test_raising_left_hip_gives_positive_pelvis_list(
+        self, ik_solver, standing_skeleton,
+    ):
+        raised = _shift(standing_skeleton, 11, axis=1, delta=-0.05)
+        assert ik_solver.solve(raised).pelvis_list > 5.0
+
+    def test_leaning_left_gives_positive_lateral_flexion(
+        self, ik_solver, standing_skeleton,
+    ):
+        leaned = _shift(standing_skeleton, 5, axis=0, delta=0.10)
+        leaned = _shift(leaned, 6, axis=0, delta=0.10)
+        assert ik_solver.solve(leaned).trunk_lateral_flexion > 5.0
+
+    def test_hip_adduction_is_mirrored_between_sides(
+        self, ik_solver, standing_skeleton,
+    ):
+        """Both sign branches used to reduce to `+1 if x > 0`, so the left side
+        read inverted relative to the right and abs() downstream made
+        knees-out indistinguishable from knee cave."""
+        # Both knees toward the midline: bilateral adduction (knee cave).
+        caved = _shift(standing_skeleton, 13, axis=0, delta=-0.06)
+        caved = _shift(caved, 14, axis=0, delta=0.06)
+        result = ik_solver.solve(caved)
+        assert result.hip_adduction_l > 0
+        assert result.hip_adduction_r > 0
+        assert result.hip_adduction_l == pytest.approx(
+            result.hip_adduction_r, abs=1.0,
+        )
+
+    def test_knees_out_reads_as_abduction_on_both_sides(
+        self, ik_solver, standing_skeleton,
+    ):
+        knees_out = _shift(standing_skeleton, 13, axis=0, delta=0.06)
+        knees_out = _shift(knees_out, 14, axis=0, delta=-0.06)
+        result = ik_solver.solve(knees_out)
+        assert result.hip_adduction_l < 0
+        assert result.hip_adduction_r < 0
+
+    def test_forward_lean_reduces_trunk_flexion(self, ik_solver, standing_skeleton):
+        leaned = _shift(standing_skeleton, 5, axis=2, delta=0.25)
+        leaned = _shift(leaned, 6, axis=2, delta=0.25)
+        result = ik_solver.solve(leaned)
+        assert result.trunk_flexion < 170.0
+        assert result.pelvis_tilt > 5.0
 
 
 # =============================================================================
@@ -136,10 +213,18 @@ class TestStandingPose:
         assert abs(result.knee_flexion_l) < 15.0, f"Left knee flexion {result.knee_flexion_l} too large for standing"
         assert abs(result.knee_flexion_r) < 15.0, f"Right knee flexion {result.knee_flexion_r} too large for standing"
 
-    def test_trunk_flexion_near_zero(self, ik_solver, standing_skeleton):
-        """Trunk flexion should be near 0 when standing upright."""
+    def test_trunk_flexion_near_upright(self, ik_solver, standing_skeleton):
+        """Trunk flexion reads 180 upright and decreases with forward lean."""
         result = ik_solver.solve(standing_skeleton)
-        assert abs(result.trunk_flexion) < 15.0, f"Trunk flexion {result.trunk_flexion} too large for standing"
+        assert result.trunk_flexion > 165.0, f"Trunk flexion {result.trunk_flexion} not upright for standing"
+
+    def test_lateral_and_pelvis_angles_zero_when_upright(self, ik_solver, standing_skeleton):
+        """The angles that were computed in the wrong vertical frame: an
+        upright pose read 180 for lateral flexion and 72 for pelvis tilt."""
+        result = ik_solver.solve(standing_skeleton)
+        assert abs(result.trunk_lateral_flexion) < 1.0
+        assert abs(result.pelvis_tilt) < 1.0
+        assert abs(result.pelvis_list) < 1.0
 
 
 # =============================================================================
@@ -235,8 +320,8 @@ class TestPhysicalPlausibility:
         assert -60 <= result.hip_adduction_l <= 45
         assert -60 <= result.hip_adduction_r <= 45
 
-        # Trunk flexion: 0 to 90 degrees
-        assert 0 <= result.trunk_flexion <= 90
+        # Trunk flexion: 180 is upright, decreasing with forward lean
+        assert 90 <= result.trunk_flexion <= 180
 
     def test_no_angles_exceed_180(self, ik_solver, sample_skeleton_3d):
         """No angle should exceed 180 degrees."""
@@ -267,23 +352,23 @@ class TestMissingData:
         """Solver should handle low-confidence keypoints gracefully."""
         # Create skeleton with some low-confidence keypoints
         keypoints = [
-            Point3D(x=0.0, y=1.70, z=0.0, confidence=0.0),  # nose - low conf
-            Point3D(x=0.03, y=1.72, z=0.0, confidence=0.0),
-            Point3D(x=-0.03, y=1.72, z=0.0, confidence=0.0),
-            Point3D(x=0.06, y=1.70, z=0.0, confidence=0.0),
-            Point3D(x=-0.06, y=1.70, z=0.0, confidence=0.0),
-            Point3D(x=0.18, y=1.50, z=0.0, confidence=0.5),  # shoulder - ok
-            Point3D(x=-0.18, y=1.50, z=0.0, confidence=0.5),
-            Point3D(x=0.20, y=1.20, z=0.0, confidence=0.0),
-            Point3D(x=-0.20, y=1.20, z=0.0, confidence=0.0),
-            Point3D(x=0.22, y=0.90, z=0.0, confidence=0.0),
-            Point3D(x=-0.22, y=0.90, z=0.0, confidence=0.0),
-            Point3D(x=0.12, y=1.00, z=0.0, confidence=0.5),  # hip - ok
-            Point3D(x=-0.12, y=1.00, z=0.0, confidence=0.5),
+            Point3D(x=0.0, y=-0.70, z=0.0, confidence=0.0),  # nose - low conf
+            Point3D(x=0.03, y=-0.72, z=0.0, confidence=0.0),
+            Point3D(x=-0.03, y=-0.72, z=0.0, confidence=0.0),
+            Point3D(x=0.06, y=-0.70, z=0.0, confidence=0.0),
+            Point3D(x=-0.06, y=-0.70, z=0.0, confidence=0.0),
+            Point3D(x=0.18, y=-0.50, z=0.0, confidence=0.5),  # shoulder - ok
+            Point3D(x=-0.18, y=-0.50, z=0.0, confidence=0.5),
+            Point3D(x=0.20, y=-0.20, z=0.0, confidence=0.0),
+            Point3D(x=-0.20, y=-0.20, z=0.0, confidence=0.0),
+            Point3D(x=0.22, y=0.10, z=0.0, confidence=0.0),
+            Point3D(x=-0.22, y=0.10, z=0.0, confidence=0.0),
+            Point3D(x=0.12, y=0.0, z=0.0, confidence=0.5),  # hip - ok
+            Point3D(x=-0.12, y=0.0, z=0.0, confidence=0.5),
             Point3D(x=0.12, y=0.50, z=0.0, confidence=0.5),  # knee - ok
             Point3D(x=-0.12, y=0.50, z=0.0, confidence=0.5),
-            Point3D(x=0.12, y=0.05, z=0.0, confidence=0.5),  # ankle - ok
-            Point3D(x=-0.12, y=0.05, z=0.0, confidence=0.5),
+            Point3D(x=0.12, y=0.95, z=0.0, confidence=0.5),  # ankle - ok
+            Point3D(x=-0.12, y=0.95, z=0.0, confidence=0.5),
         ]
         skeleton = Skeleton3D(keypoints=keypoints)
 
@@ -295,23 +380,23 @@ class TestMissingData:
         """Missing keypoints should result in 0.0 for affected angles."""
         # Create skeleton with missing hip keypoints
         keypoints = [
-            Point3D(x=0.0, y=1.70, z=0.0, confidence=1.0),
-            Point3D(x=0.03, y=1.72, z=0.0, confidence=1.0),
-            Point3D(x=-0.03, y=1.72, z=0.0, confidence=1.0),
-            Point3D(x=0.06, y=1.70, z=0.0, confidence=1.0),
-            Point3D(x=-0.06, y=1.70, z=0.0, confidence=1.0),
-            Point3D(x=0.18, y=1.50, z=0.0, confidence=1.0),
-            Point3D(x=-0.18, y=1.50, z=0.0, confidence=1.0),
-            Point3D(x=0.20, y=1.20, z=0.0, confidence=1.0),
-            Point3D(x=-0.20, y=1.20, z=0.0, confidence=1.0),
-            Point3D(x=0.22, y=0.90, z=0.0, confidence=1.0),
-            Point3D(x=-0.22, y=0.90, z=0.0, confidence=1.0),
-            Point3D(x=0.12, y=1.00, z=0.0, confidence=0.0),  # left_hip - missing
-            Point3D(x=-0.12, y=1.00, z=0.0, confidence=0.0),  # right_hip - missing
+            Point3D(x=0.0, y=-0.70, z=0.0, confidence=1.0),
+            Point3D(x=0.03, y=-0.72, z=0.0, confidence=1.0),
+            Point3D(x=-0.03, y=-0.72, z=0.0, confidence=1.0),
+            Point3D(x=0.06, y=-0.70, z=0.0, confidence=1.0),
+            Point3D(x=-0.06, y=-0.70, z=0.0, confidence=1.0),
+            Point3D(x=0.18, y=-0.50, z=0.0, confidence=1.0),
+            Point3D(x=-0.18, y=-0.50, z=0.0, confidence=1.0),
+            Point3D(x=0.20, y=-0.20, z=0.0, confidence=1.0),
+            Point3D(x=-0.20, y=-0.20, z=0.0, confidence=1.0),
+            Point3D(x=0.22, y=0.10, z=0.0, confidence=1.0),
+            Point3D(x=-0.22, y=0.10, z=0.0, confidence=1.0),
+            Point3D(x=0.12, y=0.0, z=0.0, confidence=0.0),  # left_hip - missing
+            Point3D(x=-0.12, y=0.0, z=0.0, confidence=0.0),  # right_hip - missing
             Point3D(x=0.12, y=0.50, z=0.0, confidence=1.0),
             Point3D(x=-0.12, y=0.50, z=0.0, confidence=1.0),
-            Point3D(x=0.12, y=0.05, z=0.0, confidence=1.0),
-            Point3D(x=-0.12, y=0.05, z=0.0, confidence=1.0),
+            Point3D(x=0.12, y=0.95, z=0.0, confidence=1.0),
+            Point3D(x=-0.12, y=0.95, z=0.0, confidence=1.0),
         ]
         skeleton = Skeleton3D(keypoints=keypoints)
 

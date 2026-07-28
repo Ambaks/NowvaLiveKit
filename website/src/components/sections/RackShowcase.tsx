@@ -13,8 +13,8 @@ const FEATURES = [
   {
     icon: AudioLines,
     index: "02",
-    title: "It speaks before your next rep",
-    copy: "Nova spots the fault mid-rep — in under 50 milliseconds — and says the fix out loud before your next rep. Not a report you scroll through after the damage is done.",
+    title: "It coaches the rep, the set, the year",
+    copy: "A fault caught mid-rep, the fix spoken before your next one — and that's just the fastest thing it does. Nova recaps every set and workout, tells you what to change and why, and tracks your progress across months. A coach with a memory, not a rep alarm.",
   },
   {
     icon: Sparkles,

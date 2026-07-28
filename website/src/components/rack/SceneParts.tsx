@@ -134,6 +134,7 @@ export function CameraRig({
 }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const camera = useThree((state) => state.camera);
+  const size = useThree((state) => state.size);
   const desired = useRef(new THREE.Vector3());
   const baseAzimuth = useRef(0);
   const lastPhase = useRef<SequencePhase>("idle");
@@ -176,10 +177,13 @@ export function CameraRig({
       }
     }
 
+    /* Aspect comes from the live viewport size so the framing re-runs on
+       resize and orientation change — zoom is disabled, so a stale framing
+       could never be corrected by the user. */
     const distance =
       Math.max(
         halfHeight / Math.tan(halfFov),
-        halfWidth / (Math.tan(halfFov) * perspective.aspect),
+        halfWidth / (Math.tan(halfFov) * (size.width / size.height)),
       ) *
         FRAMING_MARGIN +
       towardCamera;
@@ -191,7 +195,7 @@ export function CameraRig({
 
     desired.current.copy(assembly.center);
     controls.current?.target.copy(assembly.center);
-  }, [assembly, explode, camera]);
+  }, [assembly, explode, camera, size.width, size.height]);
 
   useFrame((_, delta) => {
     const orbit = controls.current;

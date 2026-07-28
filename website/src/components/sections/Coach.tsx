@@ -1,4 +1,5 @@
 import { Activity, CalendarRange, TrendingUp, UtensilsCrossed } from "lucide-react";
+import { LogoWatermark } from "@/components/ui/LogoWatermark";
 import { Reveal } from "@/components/ui/Reveal";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 
@@ -32,7 +33,11 @@ const PILLARS = [
 export function Coach() {
   return (
     <section id="coach" className="aurora-bg relative overflow-hidden">
-      <div className="mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-36">
+      <LogoWatermark
+        size={1000}
+        className="left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 opacity-[0.025] dark:opacity-[0.03]"
+      />
+      <div className="relative mx-auto max-w-6xl px-5 py-24 md:px-8 md:py-36">
         <SectionHeading
           eyebrow="The Coach"
           title={

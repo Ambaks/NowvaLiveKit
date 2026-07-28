@@ -15,7 +15,7 @@ import { CameraRig } from "./CameraRig";
 import { RackModel } from "./RackModel";
 import { CAMERA_FOV_DEG, PAN_DURATION_MS, type Framing } from "./introTimeline";
 
-export { releaseIntroAssets } from "./RackModel";
+export { preloadIntroAssets, releaseIntroAssets } from "./RackModel";
 
 export interface IntroSceneProps {
   onDone: () => void;

@@ -70,6 +70,8 @@ GATE_FAILURE_HINTS = {
     "visibility": "STEP BACK - FULL BODY IN VIEW",
     "knee_extension": "STAND TALL - STRAIGHTEN KNEES",
     "torso_upright": "STAND UPRIGHT",
+    "leg_extension": "TRACKING LOST - CHECK CAMERA ANGLE",
+    "tracking_lost": "TRACKING LOST - CHECK CAMERA ANGLE",
     "distance": "ADJUST DISTANCE FROM CAMERA",
 }
 
@@ -171,7 +173,7 @@ def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir:
         *[f"| Hip Adduction Rep {i+1} | {p:.1f}° |" for i, p in enumerate(peaks.get('hip_adduction_per_rep', []))],
         f"| **Hip Adduction (avg → band)** | **±{peaks['hip_adduction']:.1f}°** |",
         f"| Bilateral Asymmetry (peak) | {peaks['asymmetry']:.1f}° |",
-        f"| Dorsiflexion Drop (peak) | {peaks['dorsiflexion_drop']:.1f}° |",
+        f"| Peak Dorsiflexion | {peaks['peak_dorsiflexion']:.1f}° |",
         f"| **Avg Squat Depth** | **{peaks.get('avg_depth', 0):.1f}°** |",
         *[f"| Squat Depth Rep {i+1} | {d:.1f}° |" for i, d in enumerate(peaks.get('depth_per_rep', []))],
         "",
@@ -858,7 +860,7 @@ def run_biomechanics_pipeline(
             # Build real baseline from calibration peaks
             cal_athlete_params = _extract_athlete_params(pipeline)
             cal_baseline = {
-                "peakDorsi": peaks["dorsiflexion_drop"],
+                "peakDorsi": peaks["peak_dorsiflexion"],
                 "peakKneeFlex": peaks["avg_depth"],
             }
 
@@ -879,7 +881,7 @@ def run_biomechanics_pipeline(
             print(f"  Peak trunk flexion: {peaks['trunk_flexion']:.1f}°")
             print(f"  Avg hip adduction:  {peaks['hip_adduction']:.1f}°")
             print(f"  Peak asymmetry:     {peaks['asymmetry']:.1f}°")
-            print(f"  Peak dorsi drop:    {peaks['dorsiflexion_drop']:.1f}°")
+            print(f"  Peak dorsiflexion:  {peaks['peak_dorsiflexion']:.1f}°")
             print(f"  Avg squat depth:    {peaks.get('avg_depth', 0):.1f}°")
             print(f"{'='*60}\n")
 

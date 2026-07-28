@@ -60,7 +60,7 @@ bone_constraints:
   tolerance: 0.0
 
 standing_gate:
-  min_confidence: 0.5
+  min_confidence: 0.25
   max_knee_flexion_deg: 25.0
   max_trunk_flexion_deg: 25.0
   min_torso_length_m: 0.25

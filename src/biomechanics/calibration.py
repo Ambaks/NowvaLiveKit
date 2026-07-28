@@ -48,7 +48,7 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
     """Build threshold profile from calibration peaks.
 
     Args:
-        peaks: Dict with keys: trunk_flexion, hip_adduction, asymmetry, dorsiflexion_drop
+        peaks: Dict with keys: trunk_flexion, hip_adduction, asymmetry, peak_dorsiflexion
         config: Optional pipeline config. If provided, defaults are included.
 
     Returns:
@@ -71,7 +71,7 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
             "severe": peaks["asymmetry"] + 15.0,
         },
         "heel_rise": {
-            "threshold_degrees": peaks["dorsiflexion_drop"] + 20.0,
+            "threshold_degrees": peaks["peak_dorsiflexion"] + 20.0,
         },
         "depth": {
             "parallel_threshold": peaks.get("avg_depth", 0.0) - 10.0,
@@ -203,14 +203,9 @@ class CalibrationTracker:
         self.rep_adduction_peaks: list = []
         self._current_rep_peak_adduction = 0.0
         self.peak_asymmetry = 0.0
-        self.peak_dorsi_drop = 0.0
+        self.peak_dorsiflexion = 0.0
         self.rep_depth_peaks: list = []
         self._current_rep_peak_depth = 0.0
-
-        # Dorsiflexion baseline (set on first frame)
-        self._baseline_dorsi_l = 0.0
-        self._baseline_dorsi_r = 0.0
-        self._dorsi_baseline_set = False
 
         # Standing knee flexion (for gate widening after calibration)
         self.standing_knee_flexion = 0.0
@@ -248,15 +243,15 @@ class CalibrationTracker:
             ja.hip_asymmetry,
         )
 
-        # Dorsiflexion drop
-        if not self._dorsi_baseline_set:
-            self._baseline_dorsi_l = ja.ankle_dorsiflexion_l
-            self._baseline_dorsi_r = ja.ankle_dorsiflexion_r
-            self._dorsi_baseline_set = True
-
-        drop_l = self._baseline_dorsi_l - ja.ankle_dorsiflexion_l
-        drop_r = self._baseline_dorsi_r - ja.ankle_dorsiflexion_r
-        self.peak_dorsi_drop = max(self.peak_dorsi_drop, max(drop_l, drop_r))
+        # Peak dorsiflexion actually reached. This used to be a "drop"
+        # computed as baseline - current, but dorsiflexion INCREASES as the
+        # athlete descends, so the value was negative every frame and stayed
+        # pinned at its 0.0 initializer.
+        self.peak_dorsiflexion = max(
+            self.peak_dorsiflexion,
+            ja.ankle_dorsiflexion_l,
+            ja.ankle_dorsiflexion_r,
+        )
 
     def on_rep_complete(self, depth_angle: float = 0.0) -> None:
         """Called when a rep completes during calibration."""
@@ -290,7 +285,7 @@ class CalibrationTracker:
             "hip_adduction": avg_adduction,
             "hip_adduction_per_rep": self.rep_adduction_peaks,
             "asymmetry": self.peak_asymmetry,
-            "dorsiflexion_drop": self.peak_dorsi_drop,
+            "peak_dorsiflexion": self.peak_dorsiflexion,
             "avg_depth": avg_depth,
             "depth_per_rep": self.rep_depth_peaks,
         }

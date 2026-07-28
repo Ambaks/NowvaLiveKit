@@ -2,14 +2,13 @@ import { Navbar } from "@/components/layout/Navbar";
 import { ScrollProgress } from "@/components/layout/ScrollProgress";
 import { Footer } from "@/components/layout/Footer";
 import { Hero } from "@/components/sections/Hero";
-import { Problem } from "@/components/sections/Problem";
+import { Mission } from "@/components/sections/Mission";
 import { RackShowcase } from "@/components/sections/RackShowcase";
 import { Coach } from "@/components/sections/Coach";
 import { OneSet } from "@/components/sections/OneSet";
-import { TechProof } from "@/components/sections/TechProof";
 import { Flywheel } from "@/components/sections/Flywheel";
 import { CtaBand } from "@/components/sections/CtaBand";
-import { Mission } from "@/components/sections/Mission";
+import { Manifesto } from "@/components/sections/Manifesto";
 import { Pricing } from "@/components/sections/Pricing";
 import { Faq } from "@/components/sections/Faq";
 import { DELIVERY } from "@/lib/constants";
@@ -17,22 +16,19 @@ import { DELIVERY } from "@/lib/constants";
 export default function Home() {
   return (
     <div id="top">
+      <a href="#main" className="skip-link">
+        Skip to content
+      </a>
       <ScrollProgress />
       <Navbar />
-      <main>
+      <main id="main">
         <Hero />
-        <Problem />
+        <Mission />
         <RackShowcase />
         <Coach />
         <OneSet />
-        <TechProof />
         <Flywheel />
-        <CtaBand
-          headline="Convinced by the telemetry?"
-          sub="The founding batch is open"
-          location="tech-band"
-        />
-        <Mission />
+        <Manifesto />
         <Pricing />
         <Faq />
         <CtaBand

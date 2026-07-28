@@ -12,6 +12,7 @@ import numpy as np
 from biomechanics.kinematics.base import IKSolver
 from biomechanics.utils.types import Skeleton3D, JointAngles, CocoKeypoints, Point3D
 from biomechanics.utils.geometry import (
+    WORLD_UP,
     angle_between_vectors,
     midpoint,
     normalize_vector,
@@ -25,9 +26,10 @@ logger = logging.getLogger(__name__)
 # Fixed reference-direction vectors, allocated once at import to avoid
 # re-creating them every frame in the IK hot path. Treated as read-only —
 # the geometry helpers never mutate their inputs in place.
+# Vertical comes from geometry.WORLD_UP; this solver used to carry its own
+# Y-up and Y-down constants and applied them inconsistently, which put
+# trunk_lateral_flexion and pelvis_tilt in the wrong frame.
 _AXIS_X = np.array([1.0, 0.0, 0.0])        # forward / sagittal-plane normal
-_VERTICAL_UP = np.array([0.0, 1.0, 0.0])     # Y-up reference
-_VERTICAL_DOWN = np.array([0.0, -1.0, 0.0])  # Y-down reference (MediaPipe "up")
 
 
 class AnalyticalIKSolver(IKSolver):
@@ -233,13 +235,14 @@ class AnalyticalIKSolver(IKSolver):
         # Angle between actual thigh and thigh projected to frontal plane
         angle = angle_between_vectors(thigh_vec, thigh_frontal)
 
-        # Determine sign based on side
+        # Adduction is the knee travelling toward the midline. +X is the
+        # subject's left, so that is -X for the left leg and +X for the
+        # right. Both branches used to reduce to `+1 if x > 0`, which made
+        # the left side read inverted relative to the right.
         if side == "left":
-            # Left thigh moving left (negative X) is abduction
-            sign = 1.0 if thigh_vec[0] > 0 else -1.0
+            sign = 1.0 if thigh_vec[0] < 0 else -1.0
         else:
-            # Right thigh moving right (negative X) is abduction
-            sign = -1.0 if thigh_vec[0] < 0 else 1.0
+            sign = 1.0 if thigh_vec[0] > 0 else -1.0
 
         return angle * sign
 
@@ -283,9 +286,7 @@ class AnalyticalIKSolver(IKSolver):
         if np.linalg.norm(shank) < 1e-6:
             return 0.0
 
-        # Upward direction (Y-down MediaPipe convention: -Y is up)
-        up = _VERTICAL_DOWN
-        return angle_between_vectors(shank, up)
+        return angle_between_vectors(shank, WORLD_UP)
 
     def _compute_trunk_flexion(self, kpts: dict) -> float:
         """
@@ -309,11 +310,8 @@ class AnalyticalIKSolver(IKSolver):
         # Trunk vector
         trunk_vec = shoulder_mid - hip_mid
 
-        # Y-down reference (MediaPipe world coords are Y-down)
-        vertical = _VERTICAL_DOWN
-
         # 180 - angle: 180° upright, decreases with lean
-        angle = angle_between_vectors(trunk_vec, vertical)
+        angle = angle_between_vectors(trunk_vec, WORLD_UP)
         return 180.0 - angle
 
     def _compute_trunk_lateral_flexion(self, kpts: dict) -> float:
@@ -340,13 +338,10 @@ class AnalyticalIKSolver(IKSolver):
         trunk_vec = shoulder_mid - hip_mid
         trunk_frontal = np.array([trunk_vec[0], trunk_vec[1], 0])
 
-        # Upward reference in frontal plane (Y-up coordinate system)
-        vertical = _VERTICAL_UP
+        angle = angle_between_vectors(trunk_frontal, WORLD_UP)
 
-        angle = angle_between_vectors(trunk_frontal, vertical)
-
-        # Determine sign (positive = lean left)
-        if trunk_vec[0] > 0:
+        # Determine sign (positive = lean left; +X is the subject's left)
+        if trunk_vec[0] < 0:
             angle = -angle
 
         return angle
@@ -411,16 +406,13 @@ class AnalyticalIKSolver(IKSolver):
         # Project to sagittal plane (YZ)
         trunk_sagittal = np.array([0, trunk_vec[1], trunk_vec[2]])
 
-        # Upward reference (Y-up coordinate system)
-        vertical = _VERTICAL_UP
-
         if np.linalg.norm(trunk_sagittal) < 1e-6:
             return 0.0
 
         # Scale trunk flexion to estimate pelvis tilt
         # Pelvis tilt is typically 30-55% of trunk flexion in squats,
         # varying with hip width and torso proportions.
-        trunk_angle = angle_between_vectors(trunk_sagittal, vertical)
+        trunk_angle = angle_between_vectors(trunk_sagittal, WORLD_UP)
 
         # Check direction (forward lean = positive Z component in trunk)
         if trunk_vec[2] < 0:
@@ -442,8 +434,8 @@ class AnalyticalIKSolver(IKSolver):
         if left_hip is None or right_hip is None:
             return 0.0
 
-        # Height difference between hips
-        height_diff = left_hip[1] - right_hip[1]
+        # Height difference between hips (Y-down: higher means smaller y)
+        height_diff = right_hip[1] - left_hip[1]
 
         # Convert to angle (approximate)
         # Hip width is roughly 0.25m, so tan(angle) = height_diff / 0.25

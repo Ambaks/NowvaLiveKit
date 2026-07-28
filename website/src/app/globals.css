@@ -5,7 +5,7 @@
 /* ---------------------------------------------------------------------------
    Design tokens — "ultraviolet instrument"
    Dark  = night lab: violet-cast near-black, electric violet telemetry,
-           gold command keys.
+           luminous violet command keys.
    Light = engineering paper: cool white, deep violet ink, blueprint grid.
 --------------------------------------------------------------------------- */
 
@@ -17,18 +17,17 @@
   --surface-2: #f6f4fa;
   --fg: #16131c;
   --fg-2: #5f5b6b;
-  --fg-3: #9d99a8;
+  --fg-3: #6e6a79;
   --accent: #8b5cf6;
   --accent-ink: #6d28d9;
   --accent-strong: #5b21b6;
-  --cta: #ffb800;
-  --cta-hover: #ffa000;
-  --on-cta: #16131c;
+  --cta: #8b5cf6;
+  --on-cta: #ffffff;
   --border: #e7e4ee;
   --border-strong: #d5d1de;
   --grid-line: rgba(109, 40, 217, 0.07);
   --glow: rgba(139, 92, 246, 0.16);
-  --glow-cta: rgba(255, 160, 0, 0.18);
+  --glow-cta: rgba(124, 58, 237, 0.32);
   --grad-1: #6d28d9;
   --grad-2: #9333ea;
   --grad-3: #4c1d95;
@@ -36,6 +35,9 @@
   --aurora-2: rgba(192, 132, 252, 0.08);
   --noise-opacity: 0.03;
   --scanline: rgba(124, 58, 237, 0.35);
+  --metal-hi: #97939f;
+  --metal-mid: #48454f;
+  --metal-lo: #6e6a76;
   color-scheme: light;
 }
 
@@ -47,18 +49,17 @@
   --surface-2: #1b1b24;
   --fg: #f6f5f8;
   --fg-2: #928fa0;
-  --fg-3: #5c5966;
+  --fg-3: #8b8899;
   --accent: #a78bfa;
   --accent-ink: #b8a1ff;
   --accent-strong: #c4b5fd;
-  --cta: #ffb800;
-  --cta-hover: #ffca28;
+  --cta: #a78bfa;
   --on-cta: #16131c;
   --border: #26242e;
   --border-strong: #363341;
   --grid-line: rgba(167, 139, 250, 0.05);
   --glow: rgba(139, 92, 246, 0.25);
-  --glow-cta: rgba(255, 184, 0, 0.25);
+  --glow-cta: rgba(167, 139, 250, 0.4);
   --grad-1: #a78bfa;
   --grad-2: #d8b4fe;
   --grad-3: #7c3aed;
@@ -66,6 +67,9 @@
   --aurora-2: rgba(216, 180, 254, 0.09);
   --noise-opacity: 0.055;
   --scanline: rgba(167, 139, 250, 0.5);
+  --metal-hi: #f8f8fb;
+  --metal-mid: #b0aebc;
+  --metal-lo: #82808f;
   color-scheme: dark;
 }
 
@@ -82,7 +86,6 @@
   --color-accent-ink: var(--accent-ink);
   --color-accent-strong: var(--accent-strong);
   --color-cta: var(--cta);
-  --color-cta-hover: var(--cta-hover);
   --color-on-cta: var(--on-cta);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
@@ -139,6 +142,23 @@ body::after {
     var(--grad-1) 0%,
     var(--grad-2) 55%,
     var(--grad-3) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Brushed-silver text — per-theme metal stops keep it legible on engineering
+   paper and luminous in the night lab. Pair with .gradient-text-animated for
+   a slow sheen pan across the metal. */
+.silver-text {
+  background-image: linear-gradient(
+    112deg,
+    var(--metal-lo) 0%,
+    var(--metal-hi) 32%,
+    var(--metal-mid) 55%,
+    var(--metal-hi) 78%,
+    var(--metal-lo) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;
@@ -251,6 +271,25 @@ body::after {
     linear-gradient(var(--surface), var(--surface)) padding-box,
     linear-gradient(135deg, var(--grad-1), var(--border) 45%, var(--grad-3))
       border-box;
+}
+
+/* Animated violet gradient surface for CTA buttons. The gradient is wider
+   than the button and pans continuously; hover speeds the drift and lifts
+   the brightness so the key feels lit from within. */
+.btn-cta-grad {
+  background-image: linear-gradient(
+    110deg,
+    var(--grad-1) 0%,
+    var(--grad-2) 50%,
+    var(--grad-1) 100%
+  );
+  background-size: 220% 100%;
+  animation: grad-pan 6s ease-in-out infinite;
+}
+
+.btn-cta-grad:hover {
+  animation-duration: 2.5s;
+  filter: brightness(1.08) saturate(1.1);
 }
 
 /* Light sweep across CTA surfaces on hover. Element needs overflow-hidden
@@ -445,7 +484,8 @@ html[data-intro="off"] .hero-img-in {
   }
   .gradient-text-animated,
   .aurora-bg::before,
-  .btn-shine::after {
+  .btn-shine::after,
+  .btn-cta-grad {
     animation: none;
   }
   .meter-run .meter__fill {
@@ -665,6 +705,14 @@ html[data-intro="off"] .intro-loader {
   animation: intro-word 0.5s ease-out 0.8s forwards;
 }
 
+/* Invisible overlay expands the touch target past 44px without growing
+   the visual pill. */
+.intro-stage__skip::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+}
+
 .intro-stage__skip:hover,
 .intro-stage__skip:focus-visible {
   color: #f6f5f8;
@@ -683,6 +731,30 @@ html[data-intro="3d"] .hero-img-in {
 html[data-intro="done"] .hero-rise,
 html[data-intro="done"] .hero-img-in {
   --rise-base: 150ms;
+}
+
+/* ---------------------------------------------------------------------------
+   Skip-to-content link — first focusable element on the page; parked above
+   the viewport until keyboard focus pulls it in.
+--------------------------------------------------------------------------- */
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 130;
+  padding: 0.6rem 1.2rem;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transform: translateY(calc(-100% - 1rem));
+  transition: transform 0.2s ease;
+}
+
+.skip-link:focus {
+  transform: none;
 }
 
 /* ---------------------------------------------------------------------------

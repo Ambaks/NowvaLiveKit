@@ -13,13 +13,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from biomechanics.utils.types import PipelineFrame, Skeleton3D, CocoKeypoints, FaultEvent
-from biomechanics.utils.geometry import joint_angle_3_points, calculate_trunk_angle
+from biomechanics.utils.geometry import (
+    WORLD_UP,
+    joint_angle_3_points,
+    calculate_trunk_angle,
+)
 from biomechanics.analysis.rep_segmenter import segment_set, plot_segmentation, write_set_report
 from biomechanics.viz.html_dashboard import generate_set_dashboard
-
-
-# -- Y-down vertical for MediaPipe world coordinates --
-_VERTICAL_Y_DOWN = np.array([0.0, -1.0, 0.0])
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +320,7 @@ class SetDataCollector:
         self.knee_angles.append(joint_angle_3_points(hip_mid, knee_mid, ankle_mid))
         self.hip_angles.append(joint_angle_3_points(shoulder_mid, hip_mid, knee_mid))
         self.trunk_angles.append(
-            calculate_trunk_angle(shoulder_mid, hip_mid, vertical=_VERTICAL_Y_DOWN)
+            calculate_trunk_angle(shoulder_mid, hip_mid, vertical=WORLD_UP)
         )
 
         # Pipeline joint angles (IK solver + One Euro filter)

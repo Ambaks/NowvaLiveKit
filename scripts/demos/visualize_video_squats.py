@@ -3087,7 +3087,7 @@ def _build_voice_cues(diagnosis, rep_summary, anthro, rom):
             foot_delta = delta.get("__foot_target_delta", [0] * 6)
             widen_per_side_cm = round(abs(foot_delta[2]) * 100, 1)
             current = round(rep_summary.stance_width_ratio, 2)
-            dorsi_cap = rom.get("dorsiflexion_drop", 35.0)
+            dorsi_cap = rom.get("peak_dorsiflexion", 35.0)
             target_ratio, _ = dorsi_driven_targets(dorsi_cap, anthro)
             target = round(max(target_ratio, current + 0.15), 2)
             cues[cid] = {
