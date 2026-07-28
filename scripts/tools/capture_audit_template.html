@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #141413;
+    --surface: #1e1e1d;
+    --surface-2: #262625;
+    --border: #33322f;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --muted: #8a897f;
+    --accent: #3987e5;
+    --bad: #e66767;
+    --good: #6fbf8f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 16px 20px 60px;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  header h1 { font-size: 17px; font-weight: 650; }
+  header .meta { color: var(--muted); font-size: 12.5px; }
+  .chip {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    font-size: 11.5px; border: 1px solid var(--border); color: var(--text-2);
+  }
+  .chip.bad { color: var(--bad); border-color: var(--bad); }
+  .chip.good { color: var(--good); border-color: var(--good); }
+
+  #controls {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 12px; margin-bottom: 10px;
+    position: sticky; top: 8px; z-index: 5;
+  }
+  #controls button {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 4px 12px; font-size: 13px; cursor: pointer;
+  }
+  #controls button:hover { border-color: var(--muted); }
+  #controls select, #controls label { font-size: 12.5px; color: var(--text-2); }
+  #controls select {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 6px;
+  }
+  #readout { color: var(--text-2); font-size: 12.5px; min-width: 150px; }
+  #scrub { flex: 1 1 260px; accent-color: var(--accent); height: 22px; }
+  .kbd-hint { color: var(--muted); font-size: 11px; }
+
+  #panels {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    margin-bottom: 12px;
+  }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .panel-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; font-size: 12.5px; }
+  .panel-head .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .panel-head .pname { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel-head .pbadge { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+  .panel-head .pbadge.hot { color: var(--bad); font-weight: 600; }
+  .panel canvas { display: block; width: 100%; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .card h2 { font-size: 12px; font-weight: 650; text-transform: uppercase;
+             letter-spacing: 0.06em; color: var(--muted); margin-bottom: 9px; }
+  #timeline-card { margin-bottom: 12px; }
+  #legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+  #legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  #chart { width: 100%; display: block; cursor: crosshair; }
+
+  #data-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-bottom: 12px; }
+  #kpts-card { grid-column: 1 / -1; }
+  .scroll-x { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 3px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 550; font-size: 11.5px; }
+  th:first-child, td:first-child { text-align: left; }
+  td { color: var(--text-2); }
+  td.lo { color: var(--bad); font-weight: 600; }
+  td.hi { color: var(--bad); font-weight: 600; }
+  td.dim { color: var(--muted); }
+  .gate-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+  .gate-row .gname { width: 90px; color: var(--text-2); }
+  .gate-row .why { color: var(--muted); font-size: 12px; }
+  .bar { flex: 1; height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; max-width: 130px; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-size: 12.5px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { color: var(--text-2); text-align: right; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+  pre { font-size: 11.5px; color: var(--text-2); overflow-x: auto; padding: 8px 0; }
+  #tooltip {
+    position: fixed; pointer-events: none; display: none; z-index: 10;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 10px; font-size: 12px; color: var(--text-2); box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  }
+  #tooltip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+  video { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <span class="meta" id="hdr-meta"></span>
+  <span id="hdr-disabled"></span>
+</header>
+
+<div id="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-back">−1</button>
+  <button id="btn-fwd">+1</button>
+  <span id="readout" class="num"></span>
+  <input type="range" id="scrub" min="0" value="0" step="1">
+  <label>Speed <select id="speed">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+  </select></label>
+  <label><input type="checkbox" id="ghost" checked> Ghost raw</label>
+  <span class="kbd-hint">space play · ←/→ step · shift+←/→ ±10</span>
+</div>
+
+<section id="panels"></section>
+
+<section class="card" id="timeline-card">
+  <h2>Per-stage max keypoint displacement (cm) &amp; gate timeline — click to seek</h2>
+  <div id="legend"></div>
+  <canvas id="chart" height="170"></canvas>
+</section>
+
+<section id="data-grid">
+  <div class="card" id="gates-card"><h2>Gates</h2><div id="gates-body"></div></div>
+  <div class="card" id="calib-card"><h2>Calibration</h2><div id="calib-body"></div></div>
+  <div class="card" id="angles-card"><h2>IK Angles — raw vs filtered skeleton (deg)</h2>
+    <div class="scroll-x" id="angles-body"></div></div>
+  <div class="card" id="session-card"><h2>Session</h2><div id="session-body"></div></div>
+  <div class="card" id="kpts-card"><h2>Keypoints — confidence &amp; per-stage displacement (cm)</h2>
+    <div class="scroll-x" id="kpts-body"></div>
+    <details><summary>Pipeline config used for this run</summary><pre id="config-pre"></pre></details>
+  </div>
+</section>
+
+<video id="vid" muted playsinline preload="auto"></video>
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+const D = __DATA_JSON__;
+
+const EDGES = [[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],
+               [5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[15,17],[16,18]];
+const GHOST_COLOR = "rgba(195,194,183,0.42)";
+const CONF_HIDE = 0.05;
+const DISP_HOT_CM = 3.0;
+const N = D.n_frames;
+const LAST = N - 1;
+const STAGE_SHORT = { confidence_blend: "CB", velocity_clamp: "VC", bone_constraints: "BC",
+                      ground_clamp: "GC", position_smoother: "PS", bone_reenforce: "BR" };
+const ANGLE_ROWS = [
+  ["Hip flexion", "hip_flexion_l", "hip_flexion_r"],
+  ["Knee flexion", "knee_flexion_l", "knee_flexion_r"],
+  ["Ankle dorsiflex.", "ankle_dorsiflexion_l", "ankle_dorsiflexion_r"],
+  ["Hip adduction", "hip_adduction_l", "hip_adduction_r"],
+];
+
+const video = document.getElementById("vid");
+video.src = "data:video/mp4;base64,__VIDEO_B64__";
+
+const PW = 640;
+const PH = Math.round(PW * D.height / D.width);
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+const SX = PW / D.width;
+
+// ---- build panels ----
+const panelsRoot = document.getElementById("panels");
+const panels = D.panels.map(p => {
+  const div = document.createElement("div");
+  div.className = "panel";
+  div.innerHTML = `<div class="panel-head"><span class="dot" style="background:${p.color}"></span>` +
+    `<span class="pname">${p.label}</span><span class="pbadge"></span></div>`;
+  const canvas = document.createElement("canvas");
+  canvas.width = PW * DPR; canvas.height = PH * DPR;
+  div.appendChild(canvas);
+  panelsRoot.appendChild(div);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(DPR, DPR);
+  return { ...p, ctx, badge: div.querySelector(".pbadge"), isStage: D.stage_keys.includes(p.key) };
+});
+
+// ---- header ----
+document.getElementById("hdr-meta").textContent =
+  `${D.recorded_at} · ${D.width}×${D.height} · ${D.fps} fps · ${N} frames`;
+document.getElementById("hdr-disabled").innerHTML = D.disabled.length
+  ? `<span class="chip bad">disabled: ${D.disabled.join(", ")}</span>`
+  : `<span class="chip">all stages enabled</span>`;
+document.getElementById("config-pre").textContent = JSON.stringify(D.config, null, 2);
+
+// ---- drawing ----
+function drawSkel(ctx, pts, confs, color, lw) {
+  if (!pts) return;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = lw;
+  ctx.lineCap = "round";
+  for (const [a, b] of EDGES) {
+    if (a >= pts.length || b >= pts.length) continue;
+    if ((confs[a] ?? 0) <= CONF_HIDE || (confs[b] ?? 0) <= CONF_HIDE) continue;
+    ctx.beginPath();
+    ctx.moveTo(pts[a][0] * SX, pts[a][1] * SX);
+    ctx.lineTo(pts[b][0] * SX, pts[b][1] * SX);
+    ctx.stroke();
+  }
+  for (let i = 0; i < pts.length; i++) {
+    if ((confs[i] ?? 0) <= CONF_HIDE) continue;
+    ctx.beginPath();
+    ctx.arc(pts[i][0] * SX, pts[i][1] * SX, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function banner(ctx, text) {
+  ctx.fillStyle = "rgba(10,10,10,0.55)";
+  ctx.fillRect(0, PH / 2 - 16, PW, 32);
+  ctx.fillStyle = "#c3c2b7";
+  ctx.font = "600 13px -apple-system, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(text, PW / 2, PH / 2);
+}
+
+function renderPanels(fr) {
+  const f = D.frames[fr] || {};
+  const ghost = document.getElementById("ghost").checked;
+  for (const p of panels) {
+    const ctx = p.ctx;
+    if (video.readyState >= 2) ctx.drawImage(video, 0, 0, PW, PH);
+    else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, PW, PH); }
+    ctx.fillStyle = "rgba(8,8,8,0.30)";
+    ctx.fillRect(0, 0, PW, PH);
+
+    let badgeText = "", hot = false;
+    if (!f.detected) {
+      banner(ctx, "NO DETECTION");
+    } else if (p.key === "raw2d") {
+      drawSkel(ctx, f.k2d, (f.k2d || []).map(k => k[2]), p.color, 2);
+    } else {
+      const pts = f.stages && f.stages[p.key];
+      if (ghost && p.key !== "raw3d" && f.stages && f.stages.raw3d) {
+        drawSkel(ctx, f.stages.raw3d, f.conf3d, GHOST_COLOR, 1.5);
+      }
+      if (pts) {
+        drawSkel(ctx, pts, f.conf3d, p.color, 2);
+        if (p.isStage && f.disp && f.disp[p.key]) {
+          const mx = Math.max(...f.disp[p.key]);
+          badgeText = `Δ ${mx.toFixed(1)} cm`;
+          hot = mx >= DISP_HOT_CM;
+        }
+      } else if (p.isStage && f.gated) {
+        banner(ctx, "GATED — readiness pending");
+      }
+    }
+    p.badge.textContent = badgeText;
+    p.badge.className = "pbadge" + (hot ? " hot" : "");
+  }
+}
+
+// ---- timeline chart ----
+const chart = document.getElementById("chart");
+const chartCtx = chart.getContext("2d");
+const stagePanels = panels.filter(p => p.isStage);
+const seriesData = stagePanels.map(p =>
+  D.frames.map(f => (f.disp && f.disp[p.key]) ? Math.max(...f.disp[p.key]) : null));
+const allVals = seriesData.flat().filter(v => v !== null).sort((a, b) => a - b);
+const YMAX = Math.max(1, allVals.length ? allVals[Math.floor(allVals.length * 0.98)] * 1.15 : 1);
+const M = { l: 38, r: 10, t: 22, b: 20 };
+
+document.getElementById("legend").innerHTML = stagePanels.map(p =>
+  `<span><span class="dot" style="background:${p.color}"></span>${p.label}</span>`).join("");
+
+let chartW = 0, chartH = 170;
+function sizeChart() {
+  chartW = chart.parentElement.clientWidth - 28;
+  chart.width = chartW * DPR; chart.height = chartH * DPR;
+  chart.style.width = chartW + "px"; chart.style.height = chartH + "px";
+  chartCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+const fx = fr => M.l + (chartW - M.l - M.r) * (LAST ? fr / LAST : 0);
+const fy = v => M.t + (chartH - M.t - M.b) * (1 - Math.min(v, YMAX) / YMAX);
+const frameAtX = x => Math.max(0, Math.min(LAST,
+  Math.round((x - M.l) / (chartW - M.l - M.r) * LAST)));
+
+function drawChart(fr) {
+  const c = chartCtx;
+  c.clearRect(0, 0, chartW, chartH);
+  c.font = "10.5px -apple-system, sans-serif";
+
+  // gated region
+  const readyAt = D.milestones.readiness_pass;
+  const gatedEnd = readyAt === null ? LAST : readyAt;
+  if (gatedEnd > 0) {
+    c.fillStyle = "rgba(255,255,255,0.05)";
+    c.fillRect(fx(0), M.t, fx(gatedEnd) - fx(0), chartH - M.t - M.b);
+    c.fillStyle = "#8a897f"; c.textAlign = "left";
+    c.fillText("gated", fx(0) + 4, M.t + 11);
+  }
+
+  // grid + y axis
+  c.strokeStyle = "#33322f"; c.fillStyle = "#8a897f"; c.lineWidth = 1;
+  c.textAlign = "right"; c.textBaseline = "middle";
+  for (let i = 0; i <= 3; i++) {
+    const v = YMAX * i / 3, y = fy(v);
+    c.beginPath(); c.moveTo(M.l, y); c.lineTo(chartW - M.r, y); c.stroke();
+    c.fillText(v.toFixed(1), M.l - 5, y);
+  }
+  // x axis (seconds)
+  c.textAlign = "center"; c.textBaseline = "top";
+  const step = Math.max(1, Math.round(2 * D.fps));
+  for (let f = 0; f <= LAST; f += step) {
+    c.fillText((f / D.fps).toFixed(0) + "s", fx(f), chartH - M.b + 5);
+  }
+
+  // milestones
+  const marks = [["standing_pass", "standing"], ["readiness_pass", "ready"],
+                 ["bones_calibrated", "bones"], ["ground_calibrated", "ground"]];
+  c.textAlign = "left";
+  marks.forEach(([key, label], i) => {
+    const mf = D.milestones[key];
+    if (mf === null) return;
+    const x = fx(mf);
+    c.strokeStyle = "#54534d"; c.setLineDash([3, 3]);
+    c.beginPath(); c.moveTo(x, M.t); c.lineTo(x, chartH - M.b); c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = "#8a897f";
+    c.fillText(label + " ✓", x + 3, 2 + (i % 2) * 10);
+  });
+
+  // series
+  seriesData.forEach((vals, si) => {
+    c.strokeStyle = stagePanels[si].color; c.lineWidth = 1.6;
+    c.beginPath();
+    let pen = false;
+    for (let f = 0; f < N; f++) {
+      const v = vals[f];
+      if (v === null) { pen = false; continue; }
+      const x = fx(f), y = fy(v);
+      if (pen) c.lineTo(x, y); else { c.moveTo(x, y); pen = true; }
+    }
+    c.stroke();
+  });
+
+  // cursor
+  c.strokeStyle = "#ffffff"; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(fx(fr), M.t); c.lineTo(fx(fr), chartH - M.b); c.stroke();
+}
+
+// chart interaction
+const tooltip = document.getElementById("tooltip");
+let dragging = false;
+chart.addEventListener("mousedown", e => { dragging = true; seek(frameAtX(e.offsetX)); });
+window.addEventListener("mouseup", () => { dragging = false; });
+chart.addEventListener("mousemove", e => {
+  const fr = frameAtX(e.offsetX);
+  if (dragging) seek(fr);
+  const f = D.frames[fr] || {};
+  const rows = stagePanels.map((p, si) => {
+    const v = seriesData[si][fr];
+    return `<div><span class="dot" style="background:${p.color}"></span>` +
+      `${p.label}: <b>${v === null ? "—" : v.toFixed(1) + " cm"}</b></div>`;
+  }).join("");
+  tooltip.innerHTML = `<div class="num"><b>f ${fr}</b> · ${(fr / D.fps).toFixed(2)}s` +
+    `${f.gated ? " · gated" : ""}${f.detected === false ? " · no detection" : ""}</div>${rows}`;
+  tooltip.style.display = "block";
+  tooltip.style.left = Math.min(window.innerWidth - 190, e.clientX + 14) + "px";
+  tooltip.style.top = (e.clientY + 14) + "px";
+});
+chart.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+
+// ---- data cards ----
+function gateRow(name, g) {
+  if (!g) return `<div class="gate-row"><span class="gname">${name}</span><span class="why">no data</span></div>`;
+  const chip = g.ready ? `<span class="chip good">READY</span>`
+    : `<span class="chip bad">${g.failure || "waiting"}</span>`;
+  const pct = Math.min(100, 100 * g.passes / g.required);
+  return `<div class="gate-row"><span class="gname">${name}</span>${chip}` +
+    `<span class="bar"><i style="width:${pct}%"></i></span>` +
+    `<span class="why num">${g.passes}/${g.required}</span></div>`;
+}
+
+function fmt(v, digits = 1) { return (v === undefined || v === null) ? "—" : v.toFixed(digits); }
+
+function updateCards(fr) {
+  const f = D.frames[fr] || {};
+  const gates = f.gates || {};
+  document.getElementById("gates-body").innerHTML =
+    gateRow("Standing", gates.standing) + gateRow("Readiness", gates.readiness) +
+    `<div class="kv"><dt>Hip position (raw)</dt><dd class="num">${fmt(f.hip_cm && f.hip_cm.raw)} cm</dd>` +
+    `<dt>Hip position (filtered)</dt><dd class="num">${fmt(f.hip_cm && f.hip_cm.filtered)} cm</dd></div>`;
+
+  const bones = f.bones, ground = f.ground, ms = D.milestones;
+  let calib = "";
+  calib += `<div class="gate-row"><span class="gname">Bones</span>` +
+    (bones ? (bones.calibrated ? `<span class="chip good">CALIBRATED</span>`
+      : `<span class="chip">calibrating</span><span class="why num">${bones.progress[0]}/${bones.progress[1]}</span>`)
+      : `<span class="why">inactive (gated)</span>`) + `</div>`;
+  calib += `<div class="gate-row"><span class="gname">Ground</span>` +
+    (ground ? (ground.calibrated ? `<span class="chip good">CALIBRATED</span>` : `<span class="chip">calibrating</span>`)
+      : `<span class="why">inactive (gated)</span>`) + `</div>`;
+  calib += `<div class="kv">` +
+    `<dt>Standing pass</dt><dd class="num">${ms.standing_pass === null ? "never" : "f " + ms.standing_pass}</dd>` +
+    `<dt>Readiness pass</dt><dd class="num">${ms.readiness_pass === null ? "never" : "f " + ms.readiness_pass}</dd>` +
+    `<dt>Bones calibrated</dt><dd class="num">${ms.bones_calibrated === null ? "never" : "f " + ms.bones_calibrated}</dd>` +
+    `<dt>Ground calibrated</dt><dd class="num">${ms.ground_calibrated === null ? "never" : "f " + ms.ground_calibrated}</dd>` +
+    `</div>`;
+  document.getElementById("calib-body").innerHTML = calib;
+
+  const a = f.angles || {};
+  const raw = a.raw || {}, flt = a.filtered || {};
+  let angles = `<table><tr><th>Angle</th><th>Raw L</th><th>Raw R</th><th>Filt L</th><th>Filt R</th></tr>`;
+  for (const [label, kl, kr] of ANGLE_ROWS) {
+    angles += `<tr><td>${label}</td><td class="num">${fmt(raw[kl])}</td><td class="num">${fmt(raw[kr])}</td>` +
+      `<td class="num">${fmt(flt[kl])}</td><td class="num">${fmt(flt[kr])}</td></tr>`;
+  }
+  document.getElementById("angles-body").innerHTML = angles + "</table>";
+
+  const minConf = D.config.standing_gate.min_confidence;
+  let kpts = `<table><tr><th>Keypoint</th><th>2D conf</th><th>3D conf</th><th>Blend conf</th>` +
+    D.stage_keys.map(k => `<th title="${k}">${STAGE_SHORT[k] || k}</th>`).join("") + `</tr>`;
+  for (let i = 0; i < D.keypoint_names.length; i++) {
+    const c2 = f.k2d ? f.k2d[i][2] : null;
+    const c3 = f.conf3d ? f.conf3d[i] : null;
+    const cb = f.conf_blend ? f.conf_blend[i] : null;
+    const confCell = (v) => v === null ? `<td class="dim">—</td>`
+      : `<td class="num${v < minConf ? " lo" : ""}">${v.toFixed(2)}</td>`;
+    kpts += `<tr><td>${D.keypoint_names[i]}</td>${confCell(c2)}${confCell(c3)}${confCell(cb)}`;
+    for (const key of D.stage_keys) {
+      const d = f.disp && f.disp[key] ? f.disp[key][i] : null;
+      kpts += d === null ? `<td class="dim">—</td>`
+        : `<td class="num${d >= DISP_HOT_CM ? " hi" : ""}">${d.toFixed(1)}</td>`;
+    }
+    kpts += `</tr>`;
+  }
+  document.getElementById("kpts-body").innerHTML = kpts + "</table>";
+}
+
+// session card (static)
+(function () {
+  const dur = (LAST / D.fps).toFixed(2);
+  let html = `<div class="kv">` +
+    `<dt>Session</dt><dd>${D.session}</dd>` +
+    `<dt>Recorded</dt><dd>${D.recorded_at}</dd>` +
+    `<dt>Frames</dt><dd class="num">${N} (${dur}s @ ${D.fps} fps)</dd>` +
+    `<dt>Resolution</dt><dd class="num">${D.width}×${D.height}</dd>` +
+    `<dt>Disabled stages</dt><dd>${D.disabled.length ? D.disabled.join(", ") : "none"}</dd>` +
+    `</div>`;
+  if (D.body_proportions) {
+    html += `<h2 style="margin-top:10px">Body proportions</h2><div class="kv">` +
+      Object.entries(D.body_proportions).map(([k, v]) =>
+        `<dt>${k}</dt><dd class="num">${v}</dd>`).join("") + `</div>`;
+  }
+  document.getElementById("session-body").innerHTML = html;
+})();
+
+// ---- transport ----
+const scrub = document.getElementById("scrub");
+scrub.max = LAST;
+const btnPlay = document.getElementById("btn-play");
+const clampFrame = fr => Math.max(0, Math.min(LAST, fr));
+const curFrameOf = () => clampFrame(Math.floor(video.currentTime * D.fps));
+
+function seek(fr) {
+  fr = clampFrame(fr);
+  video.currentTime = (fr + 0.5) / D.fps;
+}
+btnPlay.addEventListener("click", () => { video.paused ? video.play() : video.pause(); });
+video.addEventListener("play", () => { btnPlay.textContent = "Pause"; });
+video.addEventListener("pause", () => { btnPlay.textContent = "Play"; });
+document.getElementById("btn-back").addEventListener("click", () => { video.pause(); seek(curFrameOf() - 1); });
+document.getElementById("btn-fwd").addEventListener("click", () => { video.pause(); seek(curFrameOf() + 1); });
+document.getElementById("speed").addEventListener("change", e => { video.playbackRate = +e.target.value; });
+scrub.addEventListener("input", () => { video.pause(); seek(+scrub.value); });
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  const jump = e.shiftKey ? 10 : 1;
+  if (e.code === "Space") { e.preventDefault(); btnPlay.click(); }
+  else if (e.code === "ArrowLeft") { e.preventDefault(); video.pause(); seek(curFrameOf() - jump); }
+  else if (e.code === "ArrowRight") { e.preventDefault(); video.pause(); seek(curFrameOf() + jump); }
+});
+
+// ---- main loop ----
+let lastFrame = -1;
+function tick() {
+  const fr = curFrameOf();
+  renderPanels(fr);
+  if (fr !== lastFrame) {
+    lastFrame = fr;
+    scrub.value = fr;
+    document.getElementById("readout").textContent =
+      `f ${fr}/${LAST} · ${(fr / D.fps).toFixed(2)}s`;
+    updateCards(fr);
+    drawChart(fr);
+  }
+  requestAnimationFrame(tick);
+}
+window.addEventListener("resize", () => { sizeChart(); drawChart(lastFrame < 0 ? 0 : lastFrame); });
+document.getElementById("ghost").addEventListener("change", () => renderPanels(lastFrame < 0 ? 0 : lastFrame));
+sizeChart();
+drawChart(0);
+updateCards(0);
+video.addEventListener("loadeddata", () => { seek(0); });
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

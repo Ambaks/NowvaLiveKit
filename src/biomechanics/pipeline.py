@@ -157,6 +157,12 @@ class BiomechanicsPipeline:
             required_consecutive_frames=rg.required_consecutive_frames,
         )
 
+        # Presence-only mode (rest periods / workout complete): pose
+        # estimation keeps running so the user stays detected, but gates,
+        # IK, fault detection, rep counting, and data collection are
+        # all skipped until the flag is cleared.
+        self.presence_only: bool = False
+
         # Pre-IK skeleton filtering (only initialised when enabled)
         self._confidence_blender = None
         self._velocity_clamp = None
@@ -328,10 +334,11 @@ class BiomechanicsPipeline:
     def reset_readiness_gate(self) -> None:
         """Reset the per-set readiness gate.
 
-        Call this when a set ends or a rest period starts so the next
-        set requires the user to be fully detected for 30 frames first.
-        Also resets pre-IK filter state so set 2+ doesn't blend against
-        stale positions from the previous set.
+        Call this at set boundaries (shortly before rest ends, set
+        timeout) so the next set requires the user to be fully detected
+        before collection resumes. Also resets pre-IK filter state so
+        set 2+ doesn't blend against stale positions from the previous
+        set.
         """
         self._readiness_gate.reset()
         self._bilstm_max_knee_flex = 0.0
@@ -425,6 +432,19 @@ class BiomechanicsPipeline:
             )
 
         self.last_frame = frame
+
+        # Presence-only mode: return after pose estimation so rest
+        # periods keep detecting the user without advancing gates,
+        # tracking state, or collecting any data.
+        if self.presence_only:
+            self._frame_index += 1
+            return PipelineFrame(
+                frame_index=self._frame_index,
+                timestamp=now,
+                skeleton_2d=skeleton_2d,
+                skeleton_3d=skeleton_3d,
+                latency_ms=latency_ms,
+            )
 
         if skeleton_2d is not None and self._display_smoother is not None:
             skeleton_2d = self._display_smoother.smooth(skeleton_2d)

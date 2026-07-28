@@ -36,14 +36,26 @@ HIGHLIGHT_JOINTS: dict[str, tuple[int, ...]] = {
 }
 
 
+def _mediapipe_to_viewer_coords(points: np.ndarray) -> np.ndarray:
+    """Transform MediaPipe world coords → viewer coords.
+
+    MediaPipe: X=subject's left, Y=down, Z=toward camera.
+    Viewer: vis_x=mp_z, vis_y=-mp_y, vis_z=-mp_x.
+    Same convention as biomechanics.diagnosis.bridge, which transforms
+    the demo pose stack — live poses must match or the skeleton renders
+    upside down when the choreography morphs back to the live pose.
+    """
+    return np.column_stack([points[:, 2], -points[:, 1], -points[:, 0]])
+
+
 def _ground_and_center_stack(pose_stack: np.ndarray) -> np.ndarray:
     """Ground feet to Y=0 and center horizontally, using pose 0 as reference."""
     stack = pose_stack.copy()
     ref = stack[0]
-    ankle_y = min(float(ref[15, 1]), float(ref[16, 1]))
+    foot_y = float(ref[[15, 16, 17, 18], 1].min())
     hip_mid_x = (ref[11, 0] + ref[12, 0]) / 2
     hip_mid_z = (ref[11, 2] + ref[12, 2]) / 2
-    stack[:, :, 1] -= ankle_y
+    stack[:, :, 1] -= foot_y
     stack[:, :, 0] -= hip_mid_x
     stack[:, :, 2] -= hip_mid_z
     return stack
@@ -165,9 +177,10 @@ class DemoWSBridge:
         """Stream one live skeleton frame; kept out of the event backlog."""
         if points.shape[0] < LIVE_POSE_JOINT_COUNT:
             return
-        grounded = _ground_and_center_stack(
-            points[np.newaxis, :LIVE_POSE_JOINT_COUNT].astype(np.float64)
+        viewer_points = _mediapipe_to_viewer_coords(
+            points[:LIVE_POSE_JOINT_COUNT].astype(np.float64)
         )
+        grounded = _ground_and_center_stack(viewer_points[np.newaxis])
         payload = json.dumps({"type": "live_pose", "points": grounded[0].tolist()})
         self._latest_live_payload = payload
         self._broadcast(payload)

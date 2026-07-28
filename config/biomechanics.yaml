@@ -28,8 +28,6 @@ faults:
     mild: 8.0
     moderate: 13.0
     severe: 18.0
-  heel_rise:
-    threshold_deg: 20.0
   forward_lean:
     mild: 145.0
     moderate: 135.0

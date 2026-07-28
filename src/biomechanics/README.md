@@ -97,7 +97,7 @@ Frame-level fault detection.
   a rolling 90-frame angle history, deduplicates consecutive same-fault detections,
   and handles per-rep calibration.
 - `rules/` -- one file per fault rule: `depth`, `forward_lean`, `knee_valgus`,
-  `symmetry`, `heel_rise`, `back_rounding`, `tempo`, `bar_path`,
+  `symmetry`, `back_rounding`, `tempo`, `bar_path`,
   `bar_tilt_asymmetry`, `lockout`, `elbow_flare`, `shoulder_stability`,
   `trunk_stability`, `range_of_motion`.
 - `hip_position_counter.py` -- 4-state FSM rep counter driven by hip vertical

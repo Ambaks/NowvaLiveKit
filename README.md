@@ -393,7 +393,6 @@ tibia_avg      = mean(L_tibia, R_tibia)
 torso_avg      = mean(L_torso, R_torso)
 
 valgus_scale       = (hip_width / femur_avg) / REFERENCE_HIP_TO_FEMUR_RATIO
-heel_rise_scale    = tibia_avg / REFERENCE_TIBIA_LENGTH_M
 forward_lean_scale = femur_avg / torso_avg / REFERENCE_FEMUR_TO_TORSO
 pelvis_tilt_coupling = 0.35 + 0.15 × (hip_width / torso_avg / 0.50)  # clipped to 0.30-0.55
 ```
@@ -650,10 +649,6 @@ Uses toe-based valgus from IK solver (knee deviation from hip-to-ankle line). Cr
 | 125° (55° lean) | MODERATE | Longer femurs = more lean acceptable |
 | 115° (65° lean) | SEVERE | |
 
-**Heel Rise** (`src/biomechanics/faults/rules/heel_rise.py`):
-- Threshold: 3.0cm (scaled by tibia length ratio)
-- Computed from ankle height change: `max_ankle_y - min_ankle_y`
-
 **Bilateral Asymmetry** (`src/biomechanics/faults/rules/symmetry.py`):
 - Tracks per-rep: `|knee_flexion_L - knee_flexion_R|` and `|hip_flexion_L - hip_flexion_R|`
 - Three severity levels based on average asymmetry
@@ -771,7 +766,7 @@ Each exercise has an independent profile defining which fault rules are active, 
 
 | Profile | File | Active Rules |
 |---------|------|-------------|
-| Squat | `squat.py` | Depth, knee valgus, forward lean, heel rise, bilateral asymmetry |
+| Squat | `squat.py` | Depth, knee valgus, forward lean, bilateral asymmetry |
 | Deadlift | `deadlift.py` | Back rounding, forward lean, bilateral asymmetry |
 | Barbell Row | `barbell_row.py` | Forward lean, elbow flare, bilateral asymmetry |
 | Overhead Press | `overhead_press.py` | Elbow flare, forward lean, bilateral asymmetry |
@@ -1207,7 +1202,7 @@ celery -A src.api.services.celery_app worker --loglevel=info
 Edit `config/biomechanics.yaml` to adjust:
 - Target FPS, log level
 - Pose estimation backend (mediapipe / rtmpose)
-- Fault detection thresholds (depth, valgus, lean, heel rise, asymmetry)
+- Fault detection thresholds (depth, valgus, lean, asymmetry)
 - Rep detection parameters (entry angle, min duration)
 - BiLSTM settings (model path, device, class count)
 - Pre-IK filter parameters (velocity clamp, bone constraints, confidence blend)

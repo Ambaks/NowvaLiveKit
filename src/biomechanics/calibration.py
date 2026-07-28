@@ -12,7 +12,6 @@ from typing import Dict, Optional
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.symmetry import SymmetryRule
-from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.depth import DepthRule
 
 
@@ -48,7 +47,7 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
     """Build threshold profile from calibration peaks.
 
     Args:
-        peaks: Dict with keys: trunk_flexion, hip_adduction, asymmetry, peak_dorsiflexion
+        peaks: Dict with keys: trunk_flexion, hip_adduction, asymmetry
         config: Optional pipeline config. If provided, defaults are included.
 
     Returns:
@@ -69,9 +68,6 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
             "mild": peaks["asymmetry"] + 5.0,
             "moderate": peaks["asymmetry"] + 10.0,
             "severe": peaks["asymmetry"] + 15.0,
-        },
-        "heel_rise": {
-            "threshold_degrees": peaks["peak_dorsiflexion"] + 20.0,
         },
         "depth": {
             "parallel_threshold": peaks.get("avg_depth", 0.0) - 10.0,
@@ -97,9 +93,6 @@ def build_calibration_profile(peaks: dict, config=None) -> dict:
                 "mild": faults_cfg.bilateral_asymmetry.mild,
                 "moderate": faults_cfg.bilateral_asymmetry.moderate,
                 "severe": faults_cfg.bilateral_asymmetry.severe,
-            },
-            "heel_rise": {
-                "threshold_degrees": faults_cfg.heel_rise.threshold_deg,
             },
             "depth": {
                 "quarter_threshold": 60.0,
@@ -133,8 +126,6 @@ def apply_calibration_to_rule_engine(rule_engine, profile: dict):
             rule.mild_threshold = p["mild"]
             rule.moderate_threshold = p["moderate"]
             rule.severe_threshold = p["severe"]
-        elif isinstance(rule, HeelRiseRule):
-            rule.threshold_degrees = profile["heel_rise"]["threshold_degrees"]
         elif isinstance(rule, DepthRule):
             if "depth" in profile:
                 p = profile["depth"]

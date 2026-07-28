@@ -14,9 +14,9 @@ import matplotlib.pyplot as plt
 
 
 def make_output_dir(base: str = "output") -> str:
-    """Create a timestamped output directory and return its path."""
+    """Create a timestamped per-workout output directory and return its path."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = os.path.join(base, f"set_{ts}")
+    out = os.path.join(base, f"workout_{ts}")
     os.makedirs(out, exist_ok=True)
     return out
 

@@ -156,20 +156,23 @@ class TestBuildFrameFromLivePipeline:
         np.testing.assert_allclose(relative_vis, relative_swapped, atol=1e-9)
 
     def test_hip_y_grounded_above_ankles(self):
-        """Hip vis_y is ankle-relative height, not hip-centered zero.
+        """Hip vis_y is floor-relative height, not hip-centered zero.
 
         MediaPipe world coords put the origin at the hip midpoint; the
-        bridge must re-ground so hip height is measured from the floor.
+        bridge must re-ground so hip height is measured from the floor —
+        the lowest foot keypoint, not the ankle joint.
         """
         kpts_mp = _squat_bottom_kpts_mediapipe()
         angles = _squat_bottom_angles()
         frame = build_frame_from_live_pipeline(kpts_mp, angles)
 
-        # mp hips at y=0, ankles at y=0.38 → grounded hip height = 0.38 m
-        assert frame["kpts"][11][1] == pytest.approx(0.38, abs=1e-9)
-        assert frame["kpts"][12][1] == pytest.approx(0.38, abs=1e-9)
-        min_ankle_y = min(frame["kpts"][15][1], frame["kpts"][16][1])
-        assert min_ankle_y == pytest.approx(0.0, abs=1e-9)
+        # mp hips at y=0, toes at y=0.40 → grounded hip height = 0.40 m
+        assert frame["kpts"][11][1] == pytest.approx(0.40, abs=1e-9)
+        assert frame["kpts"][12][1] == pytest.approx(0.40, abs=1e-9)
+        min_foot_y = min(frame["kpts"][i][1] for i in (15, 16, 17, 18))
+        assert min_foot_y == pytest.approx(0.0, abs=1e-9)
+        # Ankle joints keep their anatomical height above the floor
+        assert frame["kpts"][15][1] == pytest.approx(0.02, abs=1e-9)
 
 
 class TestEndToEndBridgeToSummary:
@@ -253,7 +256,7 @@ class TestEndToEndBridgeToSummary:
 class TestLiveFrameGrounding:
 
     def test_standing_frame_grounded_independently(self):
-        """Each frame grounds to its own ankle Y, so hip heights compare across frames."""
+        """Each frame grounds to its own foot level, so hip heights compare across frames."""
         frame = build_frame_from_live_pipeline(
             _squat_bottom_kpts_mediapipe(),
             _squat_bottom_angles(),
@@ -261,10 +264,10 @@ class TestLiveFrameGrounding:
         )
         standing_vis = frame["standing_kpts"]
 
-        min_ankle_y = min(standing_vis[15][1], standing_vis[16][1])
-        assert min_ankle_y == pytest.approx(0.0, abs=1e-9)
-        # mp standing: hips at y=0, ankles at y=0.82 → hip height 0.82 m
-        assert standing_vis[11][1] == pytest.approx(0.82, abs=1e-9)
+        min_foot_y = min(standing_vis[i][1] for i in (15, 16, 17, 18))
+        assert min_foot_y == pytest.approx(0.0, abs=1e-9)
+        # mp standing: hips at y=0, toes at y=0.84 → hip height 0.84 m
+        assert standing_vis[11][1] == pytest.approx(0.84, abs=1e-9)
 
     def test_hip_mid_centered_in_xz(self):
         """A global XZ offset in camera coords must not survive the transform."""

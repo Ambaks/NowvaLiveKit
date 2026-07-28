@@ -107,7 +107,8 @@ async def check_calibration(user_id: str, exercise_name: str) -> Optional[dict]:
     from biomechanics.calibration import get_movement_pattern
     from db.calibration_utils import get_user_calibration
 
-    pattern = get_movement_pattern(exercise_name)
+    canonical = normalize_exercise_name(exercise_name) or exercise_name
+    pattern = get_movement_pattern(canonical)
     if not pattern:
         return None
 

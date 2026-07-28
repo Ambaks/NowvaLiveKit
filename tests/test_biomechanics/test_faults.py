@@ -17,7 +17,6 @@ from biomechanics.utils.types import JointAngles, FaultSeverity
 from biomechanics.faults.fault_types import FaultType
 from biomechanics.faults.rules.depth import DepthRule, DepthCategory
 from biomechanics.faults.rules.symmetry import SymmetryRule
-from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.faults.rule_engine import RuleEngine
@@ -422,90 +421,6 @@ class TestKneeValgusRule:
         assert fault is None
 
 
-class TestHeelRiseRule:
-    """Test HeelRiseRule for heel lift detection."""
-
-    @pytest.fixture
-    def heel_rise_rule(self):
-        return HeelRiseRule()
-
-    @pytest.fixture
-    def history(self):
-        return deque(maxlen=90)
-
-    def test_fault_type(self, heel_rise_rule):
-        """Heel rise rule should report HEEL_RISE fault type."""
-        assert heel_rise_rule.fault_type == FaultType.HEEL_RISE
-
-    def test_no_fault_when_heels_down(self, heel_rise_rule, history):
-        """No fault when dorsiflexion stays consistent."""
-        # Set baseline
-        angles1 = create_joint_angles(
-            frame=0,
-            ankle_dorsiflexion_l=25.0,
-            ankle_dorsiflexion_r=25.0,
-        )
-        heel_rise_rule.evaluate(angles1, history, in_rep=True)
-
-        # Check stable dorsiflexion
-        angles2 = create_joint_angles(
-            frame=1,
-            ankle_dorsiflexion_l=24.0,
-            ankle_dorsiflexion_r=24.0,
-        )
-        fault = heel_rise_rule.evaluate(angles2, history, in_rep=True)
-        assert fault is None
-
-    def test_no_fault_when_not_in_rep(self, heel_rise_rule, history):
-        """No fault when not in rep."""
-        angles = create_joint_angles(frame=0)
-        fault = heel_rise_rule.evaluate(angles, history, in_rep=False)
-        assert fault is None
-
-    def test_heel_rise_detected(self, heel_rise_rule, history):
-        """Heel rise (dorsiflexion decrease) should produce fault."""
-        # Set baseline at rep start
-        angles1 = create_joint_angles(
-            frame=0,
-            ankle_dorsiflexion_l=25.0,
-            ankle_dorsiflexion_r=25.0,
-        )
-        heel_rise_rule.evaluate(angles1, history, in_rep=True)
-
-        # Significant decrease (heel rising) — must exceed 20° threshold
-        angles2 = create_joint_angles(
-            frame=31,  # Past cooldown
-            ankle_dorsiflexion_l=3.0,  # 22° decrease
-            ankle_dorsiflexion_r=4.0,  # 21° decrease
-        )
-        fault = heel_rise_rule.evaluate(angles2, history, in_rep=True)
-        assert fault is not None
-        assert "max_decrease" in fault.details
-        assert fault.details["max_decrease"] == 22.0
-
-    def test_reset_on_new_rep(self, heel_rise_rule, history):
-        """Baseline should reset when rep ends."""
-        # Set baseline
-        angles1 = create_joint_angles(
-            frame=0,
-            ankle_dorsiflexion_l=25.0,
-            ankle_dorsiflexion_r=25.0,
-        )
-        heel_rise_rule.evaluate(angles1, history, in_rep=True)
-
-        # End rep
-        heel_rise_rule.evaluate(angles1, history, in_rep=False)
-
-        # New rep with different baseline
-        angles2 = create_joint_angles(
-            frame=1,
-            ankle_dorsiflexion_l=20.0,
-            ankle_dorsiflexion_r=20.0,
-        )
-        heel_rise_rule.evaluate(angles2, history, in_rep=True)
-        assert heel_rise_rule._baseline_dorsiflexion_l == 20.0
-
-
 class TestRuleEngine:
     """Test RuleEngine orchestration."""
 
@@ -517,7 +432,6 @@ class TestRuleEngine:
             rules=[
                 DepthRule(),
                 SymmetryRule(),
-                HeelRiseRule(),
                 ForwardLeanRule(),
                 KneeValgusRule(),
             ],
@@ -525,7 +439,7 @@ class TestRuleEngine:
 
     def test_initialization(self, engine):
         """Engine should initialize with all rules."""
-        assert engine.rule_count == 5  # depth, symmetry, heel_rise, forward_lean, knee_valgus
+        assert engine.rule_count == 4  # depth, symmetry, forward_lean, knee_valgus
 
     def test_history_tracking(self, engine):
         """Engine should maintain angle history."""

@@ -384,7 +384,7 @@ class FaultSeverity(str, Enum):
 
 class FaultEvent(BaseModel):
     """A detected fault/form error during exercise."""
-    fault_type: str  # e.g., "knee_valgus", "forward_lean", "heel_rise"
+    fault_type: str  # e.g., "knee_valgus", "forward_lean", "depth"
     severity: FaultSeverity
     severity_score: float = Field(ge=0.0, le=3.0)  # 0=none, 1=mild, 2=moderate, 3=severe
     message: str  # Human-readable description
@@ -406,7 +406,6 @@ class FaultType:
     KNEE_VALGUS = "knee_valgus"
     KNEE_VARUS = "knee_varus"
     FORWARD_LEAN = "forward_lean"
-    HEEL_RISE = "heel_rise"
     DEPTH = "depth"
     BILATERAL_ASYMMETRY = "bilateral_asymmetry"
     BACK_ROUNDING = "back_rounding"

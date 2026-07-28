@@ -180,7 +180,6 @@ The `RuleEngine` maintains a rolling history of 90 frames (~3 seconds at 30 FPS)
 | **ForwardLeanRule** | `trunk_flexion` vs. mild/moderate/severe thresholds (135°/125°/115°) | During reps |
 | **KneeValgusRule** | Max of abs(knee_valgus L/R) vs. thresholds (8°/13°/18°) | During reps |
 | **SymmetryRule** | Max of knee/hip flexion L-R difference vs. thresholds | During reps |
-| **HeelRiseRule** | Ankle dorsiflexion vs. threshold | During reps |
 | **BarTiltAsymmetryRule** | Bar tilt angle and endpoint height difference | When bar detected |
 
 Each rule returns a `FaultEvent` with: fault type, severity (MILD/MODERATE/SEVERE), severity score (0-1), human-readable message, timestamp, frame index, and rep number. Consecutive same-fault frames are deduplicated with a 15-frame minimum gap.
@@ -199,7 +198,6 @@ After the first clean rep completes, `apply_baseline()` adjusts thresholds:
 - **Forward lean**: thresholds shift to peak - 10/15/20°
 - **Knee valgus**: thresholds become peak + 5/10/15°
 - **Symmetry**: thresholds become peak + 5/10/15°
-- **Heel rise**: threshold becomes peak dorsiflexion drop + 20°
 
 This means the system only flags things significantly worse than the user's natural pattern, reducing false alarms.
 
@@ -421,7 +419,7 @@ Camera frame
   --> One Euro filter + derivatives
   --> Rep signal (hip height for squats)
   --> Predictive state estimation
-  --> Fault rules (depth, symmetry, bar tilt, heel rise, forward lean, knee valgus)
+  --> Fault rules (depth, symmetry, bar tilt, forward lean, knee valgus)
   --> Baseline calibration (after 1st clean rep)
   --> Rep counter (4-state machine) --> RepData
   --> PipelineFrame output

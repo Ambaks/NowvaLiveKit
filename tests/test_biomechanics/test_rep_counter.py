@@ -303,7 +303,7 @@ class TestFaultIntegration:
             message="Test fault 1",
         )
         fault2 = FaultEvent(
-            fault_type="heel_rise",
+            fault_type="knee_valgus",
             severity=FaultSeverity.MODERATE,
             severity_score=2.0,
             message="Test fault 2",
@@ -321,7 +321,7 @@ class TestFaultIntegration:
         assert len(result.faults) == 2
         fault_types = {f.fault_type for f in result.faults}
         assert "forward_lean" in fault_types
-        assert "heel_rise" in fault_types
+        assert "knee_valgus" in fault_types
 
 
 class TestAsymmetryTracking:

@@ -57,8 +57,6 @@ FAULT_SCENARIOS = [
      "message": "Slight forward lean — stay tall", "cue": "chest_up"},
     {"fault_type": "depth", "severity": "mild", "severity_score": 0.8,
      "message": "Depth is a bit shallow — get deeper", "cue": "deeper"},
-    {"fault_type": "heel_rise", "severity": "moderate", "severity_score": 1.5,
-     "message": "Heels coming up — press through heels", "cue": "heels_down"},
     None,  # clean rep (no fault)
     None,  # clean rep
 ]

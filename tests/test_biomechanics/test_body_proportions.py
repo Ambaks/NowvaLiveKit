@@ -14,7 +14,6 @@ from biomechanics.utils.standing_gate import StandingPoseGate
 from biomechanics.utils.types import Skeleton3D, CocoKeypoints as CK
 from biomechanics.faults.rule_engine import RuleEngine
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
-from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.fault_types import FaultType
 from biomechanics.kinematics.analytical_ik import AnalyticalIKSolver
@@ -134,36 +133,6 @@ class TestBodyProportions:
 
         assert bc.body_proportions.valgus_scale == pytest.approx(1.3)
 
-    def test_long_tibia_increases_heel_rise_scale(self):
-        """Longer tibia should produce heel_rise_scale > 1."""
-        bc = BoneLengthConstraints(calibration_frames=5)
-        pts = _standing_skeleton()
-        # Extend tibias: knee at 0.60, ankle at 0.0 → tibia = 0.60m
-        pts[CK.LEFT_KNEE] = [0.10, 0.60, 0.0]
-        pts[CK.LEFT_ANKLE] = [0.10, 0.0, 0.0]
-        pts[CK.RIGHT_KNEE] = [-0.10, 0.60, 0.0]
-        pts[CK.RIGHT_ANKLE] = [-0.10, 0.0, 0.0]
-
-        for i in range(5):
-            bc.enforce(_make_skeleton(pts, frame_index=i))
-
-        assert bc.body_proportions.heel_rise_scale > 1.0
-
-    def test_heel_rise_scale_clamped(self):
-        """Extreme tibia should be clamped to [0.8, 1.2]."""
-        bc = BoneLengthConstraints(calibration_frames=5)
-        pts = _standing_skeleton()
-        # Extremely long tibias
-        pts[CK.LEFT_KNEE] = [0.10, 1.00, 0.0]
-        pts[CK.LEFT_ANKLE] = [0.10, 0.0, 0.0]
-        pts[CK.RIGHT_KNEE] = [-0.10, 1.00, 0.0]
-        pts[CK.RIGHT_ANKLE] = [-0.10, 0.0, 0.0]
-
-        for i in range(5):
-            bc.enforce(_make_skeleton(pts, frame_index=i))
-
-        assert bc.body_proportions.heel_rise_scale == pytest.approx(1.2)
-
 
 class TestStandingGateBlocksCalibration:
     # The gate is advanced by the caller once per frame, exactly as the
@@ -248,7 +217,6 @@ class TestRuleEngineProportionScaling:
             hip_to_femur_ratio=0.667,
             tibia_to_reference_ratio=1.0,
             valgus_scale=1.2,
-            heel_rise_scale=1.0,
             forward_lean_scale=1.0,
             pelvis_tilt_coupling=0.4,
         )
@@ -263,30 +231,6 @@ class TestRuleEngineProportionScaling:
         assert valgus_rule.moderate_threshold == pytest.approx(10.0 * 1.2, abs=0.1)
         assert valgus_rule.severe_threshold == pytest.approx(16.0 * 1.2, abs=0.1)
 
-    def test_heel_rise_threshold_scaled(self):
-        engine = _make_engine_with_squat_rules()
-
-        proportions = BodyProportions(
-            hip_width=0.20,
-            femur_length_avg=0.45,
-            tibia_length_avg=0.54,
-            torso_length_avg=0.50,
-            hip_to_femur_ratio=0.444,
-            tibia_to_reference_ratio=1.2,
-            valgus_scale=1.0,
-            heel_rise_scale=1.2,
-            forward_lean_scale=1.0,
-            pelvis_tilt_coupling=0.4,
-        )
-
-        engine.apply_body_proportion_scaling(proportions)
-
-        heel_rule = engine.get_rule(
-            __import__("biomechanics.faults.fault_types", fromlist=["FaultType"]).FaultType.HEEL_RISE
-        )
-        # Default threshold = 20.0 deg, scaled by 1.2 = 24.0
-        assert heel_rule.threshold_degrees == pytest.approx(20.0 * 1.2, abs=0.1)
-
     def test_forward_lean_thresholds_scaled(self):
         engine = _make_engine_with_squat_rules()
 
@@ -298,7 +242,6 @@ class TestRuleEngineProportionScaling:
             hip_to_femur_ratio=0.364,
             tibia_to_reference_ratio=1.0,
             valgus_scale=1.0,
-            heel_rise_scale=1.0,
             forward_lean_scale=1.2,
             pelvis_tilt_coupling=0.4,
         )
@@ -389,7 +332,6 @@ class TestIKSolverProportions:
             hip_to_femur_ratio=0.667,
             tibia_to_reference_ratio=1.0,
             valgus_scale=1.0,
-            heel_rise_scale=1.0,
             forward_lean_scale=1.0,
             pelvis_tilt_coupling=0.48,
         )
@@ -405,6 +347,6 @@ class TestForwardLeanRuleEnabled:
         engine = _make_engine_with_squat_rules()
         fwd_rule = engine.get_rule(FaultType.FORWARD_LEAN)
         assert fwd_rule is not None
-        # Squat profile registers depth, symmetry, bar-tilt asymmetry, heel
-        # rise, forward lean, knee valgus = 6 rules.
-        assert engine.rule_count == 6
+        # Squat profile registers depth, symmetry, bar-tilt asymmetry,
+        # forward lean, knee valgus = 5 rules.
+        assert engine.rule_count == 5

@@ -70,11 +70,6 @@ class BilateralAsymmetryConfig(BaseModel):
     severe: float = 18.0
 
 
-class HeelRiseConfig(BaseModel):
-    """Heel rise fault thresholds (degrees of dorsiflexion decrease from baseline)."""
-    threshold_deg: float = 20.0
-
-
 class ForwardLeanConfig(BaseModel):
     """Forward lean fault thresholds (180-convention: lower = more lean)."""
     mild: float = 135.0
@@ -96,7 +91,6 @@ class FaultsConfig(BaseModel):
     """Fault detection configuration."""
     depth: DepthFaultConfig = Field(default_factory=DepthFaultConfig)
     bilateral_asymmetry: BilateralAsymmetryConfig = Field(default_factory=BilateralAsymmetryConfig)
-    heel_rise: HeelRiseConfig = Field(default_factory=HeelRiseConfig)
     forward_lean: ForwardLeanConfig = Field(default_factory=ForwardLeanConfig)
     knee_valgus: KneeValgusConfig = Field(default_factory=KneeValgusConfig)
 
@@ -387,7 +381,6 @@ def load_pipeline_config(path: Optional[str] = None) -> BiomechanicsConfig:
         faults_config = FaultsConfig(
             depth=DepthFaultConfig(**faults_data.get("depth", {})),
             bilateral_asymmetry=BilateralAsymmetryConfig(**faults_data.get("bilateral_asymmetry", {})),
-            heel_rise=HeelRiseConfig(**faults_data.get("heel_rise", {})),
             forward_lean=ForwardLeanConfig(**faults_data.get("forward_lean", {})),
             knee_valgus=KneeValgusConfig(**faults_data.get("knee_valgus", {})),
         )

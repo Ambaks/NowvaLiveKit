@@ -18,7 +18,6 @@ class FaultType(str, Enum):
     DEPTH = "depth"
     RANGE_OF_MOTION = "range_of_motion"
     BILATERAL_ASYMMETRY = "bilateral_asymmetry"
-    HEEL_RISE = "heel_rise"
     FORWARD_LEAN = "forward_lean"
     KNEE_VALGUS = "knee_valgus"
     BACK_ROUNDING = "back_rounding"
@@ -42,9 +41,6 @@ DEFAULT_THRESHOLDS: Dict[FaultType, Dict[str, float]] = {
         "mild": 5.0,           # 5-10° difference
         "moderate": 10.0,      # 10-15° difference
         "severe": 15.0,        # > 15° difference
-    },
-    FaultType.HEEL_RISE: {
-        "threshold_deg": 20.0,  # Dorsiflexion decrease from baseline (degrees)
     },
     FaultType.FORWARD_LEAN: {
         "mild": 35.0,          # 35-45° trunk flexion
@@ -81,9 +77,6 @@ FAULT_MESSAGES: Dict[FaultType, Dict[str, str]] = {
         "mild": "Slight imbalance between sides",
         "moderate": "Noticeable weight shift — even it out",
         "severe": "Significant asymmetry — focus on balance",
-    },
-    FaultType.HEEL_RISE: {
-        "detected": "Heels coming up — keep heels planted",
     },
     FaultType.FORWARD_LEAN: {
         "mild": "Slight forward lean",
@@ -192,7 +185,7 @@ class FaultRule(ABC):
     def scale_for_proportions(self, proportions) -> None:
         """Adjust thresholds based on user body proportions. Default: no-op.
 
-        Subclasses (e.g. KneeValgusRule, HeelRiseRule) override to scale
+        Subclasses (e.g. KneeValgusRule) override to scale
         their specific thresholds using the BodyProportions data.
         """
         pass

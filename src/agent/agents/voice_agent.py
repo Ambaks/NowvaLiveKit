@@ -184,6 +184,10 @@ async def entrypoint(ctx: agents.JobContext):
         "schedule": ScheduleMaintenanceAgent,
     }
     AgentClass = agent_map.get(mode, OnboardingAgent)
+    if os.environ.get("NOWVA_TEST_ASSESS") == "1" and mode == "workout":
+        from agent.agents.teaching_agent import TeachingAgent
+        AgentClass = TeachingAgent
+        logger.info("[NOVA] Test-assess fast path — starting TeachingAgent directly")
     agent = AgentClass(state=state, userdata=userdata)
 
     logger.info(f"[NOVA] Starting {AgentClass.__name__} (mode={mode})")

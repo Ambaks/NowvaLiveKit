@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 import sys
@@ -38,3 +39,70 @@ class TestStopFinalizesAssessment:
 
         assert service._assessment_logger is None
         assert not (tmp_path / "assessment").exists()
+
+
+def _wait_for(condition_fn, timeout_s: float = 5.0) -> bool:
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if condition_fn():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _serve_one_client(server) -> threading.Thread:
+    def _serve():
+        try:
+            server.accept_client()
+            server.listen()
+        except OSError:
+            pass
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    return thread
+
+
+class TestListenerReconnect:
+    def test_listener_reconnects_after_server_restart(self, monkeypatch):
+        """main.py stops the coaching socket between workout passes — the
+        listener must reconnect when the server rebinds, not die silently."""
+        import tempfile
+        import agent.services.coaching_service as cs
+        from agent.core.ipc_communication import IPCServer
+
+        socket_path = tempfile.mkdtemp() + "/coaching.sock"
+        monkeypatch.setattr(cs, "COACHING_SOCKET_PATH", socket_path)
+        monkeypatch.setattr(cs, "LISTENER_RECONNECT_POLL_S", 0.05)
+
+        service = CoachingService(session=None, state=None)
+
+        server = IPCServer(socket_path=socket_path)
+        server.bind()
+        _serve_one_client(server)
+
+        asyncio.run(service._start_ipc_listener())
+        assert _wait_for(lambda: service._listener_running)
+
+        # Workout ends: main.py stops the coaching server
+        server.stop()
+        assert _wait_for(lambda: not service._listener_running)
+
+        # Next workout: main.py rebinds — the listener must come back
+        server = IPCServer(socket_path=socket_path)
+        server.bind()
+        _serve_one_client(server)
+        assert _wait_for(lambda: service._listener_running)
+
+        service._stop_ipc_listener()
+        server.stop()
+
+    def test_start_assessment_resets_demo_latch(self, tmp_path):
+        service = CoachingService(session=None, state=None)
+        service._assessment_demo_played = True
+
+        service.start_assessment(
+            session_dir=tmp_path, session_id="s", user_height_cm=180.0,
+        )
+
+        assert service._assessment_demo_played is False

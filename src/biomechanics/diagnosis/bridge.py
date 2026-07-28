@@ -24,14 +24,14 @@ def _mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
 
 
 def _ground_and_center(kpts: list[list[float]]) -> list[list[float]]:
-    """Ground min ankle Y to 0 and center hip midpoint in XZ.
+    """Ground the lowest foot keypoint Y to 0 and center hip midpoint in XZ.
 
     MediaPipe world coords are hip-centered, so hip heights are meaningless
-    across frames until each frame is re-grounded to its own ankle level.
+    across frames until each frame is re-grounded to its own foot level.
     Matches visualize_video_squats ground_and_center preprocessing.
     """
     arr = np.asarray(kpts, dtype=np.float64)
-    arr[:, 1] -= min(arr[15, 1], arr[16, 1])
+    arr[:, 1] -= arr[[15, 16, 17, 18], 1].min()
     arr[:, 0] -= (arr[11, 0] + arr[12, 0]) / 2.0
     arr[:, 2] -= (arr[11, 2] + arr[12, 2]) / 2.0
     return arr.tolist()

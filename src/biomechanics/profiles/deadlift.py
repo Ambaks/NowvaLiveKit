@@ -15,7 +15,6 @@ from biomechanics.faults.rules.range_of_motion import RangeOfMotionRule
 from biomechanics.faults.rules.symmetry import SymmetryRule
 from biomechanics.faults.rules.back_rounding import BackRoundingRule
 from biomechanics.faults.rules.bar_path import BarPathRule
-from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.profiles.base import ExerciseProfile
 from biomechanics.profiles.registry import register_profile
 from biomechanics.utils.types import CocoKeypoints, JointAngles, Skeleton3D
@@ -57,7 +56,6 @@ class DeadliftProfile(ExerciseProfile):
                 moderate_threshold=15.0,
                 severe_threshold=22.0,
             ),
-            HeelRiseRule(threshold_degrees=10.0),
         ]
 
     def get_rep_signal(
@@ -99,6 +97,5 @@ class DeadliftProfile(ExerciseProfile):
             "range_of_motion": "Stand up fully — hips to lockout",
             "back_rounding": "Brace core — keep spine neutral",
             "bar_path": "Keep the bar close — straight path up",
-            "heel_rise": "Drive through heels",
             "bilateral_asymmetry": "Even out left and right",
         }

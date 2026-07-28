@@ -34,6 +34,32 @@ def _make_logger(tmp_path):
     )
 
 
+class TestNonClobberingLogFiles:
+    def test_second_logger_in_same_session_keeps_first_log(self, tmp_path):
+        first = _make_logger(tmp_path)
+        first.on_rep_complete(_rep_complete_msg(1))
+        first.finalize(passed=True)
+
+        second = _make_logger(tmp_path)
+        second.finalize(passed=False)
+
+        import json
+        first_log = json.loads((tmp_path / "assessment" / "assessment_log.json").read_text())
+        second_log = json.loads((tmp_path / "assessment" / "assessment_log_2.json").read_text())
+        assert len(first_log["reps"]) == 1
+        assert first_log["passed"] is True
+        assert second_log["reps"] == []
+        assert second_log["passed"] is False
+
+    def test_second_logger_uses_separate_keypoints_dir(self, tmp_path):
+        first = _make_logger(tmp_path)
+        first.finalize(passed=False)
+        second = _make_logger(tmp_path)
+
+        assert first._keypoints_dir != second._keypoints_dir
+        assert second._keypoints_dir.name == "keypoints_2"
+
+
 class TestRepNumberTranslation:
     def test_sequence_numbers_stay_unique_across_rounds(self, tmp_path):
         logger = _make_logger(tmp_path)
