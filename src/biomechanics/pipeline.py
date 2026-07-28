@@ -327,6 +327,19 @@ class BiomechanicsPipeline:
         return self._rep_counter
 
     @property
+    def rep_count(self) -> int:
+        """Reps that were actually logged.
+
+        The BiLSTM is the authority whenever it is enabled — it emits the
+        RepData that reaches the session tracker, so anything displayed to
+        the lifter has to come from the same counter or the screen and the
+        workout disagree.
+        """
+        if self._bilstm is not None:
+            return self._bilstm.rep_count
+        return self._rep_counter.rep_count
+
+    @property
     def is_ready(self) -> bool:
         """Whether the readiness gate has passed and data is being collected."""
         return self._readiness_gate.is_ready
@@ -494,13 +507,14 @@ class BiomechanicsPipeline:
 
         # --- BiLSTM rep counting (runs on raw skeleton, before IK) ---
         bilstm_rep_data = None
+        bilstm_shallow_class = None
         bilstm_prob = None
         bilstm_depth_class = None
         bilstm_depth_class_name = None
         bilstm_class_probs = None
         if self._bilstm is not None:
             t0 = time.perf_counter()
-            bilstm_rep_data = self._bilstm.process_skeleton(skeleton_3d)
+            bilstm_rep_data, bilstm_shallow_class = self._bilstm.process_skeleton(skeleton_3d)
             bilstm_prob = self._bilstm.current_probability
             bilstm_depth_class = self._bilstm.current_depth_class
             bilstm_depth_class_name = DEPTH_CLASS_NAMES.get(bilstm_depth_class, "Unknown")
@@ -644,8 +658,12 @@ class BiomechanicsPipeline:
         latency_ms["faults"] = (time.perf_counter() - t0) * 1000.0
 
         # Track max knee flexion during BiLSTM rep windows independently
-        # of the hip counter, which may be at a different phase.
-        if self._bilstm is not None and self._bilstm.in_rep:
+        # of the hip counter, which may be at a different phase. Tracking
+        # starts as soon as the lifter leaves standing so shallow reps —
+        # which never open a rep window — still get a depth angle.
+        if self._bilstm is not None and (
+            self._bilstm.in_rep or self._bilstm.current_depth_class > 0
+        ):
             knee = angles.avg_knee_flexion
             if knee > self._bilstm_max_knee_flex:
                 self._bilstm_max_knee_flex = knee
@@ -695,6 +713,21 @@ class BiomechanicsPipeline:
 
             final_rep_data = bilstm_rep_data
 
+        # A descent the counter rejected for depth. It produces no rep, so
+        # the depth fault is the only thing telling the lifter why nothing
+        # was counted — emit it from the same depth class that rejected it.
+        if bilstm_shallow_class is not None:
+            faults.extend(
+                self._rule_engine.evaluate_shallow_rep(
+                    max_depth_class=bilstm_shallow_class,
+                    angles=angles,
+                    rep_number=self._bilstm.rep_count + 1,
+                    max_knee_flexion=self._bilstm_max_knee_flex,
+                )
+            )
+            self._bilstm_max_knee_flex = 0.0
+            self._bilstm_min_knee_flex = 180.0
+
         return PipelineFrame(
             frame_index=self._frame_index,
             timestamp=now,
@@ -708,6 +741,7 @@ class BiomechanicsPipeline:
             bilstm_depth_class=bilstm_depth_class,
             bilstm_depth_class_name=bilstm_depth_class_name,
             bilstm_class_probabilities=bilstm_class_probs,
+            shallow_rep_class=bilstm_shallow_class,
             bar_detection=bar_detection,
             bar_track=bar_track,
             latency_ms=latency_ms,

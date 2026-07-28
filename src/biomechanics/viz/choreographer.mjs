@@ -18,12 +18,15 @@ export const DEFAULT_TIMING = {
     finalHold: 1.0,
 };
 
-const JOINT_COUNT = 19;
-const POSE_SIZE = JOINT_COUNT * 3;
+// Poses carry 19 joints when captured before heel tracking, 21 with heels.
+// The real count comes from the payload in init().
+const DEFAULT_JOINT_COUNT = 19;
 
 const HIP_L = 11, HIP_R = 12;
 const KNEE_L = 13, KNEE_R = 14;
 const ANKLE_L = 15, ANKLE_R = 16;
+const FOOT_L = 17, FOOT_R = 18;
+const HEEL_L = 19, HEEL_R = 20;
 
 const BONE_PAIRS = [
     [5, 7], [7, 9],     // L arm
@@ -31,6 +34,11 @@ const BONE_PAIRS = [
     [5, 6],              // shoulders
     [HIP_L, HIP_R],     // hips
     [5, HIP_L], [6, HIP_R], // torso
+    // Feet. Both contact points hang off the ankle, so a toe-out cue rotates
+    // the foot without the lerp chording the arc and shortening it — an
+    // unconstrained foot shears mid-morph and reads as a tiptoe.
+    [ANKLE_L, FOOT_L], [ANKLE_R, FOOT_R],
+    [ANKLE_L, HEEL_L], [ANKLE_R, HEEL_R],
 ];
 
 function _jx(flat, j) { return flat[j * 3]; }
@@ -99,6 +107,8 @@ export function enforceBoneLengths(flat, refPose) {
     _solveKnee(flat, HIP_R, ANKLE_R, KNEE_R, thighR, shinR);
 
     for (const [p, d] of BONE_PAIRS) {
+        // Heel pairs are absent from 19-joint poses.
+        if (d * 3 + 2 >= flat.length) continue;
         _enforceSegLen(flat, p, d, _dist3(refPose, p, d));
     }
 }
@@ -158,21 +168,29 @@ export function createChoreographer(callbacks = {}) {
     let morphFrom = null;
     let morphOutFrom = null;
     let livePose = null;
-    const currentPoints = new Float64Array(POSE_SIZE);
+    let jointCount = DEFAULT_JOINT_COUNT;
+    let poseSize = jointCount * 3;
+    let currentPoints = new Float64Array(poseSize);
 
     function getPose(stackIndex) {
-        return poseStack.subarray(stackIndex * POSE_SIZE, (stackIndex + 1) * POSE_SIZE);
+        return poseStack.subarray(stackIndex * poseSize, (stackIndex + 1) * poseSize);
     }
 
     function init(payload) {
         const stack = payload.pose_stack;
         poseCount = stack.length;
-        poseStack = new Float64Array(poseCount * POSE_SIZE);
+        // Trust the payload's joint count: 19 for poses captured before heel
+        // tracking, 21 with heels. Sizing off a constant would silently drop
+        // the heels and render the foot as a spike.
+        jointCount = (stack[0] && stack[0].length) || DEFAULT_JOINT_COUNT;
+        poseSize = jointCount * 3;
+        currentPoints = new Float64Array(poseSize);
+        poseStack = new Float64Array(poseCount * poseSize);
         for (let p = 0; p < poseCount; p++) {
-            for (let j = 0; j < JOINT_COUNT; j++) {
-                poseStack[p * POSE_SIZE + j * 3 + 0] = stack[p][j][0];
-                poseStack[p * POSE_SIZE + j * 3 + 1] = stack[p][j][1];
-                poseStack[p * POSE_SIZE + j * 3 + 2] = stack[p][j][2];
+            for (let j = 0; j < jointCount; j++) {
+                poseStack[p * poseSize + j * 3 + 0] = stack[p][j][0];
+                poseStack[p * poseSize + j * 3 + 1] = stack[p][j][1];
+                poseStack[p * poseSize + j * 3 + 2] = stack[p][j][2];
             }
         }
         cues = payload.cues || [];
@@ -184,8 +202,16 @@ export function createChoreographer(callbacks = {}) {
 
     function setLivePose(flatPoints) {
         livePose = Float64Array.from(flatPoints);
+        if (!poseStack && livePose.length !== poseSize) {
+            // No demo loaded yet, so the live feed defines the joint count.
+            poseSize = livePose.length;
+            jointCount = Math.floor(poseSize / 3);
+            currentPoints = new Float64Array(poseSize);
+        }
         if (state === IDLE) {
-            currentPoints.set(livePose);
+            // A stored 19-joint demo alongside a 21-joint live feed would
+            // overrun currentPoints; copy the shared prefix instead of throwing.
+            currentPoints.set(livePose.subarray(0, Math.min(livePose.length, poseSize)));
             cb.setOpacity(1);
             cb.render(currentPoints, []);
         }

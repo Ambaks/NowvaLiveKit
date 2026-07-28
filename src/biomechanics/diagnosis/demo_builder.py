@@ -98,8 +98,10 @@ def _lateral_hip_shift(before: np.ndarray, after: np.ndarray) -> float:
 def _prepare_observed_kpts(kpts: list[list[float]]) -> list[list[float]]:
     """Ground and center — match visualize_video_squats preprocessing."""
     arr = np.array(kpts, dtype=np.float64)
-    # Ground lowest foot keypoint to Y=0, keeping real foot geometry
-    foot_y = arr[[15, 16, 17, 18], 1].min()
+    # Ground lowest foot keypoint to Y=0, keeping real foot geometry.
+    # Index 15 onward is every foot keypoint — ankles, toes, and heels — so
+    # slicing stays correct for both 19- and 21-keypoint poses.
+    foot_y = arr[15:, 1].min()
     arr[:, 1] -= foot_y
     # Center hips at origin
     hip_mid_x = (arr[11, 0] + arr[12, 0]) / 2
@@ -144,7 +146,9 @@ def build_pose_stack(
         float(np.linalg.norm(canon_arr[ANKLE_R] - canon_arr[KNEE_R])),
     )
 
-    pose_stack = np.empty((len(ordered) + 1, 19, 3), dtype=np.float32)
+    pose_stack = np.empty(
+        (len(ordered) + 1, canon_arr.shape[0], 3), dtype=np.float32,
+    )
     pose_stack[0] = np.asarray(canonical, dtype=np.float32)
 
     for k in range(1, len(ordered) + 1):

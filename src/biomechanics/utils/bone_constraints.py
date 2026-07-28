@@ -72,10 +72,21 @@ BONE_PAIRS: List[Tuple[int, int]] = [
     # Right arm
     (CK.RIGHT_SHOULDER, CK.RIGHT_ELBOW),
     (CK.RIGHT_ELBOW, CK.RIGHT_WRIST),
-    # Feet (only calibrated/enforced when foot_index landmarks are visible)
+    # Feet (only calibrated/enforced when foot landmarks are visible)
     (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX),
     (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX),
+    (CK.LEFT_ANKLE, CK.LEFT_HEEL),
+    (CK.RIGHT_ANKLE, CK.RIGHT_HEEL),
 ]
+
+
+def _pairs_present(num_keypoints: int) -> list[Tuple[int, int]]:
+    # Heel pairs are absent from skeletons produced before heels were tracked.
+    return [
+        (proximal_idx, distal_idx)
+        for proximal_idx, distal_idx in BONE_PAIRS
+        if proximal_idx < num_keypoints and distal_idx < num_keypoints
+    ]
 
 
 class BoneLengthConstraints:
@@ -164,7 +175,7 @@ class BoneLengthConstraints:
         # --- Enforcement pass ---
         corrected = points.copy()
 
-        for proximal_idx, distal_idx in BONE_PAIRS:
+        for proximal_idx, distal_idx in _pairs_present(len(points)):
             # Skip pairs where either keypoint has insufficient confidence
             if confidences[proximal_idx] < 0.1 or confidences[distal_idx] < 0.1:
                 continue
@@ -205,7 +216,7 @@ class BoneLengthConstraints:
 
     def _record_calibration(self, points: np.ndarray, confidences: np.ndarray) -> None:
         """Record bone lengths for one frame during calibration."""
-        for proximal_idx, distal_idx in BONE_PAIRS:
+        for proximal_idx, distal_idx in _pairs_present(len(points)):
             # Skip pairs where either keypoint has insufficient confidence
             if confidences[proximal_idx] < 0.1 or confidences[distal_idx] < 0.1:
                 continue

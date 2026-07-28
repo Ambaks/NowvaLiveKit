@@ -98,6 +98,8 @@ class CoachingOrchestrator:
         self._set_number: int = 0  # Increments across sets (1-indexed in output)
         self._clean_streak: int = 0
         self._set_clean_count: int = 0
+        self._set_shallow_count: int = 0
+        self._set_shallow_depths: List[str] = []
         self._recent_faults: List[str] = []
         self._last_motivation_rep: int = 0
         self._motivation_interval: int = 3
@@ -173,6 +175,8 @@ class CoachingOrchestrator:
         self._set_target_reps = target_reps
         self._clean_streak = 0
         self._set_clean_count = 0
+        self._set_shallow_count = 0
+        self._set_shallow_depths = []
         self._recent_faults = []
         self._last_motivation_rep = 0
         self._positive_cue_keys = list(positive_cue_keys or [])
@@ -300,6 +304,40 @@ class CoachingOrchestrator:
             logger.info(f"[ORCHESTRATOR] Fault cue '{cue_key}' has no cached audio — skipped")
         else:
             logger.info(f"[ORCHESTRATOR] Fault has no cue_key — skipped (type={fault_type})")
+
+    async def on_shallow_rep(
+        self,
+        cue_key: Optional[str],
+        depth_class_name: str = "",
+    ):
+        """Cue a rep that was rejected for depth.
+
+        Fires on every shallow rep and bypasses the fault-cue gap: this cue
+        stands in for the rep-count callout the lifter didn't get, so
+        rate-limiting it would leave them with nothing to explain why the
+        counter didn't move. Fire-and-forget on the rep audio track.
+        """
+        if self._resting:
+            return
+        self._set_shallow_count += 1
+        self._set_shallow_depths.append(depth_class_name)
+
+        logger.info(
+            f"[ORCHESTRATOR] Shallow rep ({depth_class_name or 'unknown'}) — "
+            f"{self._set_shallow_count} this set, not counted"
+        )
+
+        if not cue_key or not self._get_cue_audio(cue_key):
+            logger.info(f"[ORCHESTRATOR] No cached audio for shallow cue: {cue_key}")
+            return
+
+        asyncio.create_task(self._play_cached(cue_key))
+        self._set_cue_log.append(CueLogEntry(
+            wall_time=time.time(),
+            label=CUE_DISPLAY_LABELS.get(cue_key, cue_key),
+            category="fault",
+        ))
+        logger.info(f"[ORCHESTRATOR] → Fire-and-forget SHALLOW REP cue: {cue_key}")
 
     async def on_rep_complete(
         self,
@@ -452,6 +490,7 @@ class CoachingOrchestrator:
             "set_number": final_set_data.get("set_number", 0),
             "total_reps": final_set_data.get("total_reps", 0),
             "clean_reps": final_set_data.get("clean_reps", 0),
+            "shallow_reps": final_set_data.get("shallow_reps", 0),
             "avg_depth": final_set_data.get("avg_depth", 0),
             "depth_consistency": final_set_data.get("depth_consistency", 0),
             "avg_duration_ms": final_set_data.get("avg_duration_ms", 0),
@@ -510,6 +549,8 @@ class CoachingOrchestrator:
             "set_number": self._set_number,
             "total_reps": self._set_rep_count,
             "clean_reps": self._set_clean_count,
+            "shallow_reps": self._set_shallow_count,
+            "shallow_depths": list(self._set_shallow_depths),
             "avg_depth": avg_depth,
             "depth_consistency": depth_consistency,
             "avg_duration_ms": avg_duration_ms,
@@ -767,6 +808,7 @@ class CoachingOrchestrator:
         set_num = data.get("set_number", 0)
         total_reps = data.get("total_reps", 0)
         clean_reps = data.get("clean_reps", 0)
+        shallow_reps = data.get("shallow_reps", 0)
         avg_depth = data.get("avg_depth", 0)
         depth_consistency = data.get("depth_consistency", 0)
         avg_duration_ms = data.get("avg_duration_ms", 0)
@@ -782,6 +824,12 @@ class CoachingOrchestrator:
             f"Next up is set {next_set}{total_sets_str}.",
             f"{clean_reps}/{total_reps} clean reps.",
         ]
+        if shallow_reps:
+            attempted = total_reps + shallow_reps
+            parts.append(
+                f"{shallow_reps} of {attempted} attempts were too shallow to count "
+                f"(never reached parallel) — those did not go toward the rep total."
+            )
         if avg_depth:
             parts.append(f"Average depth: {avg_depth}° (consistency stdev: {depth_consistency}°).")
         if avg_duration_ms:
@@ -854,6 +902,7 @@ class CoachingOrchestrator:
                 "set_number": set_num,
                 "total_reps": total_reps,
                 "clean_reps": clean_reps,
+                "shallow_reps": shallow_reps,
                 "avg_depth": avg_depth,
                 "depth_consistency": depth_consistency,
                 "avg_duration_ms": avg_duration_ms,
@@ -960,10 +1009,16 @@ class CoachingOrchestrator:
                 fault_str = f", faults: {'; '.join(fault_parts)}"
             per_set_lines.append(f"Set {sn}: {tr} reps, {cr} clean{depth_str}{fault_str}")
 
+        total_shallow = sum(s.get("shallow_reps", 0) for s in all_summaries)
+
         parts = [
             f"Exercise complete! {total_sets} sets finished.",
             f"Total: {total_reps} reps, {total_clean} clean ({clean_pct}%).",
         ]
+        if total_shallow:
+            parts.append(
+                f"{total_shallow} attempts across the session were too shallow to count."
+            )
         if overall_avg_depth:
             parts.append(f"Overall average depth: {overall_avg_depth}°.")
         if overall_avg_tempo:

@@ -371,6 +371,23 @@ class CoachingService:
                     )
                 else:
                     logger.warning("[COACHING SERVICE] No orchestrator — rep_complete dropped")
+            elif msg_type == "shallow_rep":
+                depth_name = message.get("depth_class_name", "")
+                logger.info(
+                    f"[COACHING SERVICE] SHALLOW REP received: depth={depth_name} "
+                    f"knee={message.get('max_knee_flexion')}°"
+                )
+                if self._workout_active and self._biomech_recorder and message.get("fault_type"):
+                    self._biomech_recorder.record_fault(message)
+                if not self._workout_active:
+                    logger.debug("[COACHING SERVICE] shallow_rep ignored — workout not active yet")
+                elif self._coaching_orchestrator:
+                    await self._coaching_orchestrator.on_shallow_rep(
+                        cue_key=message.get("cue"),
+                        depth_class_name=depth_name,
+                    )
+                else:
+                    logger.warning("[COACHING SERVICE] No orchestrator — shallow_rep dropped")
             elif msg_type == "rep_diagnosis":
                 if self._assessment_logger is not None:
                     self._assessment_logger.on_rep_diagnosis(

@@ -5,7 +5,7 @@ Wires feature extraction → sequence buffering → model forward pass → rep c
 into a single ``process_skeleton()`` call for the pipeline.
 """
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -43,12 +43,14 @@ class BiLSTMInference:
     def _load_model(self) -> None:
         self._model = BiLSTMRepModel.from_checkpoint(self._model_path, self._device)
 
-    def process_skeleton(self, skeleton: Skeleton3D) -> Optional[RepData]:
+    def process_skeleton(
+        self, skeleton: Skeleton3D
+    ) -> Tuple[Optional[RepData], Optional[int]]:
         """
         Process one frame through the full BiLSTM pipeline.
 
-        Returns RepData if a rep was just completed, otherwise None.
-        Returns None during the cold-start period (first ~30 frames).
+        Returns (rep_data, shallow_depth_class) — see BiLSTMRepCounter.update.
+        Returns (None, None) during the cold-start period (first ~30 frames).
         """
         if self._model is None:
             self._load_model()
@@ -57,7 +59,7 @@ class BiLSTMInference:
         sequence = self._buffer.push(features)
 
         if sequence is None:
-            return None  # cold-start
+            return None, None  # cold-start
 
         with torch.no_grad():
             x = torch.tensor(sequence, dtype=torch.float32).unsqueeze(0).to(self._device)

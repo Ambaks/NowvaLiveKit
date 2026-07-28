@@ -20,6 +20,17 @@ class DepthCategory:
     BELOW_PARALLEL = "below_parallel"
 
 
+# BiLSTM depth class (0-4) → depth category. Used when the classifier, not
+# the knee angle, is the authority on whether a rep was deep enough.
+DEPTH_CLASS_TO_CATEGORY = {
+    0: DepthCategory.QUARTER,
+    1: DepthCategory.QUARTER,
+    2: DepthCategory.HALF,
+    3: DepthCategory.PARALLEL,
+    4: DepthCategory.BELOW_PARALLEL,
+}
+
+
 class DepthRule(FaultRule):
     """
     Rule for evaluating squat depth.
@@ -127,6 +138,43 @@ class DepthRule(FaultRule):
                 )
 
         return None
+
+    def evaluate_depth_class(
+        self,
+        max_depth_class: int,
+        angles: JointAngles,
+        rep_number: int = 0,
+        max_knee_flexion: float = 0.0,
+    ) -> Optional[FaultEvent]:
+        """
+        Evaluate depth from a BiLSTM depth class rather than a knee angle.
+
+        Used for shallow reps, where the classifier already rejected the rep
+        for depth — deriving the fault from the same signal keeps the cue and
+        the rep count from ever disagreeing.
+        """
+        category = DEPTH_CLASS_TO_CATEGORY.get(max_depth_class, DepthCategory.QUARTER)
+
+        if category not in (DepthCategory.QUARTER, DepthCategory.HALF):
+            return None
+
+        severity = (
+            FaultSeverity.MODERATE if category == DepthCategory.QUARTER
+            else FaultSeverity.MILD
+        )
+        return self._create_fault_event(
+            severity=severity,
+            severity_score=2.0 if category == DepthCategory.QUARTER else 1.0,
+            message=FAULT_MESSAGES[FaultType.DEPTH][category],
+            angles=angles,
+            rep_number=rep_number,
+            details={
+                "max_knee_flexion": max_knee_flexion,
+                "max_depth_class": max_depth_class,
+                "category": category,
+                "shallow_rep": True,
+            },
+        )
 
     def evaluate_max_depth(
         self,

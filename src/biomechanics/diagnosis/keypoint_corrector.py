@@ -4,12 +4,15 @@ Applies tier-1 (cue-correctable) fixes using the same delta-FK approach
 as the viewer's bottomUpBuild / deformLowerBody JS functions. Stance width
 and toe-out changes propagate identically to the sandbox sliders.
 
-Joint indices (COCO 19-keypoint):
+Joint indices (COCO 21-keypoint):
     0=nose, 1=L_eye, 2=R_eye, 3=L_ear, 4=R_ear,
     5=L_shoulder, 6=R_shoulder, 7=L_elbow, 8=R_elbow,
     9=L_wrist, 10=R_wrist, 11=L_hip, 12=R_hip,
     13=L_knee, 14=R_knee, 15=L_ankle, 16=R_ankle,
-    17=L_foot_index, 18=R_foot_index
+    17=L_foot_index, 18=R_foot_index, 19=L_heel, 20=R_heel
+
+Heels are optional: poses captured before heel tracking are 19 keypoints
+wide and every heel-aware step below degrades to toe-only on those.
 """
 
 from __future__ import annotations
@@ -25,6 +28,23 @@ HIP_L, HIP_R = 11, 12
 KNEE_L, KNEE_R = 13, 14
 ANKLE_L, ANKLE_R = 15, 16
 FOOT_L, FOOT_R = 17, 18
+HEEL_L, HEEL_R = 19, 20
+
+
+def _has_heels(kpts: np.ndarray) -> bool:
+    return kpts.shape[0] > HEEL_R
+
+
+def _lower_body_indices(kpts: np.ndarray) -> range:
+    """Hips through the last foot keypoint — everything at or below the pelvis."""
+    return range(HIP_L, kpts.shape[0])
+
+
+def _ground_contact_indices(kpts: np.ndarray) -> list[int]:
+    """Foot keypoints that rest on the floor: toes, plus heels when tracked."""
+    if _has_heels(kpts):
+        return [FOOT_L, FOOT_R, HEEL_L, HEEL_R]
+    return [FOOT_L, FOOT_R]
 
 SEGMENT_MASS_FRAC = {
     "head": 0.081,
@@ -47,8 +67,8 @@ SEGMENT_JOINTS: dict[str, tuple[int, int]] = {
 # so a single forward pass rebuilds every position. The root is the pelvis
 # midpoint, which is not a keypoint — the hips hang off it.
 KINEMATIC_BONES: list[tuple[int, int]] = [
-    (HIP_L, KNEE_L), (KNEE_L, ANKLE_L), (ANKLE_L, FOOT_L),
-    (HIP_R, KNEE_R), (KNEE_R, ANKLE_R), (ANKLE_R, FOOT_R),
+    (HIP_L, KNEE_L), (KNEE_L, ANKLE_L), (ANKLE_L, FOOT_L), (ANKLE_L, HEEL_L),
+    (HIP_R, KNEE_R), (KNEE_R, ANKLE_R), (ANKLE_R, FOOT_R), (ANKLE_R, HEEL_R),
     (HIP_L, 5), (HIP_R, 6),
     (5, 7), (7, 9),
     (6, 8), (8, 10),
@@ -176,11 +196,11 @@ def bottom_up_build(
 ) -> np.ndarray | None:
     """Python port of the viewer's bottomUpBuild JS function.
 
-    Rebuilds lower body (11-18) bottom-up from grounded feet using captured
+    Rebuilds the lower body bottom-up from grounded feet using captured
     bone vectors, overriding stance / toe-out / dorsiflexion. Hips fall out
     of leg geometry (rigid pelvis reconciled by averaging).
 
-    Returns (19, 3) array or None if degenerate.
+    Returns an array the same width as `captured`, or None if degenerate.
     """
     for idx in [HIP_L, HIP_R, KNEE_L, KNEE_R, ANKLE_L, ANKLE_R]:
         if np.all(captured[idx] == 0):
@@ -207,9 +227,16 @@ def bottom_up_build(
 
     span_scale = stance_width / max(baseline_stance_width, 1e-9)
 
+    heels = _has_heels(captured)
     sides = [
-        {"a_idx": ANKLE_L, "k_idx": KNEE_L, "h_idx": HIP_L, "t_idx": FOOT_L, "sign": -1.0},
-        {"a_idx": ANKLE_R, "k_idx": KNEE_R, "h_idx": HIP_R, "t_idx": FOOT_R, "sign": 1.0},
+        {
+            "a_idx": ANKLE_L, "k_idx": KNEE_L, "h_idx": HIP_L, "sign": -1.0,
+            "foot_indices": [FOOT_L, HEEL_L] if heels else [FOOT_L],
+        },
+        {
+            "a_idx": ANKLE_R, "k_idx": KNEE_R, "h_idx": HIP_R, "sign": 1.0,
+            "foot_indices": [FOOT_R, HEEL_R] if heels else [FOOT_R],
+        },
     ]
 
     hip_estimates = []
@@ -217,7 +244,6 @@ def bottom_up_build(
         a_idx = side["a_idx"]
         k_idx = side["k_idx"]
         h_idx = side["h_idx"]
-        t_idx = side["t_idx"]
         sign = side["sign"]
 
         a0 = captured[a_idx]
@@ -248,11 +274,12 @@ def bottom_up_build(
         out[a_idx] = new_ankle
         out[k_idx] = new_knee
 
-        # Foot vector yawed with the leg
-        t0 = captured[t_idx]
-        foot_vec = t0 - a0
-        foot_vec = rotate_y(foot_vec, sign * toe_out_delta_rad)
-        out[t_idx] = new_ankle + foot_vec
+        # Foot vectors yawed with the leg. The heel rotates about the ankle
+        # with the toe, so toe-out swings the whole foot rather than pivoting
+        # it around a fixed heel.
+        for foot_idx in side["foot_indices"]:
+            foot_vec = rotate_y(captured[foot_idx] - a0, sign * toe_out_delta_rad)
+            out[foot_idx] = new_ankle + foot_vec
 
     # 5. Rigid pelvis reconciliation: hip-mid = avg estimate, keep captured half-vector
     hip_mid = (hip_estimates[0] + hip_estimates[1]) / 2.0
@@ -263,12 +290,13 @@ def bottom_up_build(
     # 6. Re-ground guard
     min_ankle_y = min(out[ANKLE_L][1], out[ANKLE_R][1])
     if min_ankle_y < 0:
-        for idx in range(HIP_L, FOOT_R + 1):
+        for idx in _lower_body_indices(out):
             out[idx][1] -= min_ankle_y
 
-    # 7. Project feet to ground plane
-    out[FOOT_L][1] = 0.0
-    out[FOOT_R][1] = 0.0
+    # 7. Project feet to ground plane. Both contact points go down, so the
+    # foot rests flat instead of balancing on the toe.
+    for idx in _ground_contact_indices(out):
+        out[idx][1] = 0.0
 
     return out
 
@@ -590,8 +618,8 @@ class KeypointCorrector:
         if base is None or mod is None:
             return
 
-        # Apply delta to lower body (indices 11-18)
-        for idx in range(HIP_L, FOOT_R + 1):
+        # Apply delta to lower body (hips through feet)
+        for idx in _lower_body_indices(kpts):
             delta_vec = mod[idx] - base[idx]
             kpts[idx] += delta_vec
 
@@ -818,7 +846,7 @@ class KeypointCorrector:
                 )
                 if base is None or mod is None:
                     break
-                for idx in range(HIP_L, FOOT_R + 1):
+                for idx in _lower_body_indices(kpts):
                     trial[idx] = captured[idx] + (mod[idx] - base[idx])
                 old_hip_mid = (captured[HIP_L] + captured[HIP_R]) / 2.0
                 new_hip_mid = (trial[HIP_L] + trial[HIP_R]) / 2.0
@@ -940,8 +968,8 @@ class KeypointCorrector:
         min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
         if min_ankle_y < 0:
             kpts[:, 1] -= min_ankle_y
-        kpts[FOOT_L][1] = 0.0
-        kpts[FOOT_R][1] = 0.0
+        for idx in _ground_contact_indices(kpts):
+            kpts[idx][1] = 0.0
 
     def _enforce_symmetry(
         self,
@@ -964,7 +992,10 @@ class KeypointCorrector:
         lat_unit = hip_lateral / lat_len
 
         # Symmetrize ankles and feet: mirror lateral, average Y
-        for l_idx, r_idx in [(ANKLE_L, ANKLE_R), (FOOT_L, FOOT_R)]:
+        foot_pairs = [(ANKLE_L, ANKLE_R), (FOOT_L, FOOT_R)]
+        if _has_heels(kpts):
+            foot_pairs.append((HEEL_L, HEEL_R))
+        for l_idx, r_idx in foot_pairs:
             mid = (kpts[l_idx] + kpts[r_idx]) / 2.0
             half_vec = (kpts[r_idx] - kpts[l_idx]) / 2.0
             lateral_component = abs(np.dot(half_vec, lat_unit))
@@ -992,6 +1023,9 @@ class KeypointCorrector:
             foot_l, foot_r = _equalize_lengths(
                 kpts[FOOT_L] - kpts[ANKLE_L], kpts[FOOT_R] - kpts[ANKLE_R],
             )
+            heel_l, heel_r = _equalize_lengths(
+                kpts[HEEL_L] - kpts[ANKLE_L], kpts[HEEL_R] - kpts[ANKLE_R],
+            ) if _has_heels(kpts) else (None, None)
         else:
             shin_l, shin_r = _mirror_average(
                 kpts[KNEE_L] - kpts[ANKLE_L], kpts[KNEE_R] - kpts[ANKLE_R],
@@ -1004,6 +1038,10 @@ class KeypointCorrector:
                 kpts[FOOT_L] - kpts[ANKLE_L], kpts[FOOT_R] - kpts[ANKLE_R],
                 lat_unit,
             )
+            heel_l, heel_r = _mirror_average(
+                kpts[HEEL_L] - kpts[ANKLE_L], kpts[HEEL_R] - kpts[ANKLE_R],
+                lat_unit,
+            ) if _has_heels(kpts) else (None, None)
 
         # Cap dorsiflexion per side before rebuild. Each shin points upward
         # (knee - ankle), so Y is positive when vertical.
@@ -1019,6 +1057,9 @@ class KeypointCorrector:
         synthetic[ANKLE_R] = kpts[ANKLE_R].copy()
         synthetic[FOOT_L] = kpts[ANKLE_L] + foot_l
         synthetic[FOOT_R] = kpts[ANKLE_R] + foot_r
+        if heel_l is not None:
+            synthetic[HEEL_L] = kpts[ANKLE_L] + heel_l
+            synthetic[HEEL_R] = kpts[ANKLE_R] + heel_r
         synthetic[KNEE_L] = kpts[ANKLE_L] + shin_l
         synthetic[KNEE_R] = kpts[ANKLE_R] + shin_r
         synthetic[HIP_L] = synthetic[KNEE_L] + thigh_l
@@ -1041,7 +1082,7 @@ class KeypointCorrector:
         new_hip_mid = (result[HIP_L] + result[HIP_R]) / 2.0
         pelvis_shift = new_hip_mid - old_hip_mid
 
-        for idx in range(HIP_L, FOOT_R + 1):
+        for idx in _lower_body_indices(kpts):
             kpts[idx] = result[idx]
 
         for idx in UPPER_BODY_INDICES:
@@ -1051,8 +1092,8 @@ class KeypointCorrector:
         min_ankle_y = min(kpts[ANKLE_L][1], kpts[ANKLE_R][1])
         if min_ankle_y < 0:
             kpts[:, 1] -= min_ankle_y
-        kpts[FOOT_L][1] = 0.0
-        kpts[FOOT_R][1] = 0.0
+        for idx in _ground_contact_indices(kpts):
+            kpts[idx][1] = 0.0
 
 
 def slerp_unit(from_unit: np.ndarray, to_unit: np.ndarray, weight: float) -> np.ndarray:
@@ -1100,6 +1141,8 @@ def _interpolate_pose(
         )
 
     for parent, child in KINEMATIC_BONES:
+        if child >= observed.shape[0]:
+            continue
         out[child] = out[parent] + _interpolate_segment(
             observed[child] - observed[parent],
             corrected[child] - corrected[parent],

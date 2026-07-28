@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #141413;
+    --surface: #1e1e1d;
+    --surface-2: #262625;
+    --border: #33322f;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --muted: #8a897f;
+    --accent: #3987e5;
+    --left: #3987e5;
+    --right: #e66767;
+    --kasr: #6fbf8f;
+    --mild: #c98500;
+    --moderate: #d95926;
+    --severe: #e6484d;
+    --good: #6fbf8f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 16px 20px 60px;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  header h1 { font-size: 17px; font-weight: 650; }
+  header .meta { color: var(--muted); font-size: 12.5px; }
+  .chip {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    font-size: 11.5px; border: 1px solid var(--border); color: var(--text-2);
+  }
+  .chip.accent { color: var(--accent); border-color: var(--accent); }
+  .chip.bad { color: var(--severe); border-color: var(--severe); }
+  .chip.warn { color: var(--mild); border-color: var(--mild); }
+  .chip.good { color: var(--good); border-color: var(--good); }
+
+  #controls {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 12px; margin-bottom: 12px;
+    position: sticky; top: 8px; z-index: 5;
+  }
+  button {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 4px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  select, label { font-size: 12.5px; color: var(--text-2); }
+  select {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 6px;
+  }
+  #readout { color: var(--text-2); font-size: 12.5px; min-width: 160px; }
+  #scrub { flex: 1 1 240px; accent-color: var(--accent); height: 22px; }
+  .kbd-hint { color: var(--muted); font-size: 11px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; overflow: hidden;
+  }
+  .card h2 {
+    font-size: 12px; font-weight: 650; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--muted); margin-bottom: 9px;
+  }
+  .card h2 .sub { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
+
+  #top { display: grid; gap: 12px; grid-template-columns: minmax(340px, 1.15fr) minmax(280px, 1fr); margin-bottom: 12px; }
+  @media (max-width: 900px) { #top { grid-template-columns: 1fr; } }
+  #vid { width: 100%; display: block; border-radius: 8px; background: #000; }
+  #no-video { color: var(--muted); font-size: 12.5px; padding: 20px 0; text-align: center; }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 12.5px; align-items: baseline; }
+  .kv dt { color: var(--muted); }
+  .kv dd { color: var(--text-2); text-align: right; }
+  .kv dd.big { font-size: 15px; font-weight: 600; color: var(--text); }
+  .kv dd.left { color: var(--left); }
+  .kv dd.right { color: var(--right); }
+  .sep { height: 1px; background: var(--border); margin: 9px 0; grid-column: 1 / -1; }
+
+  .chart-wrap { position: relative; }
+  canvas { display: block; width: 100%; cursor: crosshair; }
+  #charts { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); margin-bottom: 12px; }
+  #main-chart-card { margin-bottom: 12px; }
+  .legend { display: flex; gap: 13px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-2); margin-bottom: 5px; }
+  .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: baseline; }
+  .legend .dash { display: inline-block; width: 12px; height: 0; border-top: 2px dashed; margin-right: 5px; vertical-align: middle; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 4px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 550; font-size: 11.5px; position: sticky; top: 0; background: var(--surface); }
+  th:first-child, td:first-child { text-align: left; }
+  td { color: var(--text-2); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr.active { background: #2f2f4a; }
+  .sev-mild { color: var(--mild); font-weight: 600; }
+  .sev-moderate { color: var(--moderate); font-weight: 600; }
+  .sev-severe { color: var(--severe); font-weight: 600; }
+  .scroll-y { max-height: 340px; overflow-y: auto; }
+  .scroll-x { overflow-x: auto; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  td.msg { text-align: left; color: var(--muted); max-width: 620px; overflow: hidden; text-overflow: ellipsis; }
+  #ipc-card .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  #tooltip {
+    position: fixed; pointer-events: none; display: none; z-index: 10;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 10px; font-size: 12px; color: var(--text-2); box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  }
+  #tooltip .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  pre { font-size: 11.5px; color: var(--text-2); overflow-x: auto; padding: 8px 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <span class="meta" id="hdr-meta"></span>
+  <span id="hdr-chips"></span>
+</header>
+
+<div id="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-back">−1</button>
+  <button id="btn-fwd">+1</button>
+  <span id="readout" class="num"></span>
+  <input type="range" id="scrub" min="0" value="0" step="1">
+  <button id="btn-prev-fault">◀ fault</button>
+  <button id="btn-next-fault">fault ▶</button>
+  <label>Speed <select id="speed">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+  </select></label>
+  <span class="kbd-hint">space play · ←/→ step · shift+←/→ ±10 · f next fault</span>
+</div>
+
+<section id="top">
+  <div class="card">
+    <h2>Preview recording <span class="sub" id="video-sub"></span></h2>
+    <video id="vid" muted playsinline preload="auto"></video>
+    <div id="no-video" hidden>No video was recorded for this session.</div>
+  </div>
+  <div class="card">
+    <h2>Frame readout</h2>
+    <div id="readout-body"></div>
+  </div>
+</section>
+
+<section class="card" id="main-chart-card">
+  <h2>Knee valgus vs fault thresholds <span class="sub" id="valgus-sub"></span></h2>
+  <div class="legend" id="main-legend"></div>
+  <div class="chart-wrap"><canvas id="chart-valgus" height="300"></canvas></div>
+</section>
+
+<section id="charts"></section>
+
+<section class="card" id="faults-card" style="margin-bottom:12px">
+  <h2>Fault events <span class="sub">— click a row to jump the video there</span></h2>
+  <div class="scroll-y scroll-x"><table id="faults-table"></table></div>
+</section>
+
+<section class="card" id="ipc-card">
+  <h2>IPC messages <span class="sub" id="ipc-sub"></span></h2>
+  <div class="filters">
+    <label><input type="checkbox" id="ipc-knee-only" checked> knee-related only</label>
+    <label>Type <select id="ipc-type"><option value="">all</option></select></label>
+    <label><input type="checkbox" id="ipc-follow" checked> follow playhead</label>
+    <span class="kbd-hint" id="ipc-count"></span>
+  </div>
+  <div class="scroll-y scroll-x"><table id="ipc-table"></table></div>
+  <details><summary>Selected message payload</summary><pre id="ipc-payload">Select a row above.</pre></details>
+</section>
+
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+const D = __DATA_JSON__;
+const S = D.series;
+const N = D.n_frames;
+const LAST = N - 1;
+const FPS = D.video_fps;
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+
+const COLORS = {
+  left: "#3987e5", right: "#e66767", kasr: "#6fbf8f", grid: "#33322f",
+  muted: "#8a897f", text: "#c3c2b7", cursor: "#ffffff",
+  mild: "#c98500", moderate: "#d95926", severe: "#e6484d",
+  hipL: "#9085e9", hipR: "#d55181",
+};
+const SEV_COLOR = { mild: COLORS.mild, moderate: COLORS.moderate, severe: COLORS.severe };
+
+const video = document.getElementById("vid");
+if (D.has_video) {
+  video.src = "data:video/mp4;base64,__VIDEO_B64__";
+} else {
+  video.hidden = true;
+  document.getElementById("no-video").hidden = false;
+}
+
+// ---- header ----
+document.getElementById("hdr-meta").textContent =
+  `${D.recorded_at} · ${D.exercise} · ${N} frames · ${D.duration_s}s @ ${D.measured_fps} fps`;
+document.getElementById("hdr-chips").innerHTML =
+  `<span class="chip accent">${D.mode}</span> ` +
+  `<span class="chip">${D.faults.filter(f => f.knee).length} knee faults</span>` +
+  (D.ipc_overflow ? ` <span class="chip warn">${D.ipc_overflow} IPC msgs dropped (cap)</span>` : "");
+document.getElementById("video-sub").textContent =
+  D.has_video ? `— ${D.measured_fps} fps, scrub with the timeline or charts` : "";
+document.getElementById("valgus-sub").textContent =
+  D.multi_camera
+    ? "— 3D Grood-Suntay abduction, positive = knee medial (valgus)"
+    : "— 2D frontal-plane projection angle, positive = knee medial (valgus)";
+
+// ---- threshold step lookup ----
+// Thresholds are re-read during the run because anthropometric scaling
+// rewrites them, so they are a step function of frame index, not constants.
+function buildThresholdSteps(kind) {
+  const steps = D.thresholds.map(h => ({ i: h.i, v: h[kind] }));
+  if (!steps.length) return null;
+  const out = new Array(N);
+  let si = 0, cur = steps[0].v;
+  for (let i = 0; i < N; i++) {
+    while (si < steps.length && steps[si].i <= i) { cur = steps[si].v; si++; }
+    out[i] = cur;
+  }
+  return out;
+}
+const THRESH_PRIMARY = buildThresholdSteps("primary");
+const THRESH_FALLBACK = buildThresholdSteps("fallback");
+
+// Which metric the rule actually judges on this frame: the primary valgus
+// number, or the hip-adduction fallback when foot confidence is too low.
+function usesFallback(i) {
+  const l = S.fcl[i], r = S.fcr[i];
+  if (l === null || r === null) return null;
+  return Math.min(l, r) < D.foot_confidence_threshold;
+}
+// The rule only evaluates at the bottom of a rep.
+function ruleEligible(i) { return S.phase[i] === "bottom"; }
+
+// After firing, the rule stays silent for a cooldown measured in *pipeline*
+// frame indices, so a high valgus reading can be real yet report nothing.
+function cooldownRemaining(i) {
+  const now = S.fi[i];
+  if (now === null || now === undefined) return 0;
+  let last = null;
+  for (const f of D.faults) {
+    if (!f.knee) continue;
+    if (f.frame_index < now) last = f.frame_index; else break;
+  }
+  if (last === null) return 0;
+  return Math.max(0, D.fault_cooldown_frames - (now - last));
+}
+
+const faultsByFrame = new Map();
+D.faults.forEach((f, idx) => {
+  if (!faultsByFrame.has(f.i)) faultsByFrame.set(f.i, []);
+  faultsByFrame.get(f.i).push({ ...f, idx });
+});
+const kneeFaultFrames = D.faults.filter(f => f.knee).map(f => f.i).sort((a, b) => a - b);
+
+// ---- generic canvas chart ----
+function makeChart(canvas, cfg) {
+  const ctx = canvas.getContext("2d");
+  const M = { l: 46, r: cfg.rightPad || 14, t: 12, b: 22 };
+  let W = 0, H = canvas.height;
+  let lo = 0, hi = 1;
+
+  function computeRange() {
+    const vals = [];
+    for (const s of cfg.series) {
+      for (let i = 0; i < N; i++) { const v = S[s.key][i]; if (v !== null && v !== undefined) vals.push(v); }
+    }
+    if (cfg.thresholds) {
+      const t = cfg.thresholds === "primary" ? THRESH_PRIMARY : THRESH_FALLBACK;
+      if (t) for (let i = 0; i < N; i += 20) { vals.push(t[i].severe * 1.1, cfg.mirror ? -t[i].severe * 1.1 : 0); }
+    }
+    if (cfg.refLines) for (const r of cfg.refLines) vals.push(r.value);
+    if (!vals.length) { lo = 0; hi = 1; return; }
+    lo = Math.min(...vals); hi = Math.max(...vals);
+    if (cfg.fixed) { lo = cfg.fixed[0]; hi = cfg.fixed[1]; }
+    const pad = (hi - lo) * 0.08 || 1;
+    lo -= pad; hi += pad;
+  }
+
+  const fx = i => M.l + (W - M.l - M.r) * (LAST ? i / LAST : 0);
+  const fy = v => M.t + (H - M.t - M.b) * (1 - (v - lo) / (hi - lo || 1));
+  const frameAtX = x => Math.max(0, Math.min(LAST, Math.round((x - M.l) / (W - M.l - M.r) * LAST)));
+
+  function size() {
+    W = canvas.parentElement.clientWidth;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  function stepLine(arr, pick, color, dash) {
+    ctx.save();
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.setLineDash(dash || [5, 4]);
+    ctx.beginPath();
+    let prev = null;
+    for (let i = 0; i < N; i++) {
+      const v = pick(arr[i]);
+      const y = fy(v);
+      if (prev === null) ctx.moveTo(fx(i), y);
+      else if (v !== prev) { ctx.lineTo(fx(i), fy(prev)); ctx.lineTo(fx(i), y); }
+      else ctx.lineTo(fx(i), y);
+      prev = v;
+    }
+    ctx.stroke(); ctx.restore();
+  }
+
+  function draw(cur) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.font = "10.5px -apple-system, sans-serif";
+
+    // shaded regions: rule-eligible frames (phase == bottom) and fallback-metric frames
+    if (cfg.shadeEligible) {
+      for (let i = 0; i < N; i++) {
+        if (!ruleEligible(i)) continue;
+        let j = i; while (j < N && ruleEligible(j)) j++;
+        ctx.fillStyle = "rgba(111,191,143,0.09)";
+        ctx.fillRect(fx(i), M.t, Math.max(1, fx(j) - fx(i)), H - M.t - M.b);
+        i = j;
+      }
+      for (let i = 0; i < N; i++) {
+        if (usesFallback(i) !== true) continue;
+        let j = i; while (j < N && usesFallback(j) === true) j++;
+        ctx.fillStyle = "rgba(217,89,38,0.11)";
+        ctx.fillRect(fx(i), M.t, Math.max(1, fx(j) - fx(i)), H - M.t - M.b);
+        i = j;
+      }
+    }
+
+    // grid + y labels
+    ctx.strokeStyle = COLORS.grid; ctx.fillStyle = COLORS.muted; ctx.lineWidth = 1;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let k = 0; k <= 4; k++) {
+      const v = lo + (hi - lo) * k / 4, y = fy(v);
+      ctx.beginPath(); ctx.moveTo(M.l, y); ctx.lineTo(W - M.r, y); ctx.stroke();
+      ctx.fillText(v.toFixed(cfg.digits ?? 1), M.l - 5, y);
+    }
+    // zero line
+    if (lo < 0 && hi > 0) {
+      ctx.strokeStyle = "#5a5952"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(M.l, fy(0)); ctx.lineTo(W - M.r, fy(0)); ctx.stroke();
+    }
+    // x labels in seconds
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = COLORS.muted;
+    const stepF = Math.max(1, Math.round(N / 10));
+    for (let i = 0; i <= LAST; i += stepF) {
+      ctx.fillText((S.t[i] ?? 0).toFixed(0) + "s", fx(i), H - M.b + 4);
+    }
+
+    // rep boundaries
+    ctx.strokeStyle = "rgba(111,191,143,0.5)"; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (const r of D.reps) {
+      ctx.beginPath(); ctx.moveTo(fx(r.i), M.t); ctx.lineTo(fx(r.i), H - M.b); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // threshold step lines
+    if (cfg.thresholds) {
+      const t = cfg.thresholds === "primary" ? THRESH_PRIMARY : THRESH_FALLBACK;
+      if (t) {
+        for (const level of ["mild", "moderate", "severe"]) {
+          stepLine(t, v => v[level], SEV_COLOR[level]);
+          if (cfg.mirror) stepLine(t, v => -v[level], SEV_COLOR[level], [2, 5]);
+          const y = fy(t[Math.min(LAST, Math.max(0, cur))][level]);
+          ctx.fillStyle = SEV_COLOR[level]; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+          ctx.fillText(level, W - M.r + 2, y);
+        }
+      }
+    }
+    // plain reference lines
+    for (const r of (cfg.refLines || [])) {
+      ctx.save();
+      ctx.strokeStyle = r.color; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(M.l, fy(r.value)); ctx.lineTo(W - M.r, fy(r.value)); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = r.color; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(r.label, W - M.r + 2, fy(r.value));
+    }
+
+    // data series
+    for (const s of cfg.series) {
+      ctx.strokeStyle = s.color; ctx.lineWidth = s.width || 1.7;
+      ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i < N; i++) {
+        const v = S[s.key][i];
+        if (v === null || v === undefined) { pen = false; continue; }
+        const x = fx(i), y = fy(v);
+        if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; }
+      }
+      ctx.stroke();
+    }
+
+    // fault markers
+    if (cfg.showFaults) {
+      for (const [frame, list] of faultsByFrame) {
+        for (const f of list) {
+          if (cfg.kneeFaultsOnly && !f.knee) continue;
+          const x = fx(frame);
+          const v = f.details && f.details.max_valgus;
+          const y = (typeof v === "number" && v >= lo && v <= hi) ? fy(v) : M.t + 8;
+          ctx.fillStyle = SEV_COLOR[f.severity] || COLORS.muted;
+          ctx.beginPath();
+          ctx.moveTo(x, y - 7); ctx.lineTo(x - 5, y - 14); ctx.lineTo(x + 5, y - 14);
+          ctx.closePath(); ctx.fill();
+        }
+      }
+    }
+
+    // cursor
+    ctx.strokeStyle = COLORS.cursor; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(fx(cur), M.t); ctx.lineTo(fx(cur), H - M.b); ctx.stroke();
+  }
+
+  // interaction
+  const tooltip = document.getElementById("tooltip");
+  let dragging = false;
+  canvas.addEventListener("mousedown", e => { dragging = true; seek(frameAtX(e.offsetX)); });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  canvas.addEventListener("mousemove", e => {
+    const i = frameAtX(e.offsetX);
+    if (dragging) seek(i);
+    const rows = cfg.series.map(s => {
+      const v = S[s.key][i];
+      return `<div><span class="dot" style="background:${s.color}"></span>${s.label}: ` +
+        `<b>${v === null || v === undefined ? "—" : v.toFixed(cfg.digits ?? 1)}</b></div>`;
+    }).join("");
+    const fl = (faultsByFrame.get(i) || []).map(f =>
+      `<div style="color:${SEV_COLOR[f.severity]}">⚑ ${f.fault_type} (${f.severity})</div>`).join("");
+    tooltip.innerHTML = `<div class="num"><b>f ${i}</b> · ${(S.t[i] ?? 0).toFixed(2)}s · ` +
+      `${S.phase[i]} · rep ${S.rep[i]}</div>${rows}${fl}`;
+    tooltip.style.display = "block";
+    tooltip.style.left = Math.min(window.innerWidth - 210, e.clientX + 14) + "px";
+    tooltip.style.top = (e.clientY + 14) + "px";
+  });
+  canvas.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+
+  computeRange(); size();
+  return { draw, size, computeRange };
+}
+
+// ---- chart definitions ----
+const charts = [];
+
+charts.push(makeChart(document.getElementById("chart-valgus"), {
+  series: [
+    { key: "vl", label: "Left valgus", color: COLORS.left, width: 1.9 },
+    { key: "vr", label: "Right valgus", color: COLORS.right, width: 1.9 },
+  ],
+  thresholds: "primary", mirror: true, showFaults: true, kneeFaultsOnly: true,
+  shadeEligible: true, rightPad: 58, digits: 1,
+}));
+
+document.getElementById("main-legend").innerHTML = [
+  `<span><span class="dot" style="background:${COLORS.left}"></span>Left knee valgus</span>`,
+  `<span><span class="dot" style="background:${COLORS.right}"></span>Right knee valgus</span>`,
+  `<span><span class="dash" style="border-color:${COLORS.mild}"></span>mild</span>`,
+  `<span><span class="dash" style="border-color:${COLORS.moderate}"></span>moderate</span>`,
+  `<span><span class="dash" style="border-color:${COLORS.severe}"></span>severe</span>`,
+  `<span style="color:${COLORS.kasr}">▨ rule eligible (phase = bottom)</span>`,
+  `<span style="color:${COLORS.moderate}">▨ foot confidence low → hip-adduction fallback</span>`,
+  `<span>▼ knee fault fired</span>`,
+].join("");
+
+const SECONDARY = [
+  {
+    id: "chart-kasr", title: "Knee/ankle separation ratio",
+    sub: "— 1.0 = knees exactly over ankles, below 1.0 = knees inside",
+    cfg: {
+      series: [{ key: "kasr", label: "KASR", color: COLORS.kasr }],
+      refLines: [{ value: 1.0, color: COLORS.muted, label: "1.0" }], digits: 2,
+    },
+  },
+  {
+    id: "chart-footconf", title: "Foot confidence",
+    sub: "— below the line the rule switches to the hip-adduction fallback",
+    cfg: {
+      series: [
+        { key: "fcl", label: "Left", color: COLORS.left },
+        { key: "fcr", label: "Right", color: COLORS.right },
+      ],
+      refLines: [{ value: D.foot_confidence_threshold, color: COLORS.moderate, label: "fallback" }],
+      fixed: [0, 1], digits: 2, rightPad: 52,
+    },
+  },
+  {
+    id: "chart-adduction", title: "Hip adduction (fallback metric)",
+    sub: "— judged against its own always-3D-scale thresholds",
+    cfg: {
+      series: [
+        { key: "al", label: "Left", color: COLORS.hipL },
+        { key: "ar", label: "Right", color: COLORS.hipR },
+      ],
+      thresholds: "fallback", rightPad: 58, digits: 1,
+    },
+  },
+  {
+    id: "chart-kneeflex", title: "Knee flexion",
+    sub: "— depth context for the valgus trace",
+    cfg: {
+      series: [
+        { key: "kfl", label: "Left", color: COLORS.left },
+        { key: "kfr", label: "Right", color: COLORS.right },
+      ], digits: 0,
+    },
+  },
+];
+
+const chartsRoot = document.getElementById("charts");
+for (const spec of SECONDARY) {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<h2>${spec.title} <span class="sub">${spec.sub}</span></h2>` +
+    `<div class="chart-wrap"><canvas id="${spec.id}" height="180"></canvas></div>`;
+  chartsRoot.appendChild(card);
+  charts.push(makeChart(document.getElementById(spec.id), spec.cfg));
+}
+
+// ---- frame readout ----
+function fmt(v, digits = 1) {
+  return (v === null || v === undefined) ? "—" : v.toFixed(digits);
+}
+function severityOf(value, thresholds) {
+  if (value === null || thresholds === null) return null;
+  const a = Math.abs(value);
+  if (a >= thresholds.severe) return "severe";
+  if (a >= thresholds.moderate) return "moderate";
+  if (a >= thresholds.mild) return "mild";
+  return null;
+}
+function sevChip(sev) {
+  return sev ? `<span class="chip" style="color:${SEV_COLOR[sev]};border-color:${SEV_COLOR[sev]}">${sev}</span>`
+             : `<span class="chip good">under mild</span>`;
+}
+
+function updateReadout(i) {
+  const th = THRESH_PRIMARY ? THRESH_PRIMARY[i] : null;
+  const fb = THRESH_FALLBACK ? THRESH_FALLBACK[i] : null;
+  const fallback = usesFallback(i);
+  const judgedL = fallback ? S.al[i] : S.vl[i];
+  const judgedR = fallback ? S.ar[i] : S.vr[i];
+  const judgedTh = fallback ? fb : th;
+  const worst = (judgedL === null || judgedR === null) ? null
+    : (Math.abs(judgedL) >= Math.abs(judgedR) ? judgedL : judgedR);
+
+  const faults = faultsByFrame.get(i) || [];
+  const faultHtml = faults.length
+    ? faults.map(f => `<span class="chip" style="color:${SEV_COLOR[f.severity]};border-color:${SEV_COLOR[f.severity]}">` +
+        `${f.fault_type} · ${f.severity}</span>`).join(" ")
+    : `<span class="chip">none</span>`;
+
+  document.getElementById("readout-body").innerHTML = `<div class="kv">` +
+    `<dt>Time / frame</dt><dd class="num">${fmt(S.t[i], 2)}s · f ${i} · pipeline ${S.fi[i]}</dd>` +
+    `<dt>Phase / rep</dt><dd>${S.phase[i]} · rep ${S.rep[i]}${S.resting[i] ? " · resting" : ""}</dd>` +
+    `<dt>Readiness gate</dt><dd>${S.ready[i] ? '<span class="chip good">ready</span>' : '<span class="chip">not ready</span>'}</dd>` +
+    `<div class="sep"></div>` +
+    `<dt>Valgus L</dt><dd class="num big left">${fmt(S.vl[i])}°</dd>` +
+    `<dt>Valgus R</dt><dd class="num big right">${fmt(S.vr[i])}°</dd>` +
+    `<dt>KASR</dt><dd class="num">${fmt(S.kasr[i], 2)}</dd>` +
+    `<dt>Foot conf L / R</dt><dd class="num">${fmt(S.fcl[i], 2)} / ${fmt(S.fcr[i], 2)}</dd>` +
+    `<dt>Hip adduction L / R</dt><dd class="num">${fmt(S.al[i])}° / ${fmt(S.ar[i])}°</dd>` +
+    `<dt>Knee flexion L / R</dt><dd class="num">${fmt(S.kfl[i], 0)}° / ${fmt(S.kfr[i], 0)}°</dd>` +
+    `<dt>Hip rotation L / R</dt><dd class="num">${fmt(S.hrl[i])}° / ${fmt(S.hrr[i])}°</dd>` +
+    `<div class="sep"></div>` +
+    `<dt>Metric in use</dt><dd>${fallback === null ? "—" : fallback
+        ? '<span class="chip warn">hip adduction (fallback)</span>'
+        : '<span class="chip accent">valgus (primary)</span>'}</dd>` +
+    `<dt>Thresholds</dt><dd class="num">${judgedTh ? `${judgedTh.mild} / ${judgedTh.moderate} / ${judgedTh.severe}°` : "—"}</dd>` +
+    `<dt>Worst side now</dt><dd>${sevChip(severityOf(worst, judgedTh))} <span class="num">${fmt(worst)}°</span></dd>` +
+    `<dt>Rule can fire</dt><dd>${!ruleEligible(i)
+        ? `<span class="chip">no — phase is ${S.phase[i]}</span>`
+        : cooldownRemaining(i) > 0
+          ? `<span class="chip warn">no — ${cooldownRemaining(i)} frames of cooldown left</span>`
+          : '<span class="chip good">yes — at bottom, off cooldown</span>'}</dd>` +
+    `<dt>Fault this frame</dt><dd>${faultHtml}</dd>` +
+    `</div>`;
+}
+
+// ---- fault table ----
+(function buildFaultTable() {
+  const table = document.getElementById("faults-table");
+  if (!D.faults.length) {
+    table.innerHTML = `<tr><td style="color:var(--muted)">No faults fired during this run.</td></tr>`;
+    return;
+  }
+  let html = `<thead><tr><th>Time</th><th>Frame</th><th>Rep</th><th>Fault</th><th>Severity</th>` +
+    `<th>Score</th><th>Valgus L</th><th>Valgus R</th><th>Max</th><th>Side</th><th>Metric</th><th>Message</th></tr></thead><tbody>`;
+  D.faults.forEach((f, idx) => {
+    const d = f.details || {};
+    html += `<tr data-frame="${f.i}" data-idx="${idx}">` +
+      `<td class="num">${fmt(S.t[f.i], 2)}s</td><td class="num">${f.i}</td><td class="num">${f.rep}</td>` +
+      `<td>${f.fault_type}</td><td class="sev-${f.severity}">${f.severity}</td>` +
+      `<td class="num">${fmt(f.severity_score, 2)}</td>` +
+      `<td class="num">${fmt(d.knee_valgus_l)}</td><td class="num">${fmt(d.knee_valgus_r)}</td>` +
+      `<td class="num">${fmt(d.max_valgus)}</td><td>${d.affected_side ?? "—"}</td>` +
+      `<td>${d.metric_source ?? "—"}</td><td class="msg">${f.message}</td></tr>`;
+  });
+  table.innerHTML = html + `</tbody>`;
+  table.addEventListener("click", e => {
+    const row = e.target.closest("tr[data-frame]");
+    if (row) { video.pause(); seek(+row.dataset.frame); }
+  });
+})();
+
+// ---- IPC table ----
+const ipcTypes = [...new Set(D.ipc.map(m => m.type))].sort();
+const typeSelect = document.getElementById("ipc-type");
+for (const t of ipcTypes) {
+  const opt = document.createElement("option");
+  opt.value = t; opt.textContent = t;
+  typeSelect.appendChild(opt);
+}
+document.getElementById("ipc-sub").textContent =
+  `— ${D.ipc.length} captured, click a row to jump the video there`;
+
+let ipcVisible = [];
+function renderIPC() {
+  const kneeOnly = document.getElementById("ipc-knee-only").checked;
+  const type = typeSelect.value;
+  ipcVisible = D.ipc.filter(m => (!kneeOnly || m.knee) && (!type || m.type === type));
+  const table = document.getElementById("ipc-table");
+  let html = `<thead><tr><th>Time</th><th>Frame</th><th>Type</th><th>Knee</th><th>Payload</th></tr></thead><tbody>`;
+  ipcVisible.forEach((m, vi) => {
+    const preview = JSON.stringify(m.msg);
+    html += `<tr data-frame="${m.i}" data-vi="${vi}">` +
+      `<td class="num">${m.t.toFixed(2)}s</td><td class="num">${m.i}</td>` +
+      `<td class="mono">${m.type}</td><td>${m.knee ? "●" : ""}</td>` +
+      `<td class="msg mono">${preview.length > 160 ? preview.slice(0, 160) + "…" : preview}</td></tr>`;
+  });
+  table.innerHTML = html + `</tbody>`;
+  document.getElementById("ipc-count").textContent = `${ipcVisible.length} shown`;
+}
+document.getElementById("ipc-table").addEventListener("click", e => {
+  const row = e.target.closest("tr[data-frame]");
+  if (!row) return;
+  video.pause(); seek(+row.dataset.frame);
+  document.getElementById("ipc-payload").textContent =
+    JSON.stringify(ipcVisible[+row.dataset.vi].msg, null, 2);
+});
+document.getElementById("ipc-knee-only").addEventListener("change", renderIPC);
+typeSelect.addEventListener("change", renderIPC);
+renderIPC();
+
+function followIPC(i) {
+  if (!document.getElementById("ipc-follow").checked) return;
+  const rows = document.querySelectorAll("#ipc-table tbody tr");
+  let target = null;
+  for (const row of rows) {
+    if (+row.dataset.frame <= i) target = row; else break;
+  }
+  rows.forEach(r => r.classList.remove("active"));
+  if (target) {
+    target.classList.add("active");
+    const box = target.closest(".scroll-y");
+    const top = target.offsetTop - box.clientHeight / 2;
+    box.scrollTop = Math.max(0, top);
+  }
+}
+
+// ---- transport ----
+const scrub = document.getElementById("scrub");
+scrub.max = LAST;
+const btnPlay = document.getElementById("btn-play");
+const clampFrame = i => Math.max(0, Math.min(LAST, i));
+let manualFrame = 0;
+const curFrameOf = () =>
+  D.has_video ? clampFrame(Math.floor(video.currentTime * FPS)) : manualFrame;
+
+function seek(i) {
+  i = clampFrame(i);
+  manualFrame = i;
+  if (D.has_video) video.currentTime = (i + 0.5) / FPS;
+  else render(i);
+}
+btnPlay.addEventListener("click", () => {
+  if (!D.has_video) return;
+  video.paused ? video.play() : video.pause();
+});
+video.addEventListener("play", () => { btnPlay.textContent = "Pause"; });
+video.addEventListener("pause", () => { btnPlay.textContent = "Play"; });
+document.getElementById("btn-back").addEventListener("click", () => { video.pause(); seek(curFrameOf() - 1); });
+document.getElementById("btn-fwd").addEventListener("click", () => { video.pause(); seek(curFrameOf() + 1); });
+document.getElementById("speed").addEventListener("change", e => { video.playbackRate = +e.target.value; });
+scrub.addEventListener("input", () => { video.pause(); seek(+scrub.value); });
+
+function jumpFault(dir) {
+  const cur = curFrameOf();
+  const next = dir > 0
+    ? kneeFaultFrames.find(f => f > cur)
+    : [...kneeFaultFrames].reverse().find(f => f < cur);
+  if (next !== undefined) { video.pause(); seek(next); }
+}
+document.getElementById("btn-next-fault").addEventListener("click", () => jumpFault(1));
+document.getElementById("btn-prev-fault").addEventListener("click", () => jumpFault(-1));
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  const jump = e.shiftKey ? 10 : 1;
+  if (e.code === "Space") { e.preventDefault(); btnPlay.click(); }
+  else if (e.code === "ArrowLeft") { e.preventDefault(); video.pause(); seek(curFrameOf() - jump); }
+  else if (e.code === "ArrowRight") { e.preventDefault(); video.pause(); seek(curFrameOf() + jump); }
+  else if (e.code === "KeyF") { e.preventDefault(); jumpFault(e.shiftKey ? -1 : 1); }
+});
+
+// ---- render loop ----
+let lastFrame = -1;
+function render(i) {
+  scrub.value = i;
+  document.getElementById("readout").textContent =
+    `f ${i}/${LAST} · ${(S.t[i] ?? 0).toFixed(2)}s`;
+  updateReadout(i);
+  for (const c of charts) c.draw(i);
+  followIPC(i);
+}
+function tick() {
+  const i = curFrameOf();
+  if (i !== lastFrame) { lastFrame = i; render(i); }
+  requestAnimationFrame(tick);
+}
+window.addEventListener("resize", () => {
+  for (const c of charts) { c.size(); c.draw(lastFrame < 0 ? 0 : lastFrame); }
+});
+render(0);
+if (D.has_video) video.addEventListener("loadeddata", () => seek(0));
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

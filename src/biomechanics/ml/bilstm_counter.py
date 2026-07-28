@@ -4,10 +4,13 @@ BiLSTM-based Rep Counter (5-class depth classification)
 Converts per-frame depth class probabilities into rep counts using:
   1. Exponential moving average for smoothing (vector EMA over all classes)
   2. Two-state finite state machine (UP / DOWN) with configurable min_depth_class
+
+Descents that never reach min_depth_class are reported as shallow reps so the
+coaching layer can cue depth instead of silently dropping the movement.
 """
 
 from enum import Enum
-from typing import Optional
+from typing import Optional, Tuple
 import time as _time
 
 import numpy as np
@@ -17,6 +20,9 @@ from biomechanics.utils.types import RepData, DEPTH_CLASS_NAMES
 
 # Depth class required to enter DOWN during assessment (any descent counts).
 ASSESSMENT_MIN_DEPTH_CLASS = 1
+
+# Depth class meaning "standing" — the resting point of every rep.
+STANDING_DEPTH_CLASS = 0
 
 
 class BiLSTMCounterConfig(BaseModel):
@@ -41,6 +47,11 @@ class BiLSTMRepCounter:
         DOWN → UP   when argmax(smoothed_probs) == 0 (standing) AND
                     frames_in_down >= min_rep_frames
                     → rep counted, RepData returned with depth info
+
+    While in UP, a sustained descent that never reaches min_depth_class is
+    tracked separately and reported as a shallow rep when the lifter returns
+    to standing. Shallow reps are not counted — they exist so the coaching
+    layer can tell the lifter to go deeper.
     """
 
     def __init__(self, config: Optional[BiLSTMCounterConfig] = None):
@@ -57,6 +68,10 @@ class BiLSTMRepCounter:
         self._rep_start_time: float = 0.0
         self._rep_start_frame: int = 0
         self._assessment_mode: bool = False
+
+        # Shallow-descent tracking (UP state only)
+        self._shallow_frames: int = 0
+        self._shallow_max_class: int = 0
 
     def set_assessment_mode(self, enabled: bool) -> None:
         """Lower the DOWN-entry threshold so any descent counts as a rep."""
@@ -89,12 +104,16 @@ class BiLSTMRepCounter:
         raw_probs: np.ndarray,
         timestamp: float = 0.0,
         frame_index: int = 0,
-    ) -> Optional[RepData]:
+    ) -> Tuple[Optional[RepData], Optional[int]]:
         """
         Feed one frame's depth class probabilities (shape (num_classes,)).
 
-        Returns RepData when a rep completes (DOWN → UP transition
-        after sufficient frames), otherwise None.
+        Returns (rep_data, shallow_depth_class):
+            (RepData, None) when a rep completes (DOWN → UP after
+                sufficient frames).
+            (None, max_class) when a sustained descent returned to standing
+                without ever reaching min_depth_class — a shallow rep.
+            (None, None) otherwise.
         """
         # Vector EMA smoothing
         if self._first_update:
@@ -114,13 +133,28 @@ class BiLSTMRepCounter:
                 self._max_depth_seen = predicted_class
                 self._rep_start_time = timestamp or _time.time()
                 self._rep_start_frame = frame_index
+                self._reset_shallow_tracking()
+            elif predicted_class > STANDING_DEPTH_CLASS:
+                # Descending, but not deep enough to open a rep
+                self._shallow_frames += 1
+                self._shallow_max_class = max(self._shallow_max_class, predicted_class)
+            else:
+                # Back to standing — a long enough descent was a shallow rep
+                shallow_class = (
+                    self._shallow_max_class
+                    if self._shallow_frames >= self.config.min_rep_frames
+                    else None
+                )
+                self._reset_shallow_tracking()
+                if shallow_class is not None:
+                    return None, shallow_class
 
         elif self.state == BiLSTMCounterState.DOWN:
             self._frames_in_down += 1
             self._max_depth_seen = max(self._max_depth_seen, predicted_class)
 
             if (
-                predicted_class == 0
+                predicted_class == STANDING_DEPTH_CLASS
                 and self._frames_in_down >= self.config.min_rep_frames
             ):
                 self.rep_count += 1
@@ -137,9 +171,13 @@ class BiLSTMRepCounter:
                     depth_class=self._max_depth_seen,
                     depth_class_name=depth_name,
                     max_depth_class=self._max_depth_seen,
-                )
+                ), None
 
-        return None
+        return None, None
+
+    def _reset_shallow_tracking(self) -> None:
+        self._shallow_frames = 0
+        self._shallow_max_class = 0
 
     def reset(self) -> None:
         """Reset state for a new set/session."""
@@ -149,3 +187,4 @@ class BiLSTMRepCounter:
         self._first_update = True
         self._frames_in_down = 0
         self._max_depth_seen = 0
+        self._reset_shallow_tracking()

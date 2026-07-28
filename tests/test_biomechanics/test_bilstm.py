@@ -250,7 +250,7 @@ class TestBiLSTMRepCounter:
             counter.update(_one_hot(3))
 
         # Return to standing
-        result = counter.update(_one_hot(0))
+        result, _ = counter.update(_one_hot(0))
         assert result is not None
         assert isinstance(result, RepData)
         assert counter.rep_count == 1
@@ -269,7 +269,7 @@ class TestBiLSTMRepCounter:
         counter.update(_one_hot(4))
 
         # Return to standing
-        result = counter.update(_one_hot(0))
+        result, _ = counter.update(_one_hot(0))
         assert result is not None
         assert result.max_depth_class == 4
         assert result.depth_class_name == "Deep"
@@ -281,7 +281,7 @@ class TestBiLSTMRepCounter:
 
         counter.update(_one_hot(3))  # enter DOWN
         counter.update(_one_hot(3))  # 1 frame in DOWN
-        result = counter.update(_one_hot(0))  # try to exit
+        result, _ = counter.update(_one_hot(0))  # try to exit
 
         # min_frames not met — should stay in DOWN (0 doesn't cause transition)
         assert counter.rep_count == 0
@@ -309,7 +309,7 @@ class TestBiLSTMRepCounter:
 
         counter.update(_one_hot(1))
         counter.update(_one_hot(1))
-        result = counter.update(_one_hot(0))
+        result, _ = counter.update(_one_hot(0))
         assert result is not None
         assert counter.rep_count == 1
         assert result.depth_class == 1
@@ -329,7 +329,7 @@ class TestBiLSTMRepCounter:
         assert counter.state == BiLSTMCounterState.DOWN
         counter.update(_one_hot(4))
         counter.update(_one_hot(4))
-        result = counter.update(_one_hot(0))
+        result, _ = counter.update(_one_hot(0))
         assert result is not None
         assert counter.rep_count == 1
 
@@ -356,7 +356,7 @@ class TestBiLSTMRepCounter:
         assert counter._max_depth_seen == 4
         counter.update(_one_hot(3))  # back to parallel, max stays 4
         assert counter._max_depth_seen == 4
-        result = counter.update(_one_hot(0))
+        result, _ = counter.update(_one_hot(0))
         assert result is not None
         assert result.max_depth_class == 4
 
@@ -397,7 +397,7 @@ class TestBiLSTMRepCounter:
         counter.update(_one_hot(3), timestamp=1.0, frame_index=10)
         counter.update(_one_hot(4), timestamp=1.1, frame_index=11)
         counter.update(_one_hot(4), timestamp=1.2, frame_index=12)
-        result = counter.update(_one_hot(0), timestamp=1.3, frame_index=13)
+        result, _ = counter.update(_one_hot(0), timestamp=1.3, frame_index=13)
 
         assert result is not None
         assert result.rep_number == 1
@@ -408,6 +408,131 @@ class TestBiLSTMRepCounter:
         assert result.depth_class == 4
         assert result.depth_class_name == "Deep"
         assert result.max_depth_class == 4
+
+
+# ============================================================================
+# TestShallowRepDetection
+# ============================================================================
+
+class TestShallowRepDetection:
+    def test_quarter_squat_reports_shallow(self):
+        """A sustained quarter squat returning to standing is a shallow rep."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=3, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        for _ in range(4):
+            rep, shallow = counter.update(_one_hot(1))
+            assert rep is None
+            assert shallow is None
+
+        rep, shallow = counter.update(_one_hot(0))
+        assert rep is None
+        assert shallow == 1
+        assert counter.rep_count == 0
+
+    def test_half_squat_reports_max_class(self):
+        """Shallow rep reports the deepest class reached, not the last one."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=3, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        counter.update(_one_hot(1))
+        counter.update(_one_hot(2))
+        counter.update(_one_hot(2))
+        counter.update(_one_hot(1))
+        rep, shallow = counter.update(_one_hot(0))
+
+        assert rep is None
+        assert shallow == 2
+
+    def test_brief_dip_is_not_shallow_rep(self):
+        """A descent shorter than min_rep_frames is noise, not a rep attempt."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=12, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        counter.update(_one_hot(1))
+        counter.update(_one_hot(1))
+        rep, shallow = counter.update(_one_hot(0))
+
+        assert rep is None
+        assert shallow is None
+
+    def test_counted_rep_never_reports_shallow(self):
+        """Passing through shallow classes on the way down must not fire."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=2, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        shallow_events = []
+        for probs in [_one_hot(1)] * 5 + [_one_hot(2)] * 5 + [_one_hot(4)] * 5:
+            _, shallow = counter.update(probs)
+            shallow_events.append(shallow)
+
+        rep, shallow = counter.update(_one_hot(0))
+        shallow_events.append(shallow)
+
+        assert rep is not None
+        assert counter.rep_count == 1
+        assert all(s is None for s in shallow_events)
+
+    def test_shallow_then_deep_rep(self):
+        """A shallow attempt must not poison the rep that follows it."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=3, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        for _ in range(4):
+            counter.update(_one_hot(1))
+        _, shallow = counter.update(_one_hot(0))
+        assert shallow == 1
+
+        for _ in range(4):
+            counter.update(_one_hot(4))
+        rep, shallow = counter.update(_one_hot(0))
+
+        assert rep is not None
+        assert rep.max_depth_class == 4
+        assert shallow is None
+        assert counter.rep_count == 1
+
+    def test_consecutive_shallow_reps_all_report(self):
+        """Every shallow rep fires — the lifter needs a cue on each one."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=3, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        shallow_count = 0
+        for _ in range(4):
+            for _ in range(4):
+                counter.update(_one_hot(2))
+            _, shallow = counter.update(_one_hot(0))
+            if shallow is not None:
+                shallow_count += 1
+            counter.update(_one_hot(0))
+
+        assert shallow_count == 4
+        assert counter.rep_count == 0
+
+    def test_assessment_mode_has_no_shallow_reps(self):
+        """Assessment counts any descent, so nothing is rejected for depth."""
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=3, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+        counter.set_assessment_mode(True)
+
+        for _ in range(4):
+            counter.update(_one_hot(1))
+        rep, shallow = counter.update(_one_hot(0))
+
+        assert shallow is None
+        assert rep is not None
+        assert counter.rep_count == 1
+
+    def test_reset_clears_shallow_tracking(self):
+        config = BiLSTMCounterConfig(ema_alpha=1.0, min_rep_frames=3, min_depth_class=3)
+        counter = BiLSTMRepCounter(config)
+
+        for _ in range(4):
+            counter.update(_one_hot(1))
+        counter.reset()
+
+        rep, shallow = counter.update(_one_hot(0))
+        assert shallow is None
 
 
 # ============================================================================
@@ -428,7 +553,7 @@ class TestBiLSTMInference:
             for i in range(29):
                 skeleton = _make_skeleton()
                 skeleton.frame_index = i
-                result = inf.process_skeleton(skeleton)
+                result, _ = inf.process_skeleton(skeleton)
                 assert result is None
 
     def test_produces_output_after_warmup(self):

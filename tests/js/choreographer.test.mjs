@@ -301,3 +301,48 @@ describe('live pose', () => {
         assert.ok(Math.abs(finalPts[16 * 3 + 2] - 0.30) < 1e-9);
     });
 });
+
+describe('joint count', () => {
+    function makePose21(stanceHalfWidth) {
+        const pose = makePose(stanceHalfWidth);
+        pose.push([0, 0, -stanceHalfWidth - 0.07]);  // 19: left heel
+        pose.push([0, 0, stanceHalfWidth + 0.07]);   // 20: right heel
+        pose[17] = [0.20, 0, -stanceHalfWidth];      // toes ahead of the ankles
+        pose[18] = [0.20, 0, stanceHalfWidth];
+        return pose;
+    }
+
+    test('heels survive init and render when the payload carries 21 joints', () => {
+        const { choreo, calls } = makeHarness();
+        const payload = makeInitPayload();
+        payload.pose_stack = payload.pose_stack.map((_, k) => makePose21(0.15 + 0.03 * k));
+        choreo.init(payload);
+        choreo.start(0);
+        choreo.tick(T.morphIn + 0.01);
+
+        const pts = lastRender(calls).pts;
+        assert.equal(pts.length, 21 * 3, 'render must receive all 21 joints');
+        // Morph-in with no live pose renders pose 0, whose half-width is 0.15,
+        // so each heel sits 0.07 outboard of its ankle rather than at the origin.
+        assert.ok(Math.abs(pts[19 * 3 + 2] - -0.22) < 1e-9);
+        assert.ok(Math.abs(pts[20 * 3 + 2] - 0.22) < 1e-9);
+    });
+
+    test('19-joint payloads still work', () => {
+        const { choreo, calls } = makeHarness();
+        choreo.init(makeInitPayload());
+        choreo.start(0);
+        choreo.tick(T.morphIn + 0.01);
+        assert.equal(lastRender(calls).pts.length, 19 * 3);
+    });
+
+    test('a 21-joint live pose does not overrun a 19-joint demo', () => {
+        // Old stored demos alongside a heel-tracking live feed: copying the
+        // wider live pose into the narrower buffer must not throw.
+        const { choreo } = makeHarness();
+        choreo.init(makeInitPayload());
+        const wide = [];
+        for (let j = 0; j < 21 * 3; j++) wide.push(0.1);
+        assert.doesNotThrow(() => choreo.setLivePose(wide));
+    });
+});

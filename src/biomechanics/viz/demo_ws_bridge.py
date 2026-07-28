@@ -52,7 +52,10 @@ def _ground_and_center_stack(pose_stack: np.ndarray) -> np.ndarray:
     """Ground feet to Y=0 and center horizontally, using pose 0 as reference."""
     stack = pose_stack.copy()
     ref = stack[0]
-    foot_y = float(ref[[15, 16, 17, 18], 1].min())
+    # Index 15 onward is every foot keypoint — ankles, toes, and heels.
+    # Slicing rather than listing indices keeps this correct for both the
+    # 19-keypoint poses stored before heels were tracked and 21-keypoint ones.
+    foot_y = float(ref[15:, 1].min())
     hip_mid_x = (ref[11, 0] + ref[12, 0]) / 2
     hip_mid_z = (ref[11, 2] + ref[12, 2]) / 2
     stack[:, :, 1] -= foot_y

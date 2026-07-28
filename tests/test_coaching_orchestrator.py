@@ -172,6 +172,56 @@ class TestEventEnqueueing:
             assert "knee_valgus" in orchestrator._recent_faults
         asyncio.run(_run())
 
+    def test_on_shallow_rep_plays_cue(self, orchestrator, mock_callbacks):
+        async def _run():
+            await orchestrator.on_shallow_rep("deeper", "Quarter")
+            await asyncio.sleep(0)  # let the fire-and-forget task run
+            mock_callbacks["play_cached_audio_fn"].assert_awaited_once_with("deeper")
+            assert orchestrator._set_shallow_count == 1
+        asyncio.run(_run())
+
+    def test_on_shallow_rep_bypasses_fault_rate_limit(self, orchestrator, mock_callbacks):
+        """Consecutive shallow reps each get a cue — unlike fault cues."""
+        async def _run():
+            for _ in range(3):
+                await orchestrator.on_shallow_rep("deeper", "Quarter")
+            await asyncio.sleep(0)
+            assert mock_callbacks["play_cached_audio_fn"].await_count == 3
+            assert orchestrator._set_shallow_count == 3
+        asyncio.run(_run())
+
+    def test_on_shallow_rep_does_not_count_a_rep(self, orchestrator):
+        async def _run():
+            await orchestrator.on_shallow_rep("deeper", "Half")
+            assert orchestrator.set_rep_count == 0
+        asyncio.run(_run())
+
+    def test_on_shallow_rep_suppressed_while_resting(self, orchestrator, mock_callbacks):
+        async def _run():
+            orchestrator.resting = True
+            await orchestrator.on_shallow_rep("deeper", "Quarter")
+            await asyncio.sleep(0)
+            mock_callbacks["play_cached_audio_fn"].assert_not_awaited()
+            assert orchestrator._set_shallow_count == 0
+        asyncio.run(_run())
+
+    def test_shallow_reps_reach_set_summary(self, orchestrator):
+        async def _run():
+            await orchestrator.on_shallow_rep("deeper", "Quarter")
+            await orchestrator.on_shallow_rep("deeper", "Half")
+            summary = orchestrator._build_set_summary()
+            assert summary["shallow_reps"] == 2
+            assert summary["shallow_depths"] == ["Quarter", "Half"]
+        asyncio.run(_run())
+
+    def test_reset_set_clears_shallow_count(self, orchestrator):
+        async def _run():
+            await orchestrator.on_shallow_rep("deeper", "Quarter")
+            orchestrator.reset_set()
+            assert orchestrator._set_shallow_count == 0
+            assert orchestrator._set_shallow_depths == []
+        asyncio.run(_run())
+
     def test_on_rep_complete_enqueues_rep_cue(self, orchestrator):
         async def _run():
             await orchestrator.on_rep_complete(1, "parallel", True, [])

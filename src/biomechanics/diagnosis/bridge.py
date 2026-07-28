@@ -31,7 +31,10 @@ def _ground_and_center(kpts: list[list[float]]) -> list[list[float]]:
     Matches visualize_video_squats ground_and_center preprocessing.
     """
     arr = np.asarray(kpts, dtype=np.float64)
-    arr[:, 1] -= arr[[15, 16, 17, 18], 1].min()
+    # Index 15 onward is every foot keypoint — ankles, toes, and heels.
+    # Slicing rather than listing indices keeps this correct for both the
+    # 19-keypoint poses stored before heels were tracked and 21-keypoint ones.
+    arr[:, 1] -= arr[15:, 1].min()
     arr[:, 0] -= (arr[11, 0] + arr[12, 0]) / 2.0
     arr[:, 2] -= (arr[11, 2] + arr[12, 2]) / 2.0
     return arr.tolist()

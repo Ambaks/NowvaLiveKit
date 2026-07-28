@@ -45,6 +45,7 @@ from biomechanics.diagnosis.types import SetFeatures
 from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
 from biomechanics.viz.demo_ws_bridge import DemoWSBridge, DEMO_WS_PORT
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
+from biomechanics.viz.valgus_debug import build_recorder
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
 from biomechanics.viz.html_dashboard import generate_session_dashboard
 
@@ -404,6 +405,15 @@ def run_biomechanics_pipeline(
     _window_animated = False
     session_output = os.environ.get("NOWVA_SESSION_OUTPUT_DIR")
     out_dir = make_output_dir(base=os.path.join(session_output, "output") if session_output else "output")
+
+    # --valgus debug recording. The tap wraps the IPC client so every message
+    # sent from here on is captured; boot messages sent before this point are
+    # not knee data. Both the local name and the bridge's reference are
+    # swapped, since the bridge duck-types on send_message.
+    valgus_recorder = build_recorder(out_dir, config.target_fps, pipeline._multi_camera)
+    if valgus_recorder is not None:
+        ipc_client = valgus_recorder.tap(ipc_client)
+        bridge.ipc_client = ipc_client
 
     # --- Apply existing calibration if provided ---
     if calibration_file and os.path.exists(calibration_file):
@@ -1099,8 +1109,25 @@ def run_biomechanics_pipeline(
                 bridge.send_frame_data(result)
 
                 for fault in result.faults:
-                    bridge.send_fault(fault)
+                    # Shallow-rep depth faults are delivered by the
+                    # shallow_rep message below, which is not rate-limited.
+                    if not fault.details.get("shallow_rep"):
+                        bridge.send_fault(fault)
                     set_collector.record_fault(fault)
+
+                if result.shallow_rep_class is not None:
+                    shallow_fault = next(
+                        (f for f in result.faults if f.details.get("shallow_rep")),
+                        None,
+                    )
+                    bridge.send_shallow_rep(
+                        result.shallow_rep_class,
+                        fault=shallow_fault,
+                        set_number=session_tracker.current_set_number,
+                    )
+                    print(
+                        f"[SHALLOW REP] depth_class={result.shallow_rep_class} — not counted"
+                    )
 
                 if result.rep_data:
                     bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
@@ -1170,13 +1197,17 @@ def run_biomechanics_pipeline(
                             print(f"[REST] Gate pre-armed {remaining:.1f}s before rest end")
                         _draw_rest_timer(display, remaining, rest_total_seconds)
                 else:
-                    # Show rep count overlay
-                    rep_count = pipeline.rep_counter.rep_count
+                    # Show rep count overlay — the logged count, so the
+                    # screen never claims reps the workout didn't record
+                    rep_count = pipeline.rep_count
                     _draw_hud_pill(
                         display, f"REPS {rep_count}",
                         align="left", accent=HUD_CYAN, font_scale=1.1, y=48,
                     )
                 _draw_wordmark(display)
+
+                if valgus_recorder is not None:
+                    valgus_recorder.record_frame(result, display, pipeline, resting)
 
                 if not _window_animated:
                     animate_window_fullscreen(window_name)
@@ -1257,6 +1288,12 @@ def run_biomechanics_pipeline(
         else:
             print("Not enough data for plots (need >10 frames with joint angles).")
 
+        if valgus_recorder is not None:
+            try:
+                valgus_recorder.finalize(exercise_name)
+            except Exception as e:
+                print(f"[VALGUS] Report generation failed: {e}")
+
         # Remove the workout dir if this run never produced any output
         # (e.g. workout started then abandoned before any reps)
         try:
@@ -1289,6 +1326,9 @@ if __name__ == "__main__":
             i += 2
         elif sys.argv[i] == "--preload":
             preload_flag = True
+            i += 1
+        elif sys.argv[i] == "--valgus":
+            os.environ["NOWVA_VALGUS_DEBUG"] = "1"
             i += 1
         else:
             i += 1

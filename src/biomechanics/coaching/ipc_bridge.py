@@ -14,7 +14,13 @@ from typing import Any, Dict, List, Optional
 from biomechanics.coaching.cue_cache import CueCache
 from biomechanics.config import CoachingConfig, IPCConfig
 from biomechanics.diagnosis.types import DiagnosisResult, RepKinematicSummary, RepScore, SetScoreSummary
-from biomechanics.utils.types import FaultEvent, PipelineFrame, RepData, depth_category
+from biomechanics.utils.types import (
+    DEPTH_CLASS_NAMES,
+    FaultEvent,
+    PipelineFrame,
+    RepData,
+    depth_category,
+)
 
 
 class IPCBridge:
@@ -162,6 +168,40 @@ class IPCBridge:
             "type": "rep_count",
             "value": rep.rep_number,
         })
+
+    def send_shallow_rep(
+        self,
+        depth_class: int,
+        fault: Optional[FaultEvent] = None,
+        set_number: int | None = None,
+    ) -> None:
+        """Send a rep that was rejected for insufficient depth.
+
+        Deliberately not routed through send_fault: this replaces the rep
+        callout the lifter would otherwise have heard, so it is not subject
+        to the fault cooldown. Carries the depth fault's fields so the
+        persistence layer can log it like any other depth cue.
+        """
+        msg: Dict[str, Any] = {
+            "type": "shallow_rep",
+            "depth_class": depth_class,
+            "depth_class_name": DEPTH_CLASS_NAMES.get(depth_class, "Unknown"),
+            "cue": "deeper",
+        }
+        if fault is not None:
+            msg.update({
+                "fault_type": fault.fault_type,
+                "severity": fault.severity.value,
+                "severity_score": round(fault.severity_score, 2),
+                "message": fault.message,
+                "rep_number": fault.rep_number,
+                "max_knee_flexion": round(
+                    fault.details.get("max_knee_flexion", 0.0), 1
+                ),
+            })
+        if set_number is not None:
+            msg["set_number"] = set_number
+        self.ipc_client.send_message(msg)
 
     def send_rep_diagnosis(
         self,

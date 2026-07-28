@@ -116,10 +116,14 @@ class GroundClamp:
                 corrected[CK.RIGHT_ANKLE, 0] = mid_xz[0] - direction[0] * half_target
                 corrected[CK.RIGHT_ANKLE, 2] = mid_xz[1] - direction[1] * half_target
 
-        # --- Propagate ankle corrections to foot index keypoints ---
+        # --- Propagate ankle corrections to the foot keypoints ---
+        # Toes and heels are rigidly attached to the ankle; moving the ankle
+        # without them would tear the foot apart.
         for ankle_idx, foot_idx in [
             (CK.LEFT_ANKLE, CK.LEFT_FOOT_INDEX),
             (CK.RIGHT_ANKLE, CK.RIGHT_FOOT_INDEX),
+            (CK.LEFT_ANKLE, CK.LEFT_HEEL),
+            (CK.RIGHT_ANKLE, CK.RIGHT_HEEL),
         ]:
             if foot_idx < n_kpts and confidences[foot_idx] > 0:
                 delta = corrected[ankle_idx] - points[ankle_idx]

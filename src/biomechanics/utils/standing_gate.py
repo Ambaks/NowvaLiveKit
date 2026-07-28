@@ -34,6 +34,16 @@ REQUIRED_KEYPOINTS = [
     CK.LEFT_ANKLE, CK.RIGHT_ANKLE,
 ]
 
+# (heel, toe) per side, for the flat-foot check.
+FOOT_CONTACT_PAIRS = [
+    (CK.LEFT_HEEL, CK.LEFT_FOOT_INDEX),
+    (CK.RIGHT_HEEL, CK.RIGHT_FOOT_INDEX),
+]
+
+# Below this, heel and toe have collapsed onto each other and their height
+# difference is noise rather than foot inclination.
+MIN_FOOT_LENGTH_M = 0.10
+
 
 def _frontal_knee_flexion(points: np.ndarray) -> tuple:
     # Monocular depth (z) is too noisy for a 3D knee angle — straight legs
@@ -50,6 +60,34 @@ def _frontal_knee_flexion(points: np.ndarray) -> tuple:
     return (left_flexion, right_flexion)
 
 
+def _heel_rise_ratios(
+    points: np.ndarray, confidences: np.ndarray, min_confidence: float,
+) -> list[float]:
+    # Heel height above the toe as a fraction of foot length. Positive means
+    # the heel is raised. Sides whose heel or toe is untracked are skipped
+    # rather than failed — heels are often occluded by the camera angle, and
+    # a hard requirement would deadlock the gate for those users.
+    if len(points) <= CK.RIGHT_HEEL:
+        return []
+
+    shoulder_mid_y = (
+        points[CK.LEFT_SHOULDER, 1] + points[CK.RIGHT_SHOULDER, 1]
+    ) / 2.0
+    hip_mid_y = (points[CK.LEFT_HIP, 1] + points[CK.RIGHT_HIP, 1]) / 2.0
+    up_sign = 1.0 if shoulder_mid_y > hip_mid_y else -1.0
+
+    ratios: list[float] = []
+    for heel_idx, toe_idx in FOOT_CONTACT_PAIRS:
+        if min(confidences[heel_idx], confidences[toe_idx]) < min_confidence:
+            continue
+        foot_length = float(np.linalg.norm(points[heel_idx] - points[toe_idx]))
+        if foot_length < MIN_FOOT_LENGTH_M:
+            continue
+        rise = float(points[heel_idx, 1] - points[toe_idx, 1]) * up_sign
+        ratios.append(rise / foot_length)
+    return ratios
+
+
 class StandingPoseGate:
     """
     Validates that the skeleton represents a standing person before
@@ -62,6 +100,8 @@ class StandingPoseGate:
       4. Legs vertically extended away from the shoulders
          (ankle-to-hip span >= min_leg_extension_ratio of leg length)
       5. Person at reasonable distance (torso length in plausible range)
+      6. Feet flat on the floor (heel not raised above the toe by more than
+         max_heel_rise_ratio of foot length)
 
     Requires ``required_consecutive_frames`` consecutive passing frames
     before latching ``is_ready = True``.
@@ -75,6 +115,7 @@ class StandingPoseGate:
         min_torso_length_m: float = 0.25,
         max_torso_length_m: float = 0.80,
         min_leg_extension_ratio: float = 0.6,
+        max_heel_rise_ratio: float = 0.30,
         required_consecutive_frames: int = 5,
     ):
         self.min_confidence = min_confidence
@@ -83,6 +124,10 @@ class StandingPoseGate:
         self.min_torso_length_m = min_torso_length_m
         self.max_torso_length_m = max_torso_length_m
         self.min_leg_extension_ratio = min_leg_extension_ratio
+        # ~17 degrees of foot inclination. Deliberately lenient: heel and toe
+        # depth are the noisiest landmarks the pose model emits, and a flat
+        # foot's heel-toe height difference is only a couple of centimetres.
+        self.max_heel_rise_ratio = max_heel_rise_ratio
         self.required_consecutive_frames = required_consecutive_frames
 
         self._consecutive_passes: int = 0
@@ -157,6 +202,13 @@ class StandingPoseGate:
             self.last_failure = "distance"
             self._log_failure("distance", points)
             return False
+        # Last, because calibrating on raised heels silently poisons the
+        # session: GroundClamp records that ankle height as the floor and
+        # enforces it for every rep that follows.
+        if not self._check_flat_feet(points, confidences):
+            self.last_failure = "flat_foot"
+            self._log_failure("flat_foot", (points, confidences))
+            return False
 
         self.last_failure = None
         return True
@@ -206,6 +258,14 @@ class StandingPoseGate:
             logger.warning(
                 "[GATE DIAG] FAIL torso — raw_angle=%.1f° adjusted=%.1f° (max=%.1f°) trunk_vec=%s",
                 raw, adjusted, self.max_trunk_flexion_deg, trunk_vec,
+            )
+        elif check_name == "flat_foot":
+            pts, confs = data
+            ratios = _heel_rise_ratios(pts, confs, self.min_confidence)
+            logger.warning(
+                "[GATE DIAG] FAIL flat_foot — heel rise %s of foot length "
+                "(max=%.2f). User is on their toes.",
+                [f"{ratio:.2f}" for ratio in ratios], self.max_heel_rise_ratio,
             )
         elif check_name == "distance":
             pts = data
@@ -269,6 +329,12 @@ class StandingPoseGate:
         # the vertical axis, not which direction along it.
         trunk_flexion = min(trunk_flexion, 180.0 - trunk_flexion)
         return trunk_flexion < self.max_trunk_flexion_deg
+
+    def _check_flat_feet(
+        self, points: np.ndarray, confidences: np.ndarray,
+    ) -> bool:
+        ratios = _heel_rise_ratios(points, confidences, self.min_confidence)
+        return all(ratio <= self.max_heel_rise_ratio for ratio in ratios)
 
     def _check_distance(self, points: np.ndarray) -> bool:
         shoulder_mid = (points[CK.LEFT_SHOULDER] + points[CK.RIGHT_SHOULDER]) / 2.0
