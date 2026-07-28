@@ -64,7 +64,10 @@ export function IntroStage() {
   useEffect(() => {
     const html = document.documentElement;
 
-    if (html.dataset.intro === "off") return;
+    /* "done" means the intro already played in this document — a client-side
+       nav back to the homepage remounts this component, and without the
+       guard the fresh splash timeline would replay the whole takeover. */
+    if (html.dataset.intro === "off" || html.dataset.intro === "done") return;
 
     const hold = cssMs("--intro-hold");
     const wipe = cssMs("--intro-wipe");

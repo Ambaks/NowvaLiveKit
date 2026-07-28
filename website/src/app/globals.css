@@ -656,7 +656,8 @@ html[data-intro="off"] .hero-img-in {
   }
 }
 
-html[data-intro="off"] .intro-loader {
+html[data-intro="off"] .intro-loader,
+html[data-intro="done"] .intro-loader {
   display: none;
 }
 

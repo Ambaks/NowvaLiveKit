@@ -14,4 +14,7 @@ export function updateConsent(granted: boolean) {
   gtag()?.("consent", "update", {
     analytics_storage: granted ? "granted" : "denied",
   });
+  /* AnalyticsGate listens for this to mount gtag.js after a mid-session
+     Allow — the script is never loaded before consent. */
+  window.dispatchEvent(new Event("nv:consent"));
 }

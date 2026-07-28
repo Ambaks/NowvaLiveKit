@@ -1,14 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import { Bricolage_Grotesque, JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
-import { GoogleAnalytics } from "@next/third-parties/google";
 import "./globals.css";
-import { IntroLoader } from "@/components/layout/IntroLoader";
-import { IntroStage } from "@/components/intro/IntroStage";
 import { Providers } from "@/components/layout/Providers";
 import { CookieBanner } from "@/components/layout/CookieBanner";
+import { AnalyticsGate } from "@/components/layout/AnalyticsGate";
 import {
   CONTACT_EMAIL,
-  GA_ID,
   PRICE_MONTHLY,
   PRICE_UPFRONT,
   SITE_NAME,
@@ -95,8 +92,11 @@ const JSON_LD = {
   ],
 };
 
-/* Show the intro loader once per tab session; repeats skip it before paint. */
-const INTRO_SCRIPT = `try{if(sessionStorage.getItem('nv-intro'))document.documentElement.dataset.intro='off';else sessionStorage.setItem('nv-intro','1')}catch(e){}`;
+/* Show the intro loader once per tab session, and only where it exists —
+   the homepage. Other routes stamp 'off' pre-paint without consuming the
+   session flag, which also suppresses a replay after a client-side nav
+   back to the homepage. */
+const INTRO_SCRIPT = `try{if(location.pathname!=='/'||sessionStorage.getItem('nv-intro'))document.documentElement.dataset.intro='off';else sessionStorage.setItem('nv-intro','1')}catch(e){}`;
 
 /* Consent Mode v2: default denied until the cookie banner grants. */
 const CONSENT_SCRIPT = `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)};gtag('consent','default',{analytics_storage:'denied',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied'});try{if(localStorage.getItem('nv-consent')==='granted')gtag('consent','update',{analytics_storage:'granted'})}catch(e){}`;
@@ -123,14 +123,12 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-screen font-sans">
-        <IntroLoader />
-        <IntroStage />
         <Providers>
           {children}
           <CookieBanner />
         </Providers>
+        <AnalyticsGate />
       </body>
-      <GoogleAnalytics gaId={GA_ID} />
     </html>
   );
 }

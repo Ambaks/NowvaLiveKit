@@ -1,20 +1,23 @@
 import { ThemedLogo } from "@/components/ui/Logo";
 import { CONTACT_EMAIL } from "@/lib/constants";
 
+/* "/#x" instead of "#x" so section links also work from /privacy and /terms;
+   on the homepage the path already matches, so the browser still treats them
+   as same-page fragment jumps. */
 const COLUMNS = [
   {
     title: "Product",
     links: [
-      { label: "The Rack", href: "#rack" },
-      { label: "The Coach", href: "#coach" },
-      { label: "FAQ", href: "#faq" },
-      { label: "Reserve", href: "#reserve" },
+      { label: "The Rack", href: "/#rack" },
+      { label: "The Coach", href: "/#coach" },
+      { label: "FAQ", href: "/#faq" },
+      { label: "Reserve", href: "/#reserve" },
     ],
   },
   {
     title: "Company",
     links: [
-      { label: "Mission", href: "#mission" },
+      { label: "Mission", href: "/#mission" },
       { label: "Contact", href: `mailto:${CONTACT_EMAIL}` },
       {
         label: "Work with us",
@@ -83,9 +86,23 @@ export function Footer() {
         </div>
 
         <div className="mt-14 flex flex-col gap-3 border-t border-border pt-8 md:flex-row md:items-baseline md:justify-between">
-          <p className="shrink-0 font-mono text-[0.68rem] tracking-[0.08em] text-fg-2">
-            © 2026 Nowva. All rights reserved.
-          </p>
+          <div className="flex shrink-0 flex-wrap items-baseline gap-x-5 gap-y-2">
+            <p className="font-mono text-[0.68rem] tracking-[0.08em] text-fg-2">
+              © 2026 Nowva. All rights reserved.
+            </p>
+            <a
+              href="/privacy"
+              className="font-mono text-[0.68rem] tracking-[0.08em] text-fg-2 transition-colors duration-200 hover:text-accent-ink"
+            >
+              Privacy
+            </a>
+            <a
+              href="/terms"
+              className="font-mono text-[0.68rem] tracking-[0.08em] text-fg-2 transition-colors duration-200 hover:text-accent-ink"
+            >
+              Terms
+            </a>
+          </div>
           <p className="max-w-lg font-mono text-[0.68rem] leading-relaxed tracking-[0.02em] text-fg-2 md:text-right">
             The Nowva Rack is in development. Product imagery shows early CAD
             renders; final design and specifications may change.

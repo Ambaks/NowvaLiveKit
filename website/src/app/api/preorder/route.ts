@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 import { preorderSchema } from "@/lib/validation";
 import { CONTACT_EMAIL } from "@/lib/constants";
-import { insertReservation } from "@/lib/db";
+import { insertReservation, recordRateEvent } from "@/lib/db";
 import {
   confirmationHtml,
   confirmationSubject,
@@ -12,11 +13,12 @@ import {
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 5;
 const MAX_TRACKED_IPS = 1000;
+const RATE_CHECK_TIMEOUT_MS = 2000;
 
 /* Per-instance rate limit — good enough for a launch page. */
 const hits = new Map<string, number[]>();
 
-function rateLimited(ip: string): boolean {
+function rateLimited(ipHash: string): boolean {
   const now = Date.now();
   if (hits.size > MAX_TRACKED_IPS) {
     for (const [key, stamps] of hits) {
@@ -26,10 +28,17 @@ function rateLimited(ip: string): boolean {
        rather than grow unboundedly; losing them is fine for a soft limit. */
     if (hits.size > MAX_TRACKED_IPS) hits.clear();
   }
-  const recent = (hits.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
+  const recent = (hits.get(ipHash) ?? []).filter((t) => now - t < WINDOW_MS);
   recent.push(now);
-  hits.set(ip, recent);
+  hits.set(ipHash, recent);
   return recent.length > MAX_PER_WINDOW;
+}
+
+function tooManyRequests(): NextResponse {
+  return NextResponse.json(
+    { ok: false, error: "Too many requests — please try again in a few minutes." },
+    { status: 429 },
+  );
 }
 
 function clientIp(request: NextRequest): string {
@@ -65,11 +74,39 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  if (rateLimited(clientIp(request))) {
-    return NextResponse.json(
-      { ok: false, error: "Too many requests — please try again in a few minutes." },
-      { status: 429 },
-    );
+  /* Both limiter layers key on the hash, never the raw address — the
+     privacy page promises the IP itself is not stored anywhere. */
+  const ipHash = createHash("sha256").update(clientIp(request)).digest("hex");
+  if (rateLimited(ipHash)) {
+    return tooManyRequests();
+  }
+
+  /* Durable second layer — the in-memory map resets on every cold start and
+     multiplies across instances. Only the SHA-256 of the IP is stored, and
+     events older than 24 hours are pruned on each check. Fails open: the
+     rate limiter must never block a real preorder. */
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error("[preorder] DATABASE_URL is not set — durable rate limit skipped");
+  } else {
+    try {
+      /* A hung Neon call must not stall the request — timeout joins the
+         thrown-error path and fails open. */
+      const attempts = await Promise.race([
+        recordRateEvent(databaseUrl, ipHash, WINDOW_MS),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("rate check timed out")),
+            RATE_CHECK_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+      if (attempts > MAX_PER_WINDOW) {
+        return tooManyRequests();
+      }
+    } catch (err) {
+      console.error("[preorder] durable rate check failed — failing open:", err);
+    }
   }
 
   if (process.env.PREORDER_DRY_RUN === "1") {
@@ -95,7 +132,6 @@ export async function POST(request: NextRequest) {
      can't lose it. Missing config or a failed insert falls back to
      email-only capture. */
   let dbOutcome: "inserted" | "duplicate" | "failed" | "skipped" = "skipped";
-  const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error("[preorder] DATABASE_URL is not set — email-only fallback");
   } else {
