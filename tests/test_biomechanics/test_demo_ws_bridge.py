@@ -6,6 +6,7 @@ import asyncio
 import json
 
 import numpy as np
+import pytest
 
 from biomechanics.diagnosis.demo_builder import DemoCue, DemoData
 from biomechanics.viz.demo_ws_bridge import DemoWSBridge
@@ -76,6 +77,33 @@ class TestEventBacklogReplay:
         bridge = DemoWSBridge()
         bridge.send_live_pose(np.zeros((17, 3)))
         assert bridge._latest_live_payload is None
+
+    def test_live_pose_converted_from_mediapipe_to_viewer_coords(self):
+        """A MediaPipe Y-down skeleton must render head-up in viewer coords.
+
+        The demo pose stack is transformed to viewer coords upstream; live
+        poses arrive raw from the pipeline. Without the same transform the
+        skeleton renders upside down when the demo morphs back to live.
+        """
+        bridge = DemoWSBridge()
+        # MediaPipe world coords: hip-centered, Y=down — nose above hips
+        # (negative y), ankles below (positive y).
+        pose = np.zeros((19, 3))
+        pose[0] = [0.0, -0.8, 0.0]     # nose
+        pose[11] = [-0.1, 0.0, 0.0]    # hips
+        pose[12] = [0.1, 0.0, 0.0]
+        pose[15] = [-0.1, 0.9, 0.0]    # ankles
+        pose[16] = [0.1, 0.9, 0.0]
+        pose[17] = [-0.1, 1.0, 0.1]    # toes: below ankles, toward floor
+        pose[18] = [0.1, 1.0, 0.1]
+
+        bridge.send_live_pose(pose)
+
+        points = json.loads(bridge._latest_live_payload)["points"]
+        nose_y, ankle_y, toe_y = points[0][1], points[15][1], points[17][1]
+        assert toe_y == 0.0
+        assert ankle_y == pytest.approx(0.1)
+        assert nose_y > ankle_y
 
 
 class TestStartedAck:

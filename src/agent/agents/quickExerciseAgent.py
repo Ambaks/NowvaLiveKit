@@ -16,6 +16,61 @@ from agent.core.workout_session import WorkoutSession
 
 logger = logging.getLogger(__name__)
 
+PARAM_DESCRIPTIONS = {
+    "sets": "number of sets",
+    "reps": "reps per set",
+    "weight": "weight in lbs (0 for bodyweight)",
+    "rest_seconds": "rest between sets in seconds",
+}
+
+
+def build_task_instructions(
+    exercise_name: str,
+    sets: int | None,
+    reps: int | None,
+    weight: float | None,
+    rest_seconds: int | None,
+) -> str:
+    """Build collection instructions that only ask for parameters the user has not given yet."""
+    provided = {
+        "sets": sets,
+        "reps": reps,
+        "weight": weight,
+        "rest_seconds": rest_seconds,
+    }
+    known = {name: value for name, value in provided.items() if value is not None}
+    missing = [name for name, value in provided.items() if value is None]
+
+    lines = [f"The user wants to do a quick exercise: {exercise_name}."]
+
+    if known:
+        known_text = ", ".join(
+            f"{PARAM_DESCRIPTIONS[name]} = {value}" for name, value in known.items()
+        )
+        lines.append(
+            f"The user ALREADY provided: {known_text}. "
+            f"Do NOT ask for these again — asking again is a bad experience."
+        )
+
+    if missing:
+        missing_text = ", ".join(PARAM_DESCRIPTIONS[name] for name in missing)
+        lines.append(
+            f"Conversationally collect ONLY the remaining details: {missing_text}. "
+            f"Ask for them together in one natural question, not one at a time. "
+            f"If the user is unsure, suggest defaults: 3-5 sets, 5-10 reps, "
+            f"bodyweight or a light weight, 90-120 seconds rest."
+        )
+        lines.append(
+            "Once every value is known, call the start_workout tool with all of them."
+        )
+    else:
+        lines.append(
+            "Every parameter is already known. Call the start_workout tool IMMEDIATELY "
+            "with the values above. Do not ask the user anything."
+        )
+
+    return "\n".join(lines)
+
 
 class CollectExerciseInfoTask(AgentTask):
     def __init__(
@@ -25,12 +80,14 @@ class CollectExerciseInfoTask(AgentTask):
         state,
         userdata,
         chat_ctx=None,
+        sets: int | None = None,
+        reps: int | None = None,
+        weight: float | None = None,
+        rest_seconds: int | None = None,
     ):
-        task_instructions = """
-Conversationally collect the amount of sets, reps, rest and weight
-the user wants to use for their quick exercise.
-Once that is done, call the start_workout tool.
-""".strip()
+        task_instructions = build_task_instructions(
+            exercise_name, sets, reps, weight, rest_seconds
+        )
         super().__init__(
             instructions=f"{BASE_PROMPT}\n\n{task_instructions}",
             chat_ctx=chat_ctx,
@@ -40,15 +97,26 @@ Once that is done, call the start_workout tool.
         self.state = state
         self.userdata = userdata
         self.exercise_name = exercise_name
+        self.all_params_known = all(
+            value is not None for value in (sets, reps, weight, rest_seconds)
+        )
 
         self.calibration_task = asyncio.create_task(
             check_calibration(user_id, exercise_name)
         )
 
     async def on_enter(self):
-        await self.session.generate_reply(
-            instructions="You are transitionning smoothly from the main menu into collecting the required information for the quick exercise."
-        )
+        if self.all_params_known:
+            await self.session.generate_reply(
+                instructions=(
+                    "All exercise details were already provided. Confirm the plan back "
+                    "to the user in one short sentence and call start_workout immediately."
+                )
+            )
+        else:
+            await self.session.generate_reply(
+                instructions="You are transitionning smoothly from the main menu into collecting the required information for the quick exercise."
+            )
 
     @function_tool
     async def start_workout(
@@ -105,6 +173,3 @@ Once that is done, call the start_workout tool.
             return WorkoutAgent(state=self.state, userdata=self.userdata)
         else:
             return TeachingAgent(state=self.state, userdata=self.userdata)
-
-
-

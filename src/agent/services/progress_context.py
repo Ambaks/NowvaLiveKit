@@ -21,7 +21,6 @@ FAULT_LABELS = {
     "knee_valgus": "knees caving in",
     "butt_wink": "butt wink",
     "forward_lean": "leaning forward",
-    "heel_rise": "heels lifting",
     "shallow_depth": "shallow depth",
     "asymmetric_loading": "uneven side loading",
 }

@@ -80,7 +80,6 @@ FAULT_TO_CUE_MAP: Dict[str, str] = {
     "knee_valgus": "knees_out",
     "forward_lean": "chest_up",
     "depth": "deeper",
-    "heel_rise": "heels_down",
     "bilateral_asymmetry": "even_it_out",
     "back_rounding": "chest_up",
 }

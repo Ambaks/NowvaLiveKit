@@ -1,8 +1,9 @@
 """
 Tests for shared agent helpers: sex normalization, service headers,
-and the program generation payload builder.
+calibration lookup, and the program generation payload builder.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -10,8 +11,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import agent.agents.shared.helpers as helpers
 from agent.agents.shared.helpers import (
     build_program_generation_payload,
+    check_calibration,
     normalize_sex,
     service_headers,
 )
@@ -61,6 +64,48 @@ class TestServiceHeaders:
     def test_empty_when_env_unset(self, monkeypatch):
         monkeypatch.delenv("SERVICE_API_KEY", raising=False)
         assert service_headers() == {"X-Service-Key": ""}
+
+
+class TestCheckCalibration:
+    """check_calibration must resolve casual exercise names ("squat") to the
+    same movement pattern the save path uses, or saved calibrations are
+    never found and every workout re-enters calibration mode."""
+
+    @pytest.fixture
+    def db_spy(self, monkeypatch):
+        import db.calibration_utils as calibration_utils
+
+        captured = {}
+        sentinel = {"knee_valgus": {"mild": 10.0}}
+
+        def fake_get_user_calibration(db, user_id, movement_pattern):
+            captured["user_id"] = user_id
+            captured["pattern"] = movement_pattern
+            return sentinel
+
+        class _FakeSession:
+            def close(self):
+                pass
+
+        monkeypatch.setattr(calibration_utils, "get_user_calibration", fake_get_user_calibration)
+        monkeypatch.setattr(helpers, "SessionLocal", _FakeSession)
+        captured["sentinel"] = sentinel
+        return captured
+
+    def test_casual_name_reaches_db_lookup(self, db_spy):
+        result = asyncio.run(check_calibration("user-1", "squat"))
+        assert result == db_spy["sentinel"]
+        assert db_spy["pattern"] == "squat"
+
+    def test_canonical_name_reaches_db_lookup(self, db_spy):
+        result = asyncio.run(check_calibration("user-1", "Barbell Back Squat"))
+        assert result == db_spy["sentinel"]
+        assert db_spy["pattern"] == "squat"
+
+    def test_unknown_exercise_returns_none_without_query(self, db_spy):
+        result = asyncio.run(check_calibration("user-1", "juggling"))
+        assert result is None
+        assert "pattern" not in db_spy
 
 
 class TestBuildProgramGenerationPayload:

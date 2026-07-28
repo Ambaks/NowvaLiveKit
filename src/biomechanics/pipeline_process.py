@@ -57,6 +57,10 @@ DEMO_INACTIVITY_TIMEOUT_S = 45.0
 # Covers settle + final hold + morph-out (~2.2s) plus browser latency.
 DEMO_FINISH_TIMEOUT_S = 6.0
 
+# Re-arm the readiness gate this long before rest ends, so the gate is
+# already latched when the timer expires and the user can start at once.
+GATE_PREARM_SECONDS = 3.0
+
 # --- HUD styling (BGR brand palette) ---
 HUD_CYAN = (255, 229, 0)
 HUD_VIOLET = (246, 92, 139)
@@ -154,12 +158,10 @@ def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir:
     kv = profile["knee_valgus"]
     fl = profile["forward_lean"]
     ba = profile["bilateral_asymmetry"]
-    hr = profile["heel_rise"]
     dp = profile.get("depth", {})
     d_kv = defaults.get("knee_valgus", {})
     d_fl = defaults.get("forward_lean", {})
     d_ba = defaults.get("bilateral_asymmetry", {})
-    d_hr = defaults.get("heel_rise", {})
     d_dp = defaults.get("depth", {})
 
     md_lines = [
@@ -186,7 +188,6 @@ def _save_calibration_report(peaks: dict, profile: dict, cal_reps: int, out_dir:
         f"| Knee Valgus | {kv['mild']:.1f}° / {kv['moderate']:.1f}° / {kv['severe']:.1f}° | {d_kv.get('mild', '-')}° / {d_kv.get('moderate', '-')}° / {d_kv.get('severe', '-')}° |",
         f"| Forward Lean | {fl['mild']:.1f}° / {fl['moderate']:.1f}° / {fl['severe']:.1f}° | {d_fl.get('mild', '-')}° / {d_fl.get('moderate', '-')}° / {d_fl.get('severe', '-')}° |",
         f"| Bilateral Asymmetry | {ba['mild']:.1f}° / {ba['moderate']:.1f}° / {ba['severe']:.1f}° | {d_ba.get('mild', '-')}° / {d_ba.get('moderate', '-')}° / {d_ba.get('severe', '-')}° |",
-        f"| Heel Rise | {hr['threshold_degrees']:.1f}° | {d_hr.get('threshold_degrees', '-')}° |",
         "",
         "### Depth Thresholds",
         "",
@@ -921,6 +922,7 @@ def run_biomechanics_pipeline(
     resting = False
     rest_end_time = 0.0
     rest_total_seconds = 0.0
+    gate_prearmed = False
     workout_finished = False
 
     def _check_incoming_message():
@@ -1015,7 +1017,11 @@ def run_biomechanics_pipeline(
                     rest_end_time = time.time() + rest_seconds
                     rest_total_seconds = float(rest_seconds)
                     resting = True
-                    pipeline.reset_readiness_gate()
+                    gate_prearmed = False
+                    # Presence detection only during rest — the gate is
+                    # re-armed GATE_PREARM_SECONDS before the timer expires
+                    # so it can latch while the user gets into position.
+                    pipeline.presence_only = True
 
                     # Finalize the just-completed set
                     if session_tracker.set_active:
@@ -1037,6 +1043,7 @@ def run_biomechanics_pipeline(
                     print(f"[PIPELINE] Assessment mode {'enabled' if incoming.get('enabled') else 'disabled'}")
                 elif incoming.get("type") == "workout_complete":
                     workout_finished = True
+                    pipeline.presence_only = True
                     print("[PIPELINE] Workout complete — stopping rep counting")
 
                     # Finalize the last set (no rest_start is sent for it)
@@ -1062,8 +1069,9 @@ def run_biomechanics_pipeline(
 
             result = pipeline.process_frame()
 
-            # Collect data for post-session plots
-            if result.joint_angles is not None:
+            # Collect data for post-session plots (not during rest — the
+            # gate pre-arm window produces angles in the last few seconds)
+            if result.joint_angles is not None and not resting:
                 t = result.timestamp
                 plot_timestamps.append(t)
                 plot_hip_l.append(result.joint_angles.hip_flexion_l)
@@ -1123,23 +1131,43 @@ def run_biomechanics_pipeline(
             frame = pipeline.last_frame
             if frame is not None:
                 display = frame.copy()
-                if result.skeleton_2d is not None:
+                if result.skeleton_2d is not None and not resting:
                     draw_skeleton(display, result.skeleton_2d)
                 fps_counter.update()
                 draw_fps(display, fps_counter.fps)
 
-                # Readiness gate indicator (always visible)
-                _draw_readiness_indicator(
-                    display, pipeline.is_ready, pipeline._readiness_gate.progress,
-                )
+                # Readiness gate indicator (hidden while resting/finished —
+                # the rest timer is the status during rest)
+                if not resting and not workout_finished:
+                    _draw_readiness_indicator(
+                        display, pipeline.is_ready, pipeline._readiness_gate.progress,
+                    )
 
                 if resting:
                     remaining = max(0.0, rest_end_time - time.time())
                     if remaining <= 0:
                         resting = False
+                        if not gate_prearmed:
+                            # Fallback: the loop never reached the pre-arm
+                            # window — arm the gate now (old behavior).
+                            pipeline.presence_only = False
+                            pipeline.reset_readiness_gate()
+                        # Rep counters reset at rest end so anything done
+                        # while settling in doesn't count into the new set.
+                        pipeline.rep_counter.reset()
+                        if pipeline._bilstm is not None:
+                            pipeline._bilstm.reset()
                         ipc_client.send_message({"type": "rest_complete"})
                         print("[REST] Timer expired — sent rest_complete")
                     else:
+                        if not gate_prearmed and remaining <= GATE_PREARM_SECONDS:
+                            # Re-arm early so the gate can latch while the
+                            # user gets set; collection stays off until the
+                            # timer expires (resting still True).
+                            gate_prearmed = True
+                            pipeline.presence_only = False
+                            pipeline.reset_readiness_gate()
+                            print(f"[REST] Gate pre-armed {remaining:.1f}s before rest end")
                         _draw_rest_timer(display, remaining, rest_total_seconds)
                 else:
                     # Show rep count overlay
@@ -1228,6 +1256,14 @@ def run_biomechanics_pipeline(
             print(f"\nAll plots saved in: {out_dir}")
         else:
             print("Not enough data for plots (need >10 frames with joint angles).")
+
+        # Remove the workout dir if this run never produced any output
+        # (e.g. workout started then abandoned before any reps)
+        try:
+            os.rmdir(out_dir)
+            print(f"Removed empty workout output dir: {out_dir}")
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

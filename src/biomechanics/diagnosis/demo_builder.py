@@ -96,14 +96,11 @@ def _lateral_hip_shift(before: np.ndarray, after: np.ndarray) -> float:
 
 
 def _prepare_observed_kpts(kpts: list[list[float]]) -> list[list[float]]:
-    """Ground, center, and flatten feet — match visualize_video_squats preprocessing."""
+    """Ground and center — match visualize_video_squats preprocessing."""
     arr = np.array(kpts, dtype=np.float64)
-    # Feet parallel to ground: project foot_index Y to ankle Y
-    arr[17, 1] = arr[15, 1]
-    arr[18, 1] = arr[16, 1]
-    # Ground feet to Y=0
-    ankle_y = min(arr[15, 1], arr[16, 1])
-    arr[:, 1] -= ankle_y
+    # Ground lowest foot keypoint to Y=0, keeping real foot geometry
+    foot_y = arr[[15, 16, 17, 18], 1].min()
+    arr[:, 1] -= foot_y
     # Center hips at origin
     hip_mid_x = (arr[11, 0] + arr[12, 0]) / 2
     hip_mid_z = (arr[11, 2] + arr[12, 2]) / 2

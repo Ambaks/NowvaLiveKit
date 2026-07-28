@@ -9,6 +9,7 @@ generate_reply() calls directly for all coaching speech.
 
 import asyncio
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
@@ -17,6 +18,9 @@ from agent.services.assessment_logger import AssessmentLogger
 from agent.services.coaching_constants import COACHING_PERSONA
 
 logger = logging.getLogger(__name__)
+
+COACHING_SOCKET_PATH = "/tmp/nowva_coaching.sock"
+LISTENER_RECONNECT_POLL_S = 1.0
 
 
 class CoachingService:
@@ -51,6 +55,8 @@ class CoachingService:
 
         # Internal state
         self._listener_running = False
+        self._listener_thread: threading.Thread | None = None
+        self._listener_stop = threading.Event()
         self._event_loop = None
         self._started = False
 
@@ -239,85 +245,64 @@ class CoachingService:
     async def _start_ipc_listener(self):
         """Connect to the coaching IPC server and listen for biomechanics messages.
 
-        Uses exponential backoff reconnection (3 attempts: 1s, 2s, 4s).
-        If the connection drops mid-session, the listener thread will
-        automatically attempt to reconnect.
+        The listener thread is resilient: main.py tears the coaching socket
+        down when a workout ends and rebinds it when the next one starts,
+        so on any disconnect the thread waits for the socket file to
+        reappear and reconnects. A second pass through the workout flow in
+        the same session therefore gets coaching data again.
         """
-        if self._listener_running:
+        if self._listener_thread is not None and self._listener_thread.is_alive():
             logger.info("[COACHING SERVICE] Listener already running")
             return
 
         from agent.core.ipc_communication import IPCClient
 
-        max_retries = 3
-        base_delay = 1.0  # seconds
+        self._listener_stop.clear()
 
-        def _connect_with_retry() -> bool:
-            """Attempt IPC connection with exponential backoff."""
-            for attempt in range(1, max_retries + 1):
-                self._coaching_ipc = IPCClient(socket_path="/tmp/nowva_coaching.sock")
-                if self._coaching_ipc.connect(timeout=5):
-                    logger.info(f"[COACHING SERVICE] Connected to coaching IPC server (attempt {attempt})")
-                    return True
-                delay = base_delay * (2 ** (attempt - 1))
-                logger.warning(
-                    f"[COACHING SERVICE] IPC connection attempt {attempt}/{max_retries} failed, "
-                    f"retrying in {delay}s..."
+        def on_message(message: dict):
+            if self._event_loop and self._event_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_message(message),
+                    self._event_loop,
                 )
-                import time as _time
-                _time.sleep(delay)
-            logger.error(
-                f"[COACHING SERVICE] Failed to connect to coaching IPC server "
-                f"after {max_retries} attempts — coaching data will be unavailable"
-            )
-            return False
 
         def _listen_thread():
-            try:
-                if not _connect_with_retry():
-                    return
+            while not self._listener_stop.is_set():
+                if not os.path.exists(COACHING_SOCKET_PATH):
+                    # Server not up (e.g. between workout passes) — poll quietly
+                    self._listener_stop.wait(LISTENER_RECONNECT_POLL_S)
+                    continue
+                if self._coaching_ipc is not None:
+                    self._coaching_ipc.disconnect()
+                self._coaching_ipc = IPCClient(socket_path=COACHING_SOCKET_PATH)
+                if not self._coaching_ipc.connect(timeout=5):
+                    self._listener_stop.wait(LISTENER_RECONNECT_POLL_S)
+                    continue
+                logger.info("[COACHING SERVICE] Connected to coaching IPC server")
                 self._listener_running = True
+                try:
+                    self._coaching_ipc.listen(message_callback=on_message)
+                except Exception as e:
+                    logger.error(f"[COACHING SERVICE] Listener error: {e}")
+                finally:
+                    self._listener_running = False
+                if not self._listener_stop.is_set():
+                    logger.info(
+                        "[COACHING SERVICE] Coaching IPC disconnected — waiting for server"
+                    )
 
-                def on_message(message: dict):
-                    if self._event_loop and self._event_loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            self._handle_message(message),
-                            self._event_loop,
-                        )
-
-                self._coaching_ipc.listen(message_callback=on_message)
-            except Exception as e:
-                logger.error(f"[COACHING SERVICE] Listener error: {e}")
-                # Attempt reconnection on unexpected disconnect
-                if self._started:
-                    logger.info("[COACHING SERVICE] Attempting reconnection after disconnect...")
-                    try:
-                        if _connect_with_retry():
-                            self._listener_running = True
-
-                            def on_message_retry(message: dict):
-                                if self._event_loop and self._event_loop.is_running():
-                                    asyncio.run_coroutine_threadsafe(
-                                        self._handle_message(message),
-                                        self._event_loop,
-                                    )
-
-                            self._coaching_ipc.listen(message_callback=on_message_retry)
-                    except Exception as e2:
-                        logger.error(f"[COACHING SERVICE] Reconnection failed: {e2}")
-            finally:
-                self._listener_running = False
-
-        thread = threading.Thread(target=_listen_thread, daemon=True)
-        thread.start()
+        self._listener_thread = threading.Thread(target=_listen_thread, daemon=True)
+        self._listener_thread.start()
         logger.info("[COACHING SERVICE] Listener thread started")
 
     def _stop_ipc_listener(self):
-        """Disconnect from the coaching IPC server."""
+        """Disconnect from the coaching IPC server and stop reconnecting."""
+        self._listener_stop.set()
         if self._coaching_ipc:
             self._coaching_ipc.disconnect()
             self._coaching_ipc = None
         self._listener_running = False
+        self._listener_thread = None
         logger.info("[COACHING SERVICE] Listener stopped")
 
     # ------------------------------------------------------------------
@@ -616,6 +601,9 @@ class CoachingService:
             user_height_cm=user_height_cm,
             target_reps=target_reps,
         )
+        # Each pipeline process allows one choreographed demo per assessment,
+        # so a new assessment (second pass through the flow) gets its demo.
+        self._assessment_demo_played = False
         self._send_to_pipeline({"type": "assessment_mode", "enabled": True})
         logger.info("[COACHING SERVICE] Assessment logging started")
 

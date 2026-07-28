@@ -41,7 +41,7 @@ def generate_set_dashboard(
     """
     payload = _prepare_dashboard_payload(plot_data, seg_result)
     html = _render_html(payload, is_session=False)
-    path = str(Path(out_dir) / f"set{set_number}_dashboard.html")
+    path = str(Path(out_dir) / "dashboard.html")
     Path(path).write_text(html)
     print(f"  Saved: {path}")
     if auto_open:
@@ -55,7 +55,7 @@ def generate_session_dashboard(
     out_dir: str,
     auto_open: bool = True,
 ) -> str:
-    """Generate a multi-set session dashboard with tab switching.
+    """Generate a multi-set workout dashboard with tab switching.
 
     Args:
         set_data_list: List of ``plot_export`` dicts, one per set.
@@ -76,7 +76,7 @@ def generate_session_dashboard(
         "session_info": session_info,
     }
     html = _render_html(full_payload, is_session=True)
-    path = str(Path(out_dir) / "session_dashboard.html")
+    path = str(Path(out_dir) / "workout_dashboard.html")
     Path(path).write_text(html)
     print(f"  Saved: {path}")
     if auto_open:
@@ -492,7 +492,6 @@ const FAULT_STYLES = {{
     'knee_valgus':         {{ color: '#f44336', symbol: 'triangle-down', chart: 'valgus-left' }},
     'forward_lean':        {{ color: '#ff9800', symbol: 'diamond',       chart: 'pipeline' }},
     'bilateral_asymmetry': {{ color: '#bb86fc', symbol: 'square',        chart: 'asymmetry' }},
-    'heel_rise':           {{ color: '#ffeb3b', symbol: 'star',          chart: 'pipeline' }},
     'depth':               {{ color: '#00bcd4', symbol: 'circle',        chart: 'hip-pos' }},
 }};
 

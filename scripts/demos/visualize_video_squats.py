@@ -109,9 +109,6 @@ def extract_frame_data(skeleton_3d, angles, frame_idx):
     kpts_vis[:, 0] = kpts_mp[:, 2]   # vis_x = mp_z
     kpts_vis[:, 1] = -kpts_mp[:, 1]  # vis_y = -mp_y
     kpts_vis[:, 2] = -kpts_mp[:, 0]  # vis_z = -mp_x
-    # Feet parallel to ground: project foot_index Y to ankle Y
-    kpts_vis[17][1] = kpts_vis[15][1]
-    kpts_vis[18][1] = kpts_vis[16][1]
     return {
         "kpts": kpts_vis.tolist(),
         "angles": {
@@ -139,8 +136,8 @@ def ground_and_center(rep_frames):
         if frame is None:
             continue
         kpts = np.array(frame["kpts"])
-        ankle_y = min(kpts[15][1], kpts[16][1])
-        kpts[:, 1] -= ankle_y
+        foot_y = kpts[[15, 16, 17, 18], 1].min()
+        kpts[:, 1] -= foot_y
         hip_mid_x = (kpts[11][0] + kpts[12][0]) / 2
         hip_mid_z = (kpts[11][2] + kpts[12][2]) / 2
         kpts[:, 0] -= hip_mid_x

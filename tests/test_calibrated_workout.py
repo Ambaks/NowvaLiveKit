@@ -117,7 +117,6 @@ def save_calibration_report(peaks: dict, profile: dict, out_dir: str):
         f"| Knee Valgus | {profile['knee_valgus']['mild']:.1f}° | {profile['knee_valgus']['moderate']:.1f}° | {profile['knee_valgus']['severe']:.1f}° | {defaults['knee_valgus']['mild']:.1f}° | {defaults['knee_valgus']['moderate']:.1f}° | {defaults['knee_valgus']['severe']:.1f}° |",
         f"| Forward Lean | {profile['forward_lean']['mild']:.1f}° | {profile['forward_lean']['moderate']:.1f}° | {profile['forward_lean']['severe']:.1f}° | {defaults['forward_lean']['mild']:.1f}° | {defaults['forward_lean']['moderate']:.1f}° | {defaults['forward_lean']['severe']:.1f}° |",
         f"| Bilateral Asymmetry | {profile['bilateral_asymmetry']['mild']:.1f}° | {profile['bilateral_asymmetry']['moderate']:.1f}° | {profile['bilateral_asymmetry']['severe']:.1f}° | {defaults['bilateral_asymmetry']['mild']:.1f}° | {defaults['bilateral_asymmetry']['moderate']:.1f}° | {defaults['bilateral_asymmetry']['severe']:.1f}° |",
-        f"| Heel Rise | {profile['heel_rise']['threshold_degrees']:.1f}° | — | — | {defaults['heel_rise']['threshold_degrees']:.1f}° | — | — |",
         "",
         "### Depth Thresholds",
         "",
@@ -273,8 +272,6 @@ def run_test():
         print(f"  Forward Lean thresholds:  {fl['mild']:.1f}° / {fl['moderate']:.1f}° / {fl['severe']:.1f}°")
         ba = profile["bilateral_asymmetry"]
         print(f"  Asymmetry thresholds:     {ba['mild']:.1f}° / {ba['moderate']:.1f}° / {ba['severe']:.1f}°")
-        hr = profile["heel_rise"]
-        print(f"  Heel Rise threshold:      {hr['threshold_degrees']:.1f}°")
         print(f"{'='*60}\n")
 
         # Apply to rule engine

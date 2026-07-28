@@ -38,7 +38,7 @@ def segment_set(
 
     Args:
         data: Either a dict with keys ``timestamps``, ``hip_position_cm``,
-            ``hip_velocity_cm_s``; or a path to the ``set*_plot_data.json``
+            ``hip_velocity_cm_s``; or a path to the set's ``plot_data.json``
             file.
         min_depth_cm: Minimum hip displacement (prominence) for a peak to
             count as a squat rep.  Filters small oscillations.
@@ -405,7 +405,7 @@ def plot_segmentation(
     # Save
     if save_path is None:
         if json_path is not None:
-            save_path = json_path.parent / f"set{data.get('set_number', '')}_segmentation.png"
+            save_path = json_path.parent / "segmentation.png"
         else:
             save_path = Path("segmentation_plot.png")
     fig.savefig(str(save_path), dpi=150, bbox_inches="tight")

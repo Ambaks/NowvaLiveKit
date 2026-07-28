@@ -19,12 +19,35 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from biomechanics.config import BiomechanicsConfig
-from biomechanics.utils.types import PipelineFrame
+from biomechanics.utils.types import CocoKeypoints as CK, PipelineFrame, Skeleton3D
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+def _standing_points() -> np.ndarray:
+    """Standing skeleton that passes both standing and readiness gates."""
+    points = np.zeros((17, 3))
+    points[CK.NOSE] = [0.0, 1.70, 0.0]
+    points[CK.LEFT_EYE] = [0.03, 1.72, -0.02]
+    points[CK.RIGHT_EYE] = [-0.03, 1.72, -0.02]
+    points[CK.LEFT_EAR] = [0.07, 1.70, 0.0]
+    points[CK.RIGHT_EAR] = [-0.07, 1.70, 0.0]
+    points[CK.LEFT_SHOULDER] = [0.20, 1.50, 0.0]
+    points[CK.RIGHT_SHOULDER] = [-0.20, 1.50, 0.0]
+    points[CK.LEFT_ELBOW] = [0.25, 1.25, 0.0]
+    points[CK.RIGHT_ELBOW] = [-0.25, 1.25, 0.0]
+    points[CK.LEFT_WRIST] = [0.25, 1.00, 0.0]
+    points[CK.RIGHT_WRIST] = [-0.25, 1.00, 0.0]
+    points[CK.LEFT_HIP] = [0.10, 1.00, 0.0]
+    points[CK.RIGHT_HIP] = [-0.10, 1.00, 0.0]
+    points[CK.LEFT_KNEE] = [0.10, 0.55, 0.0]
+    points[CK.RIGHT_KNEE] = [-0.10, 0.55, 0.0]
+    points[CK.LEFT_ANKLE] = [0.10, 0.10, 0.0]
+    points[CK.RIGHT_ANKLE] = [-0.10, 0.10, 0.0]
+    return points
+
 
 def _make_fake_capture(num_frames: int = 20):
     """Create a mock cv2.VideoCapture that yields synthetic frames."""
@@ -161,3 +184,72 @@ class TestBiomechanicsPipeline:
         pipeline = BiomechanicsPipeline(config)
         pipeline.process_frame()
         pipeline.release()  # Should not raise
+
+
+class TestPresenceOnlyMode:
+    """Rest periods must not advance gates or collect analysis data."""
+
+    def _pipeline_with_standing_pose(self, mock_video_capture_cls):
+        """Pipeline with mocked capture and a pose estimator that always
+        returns a valid standing skeleton."""
+        mock_video_capture_cls.return_value = _make_fake_capture(60)
+
+        from biomechanics.pipeline import BiomechanicsPipeline
+
+        config = BiomechanicsConfig()
+        pipeline = BiomechanicsPipeline(config)
+
+        points = _standing_points()
+
+        def fake_estimate_both(frame):
+            skeleton_3d = Skeleton3D.from_numpy(
+                points, confidences=np.ones(17),
+                timestamp=time.time(), frame_index=0,
+            )
+            return None, skeleton_3d
+
+        pipeline._pose_estimator = MagicMock()
+        pipeline._pose_estimator.estimate_both.side_effect = fake_estimate_both
+
+        # Seed a frame directly so the first process_frame() call does not
+        # race the background capture thread.
+        with pipeline._frame_lock:
+            pipeline._latest_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        return pipeline
+
+    @patch("biomechanics.pipeline.cv2.VideoCapture")
+    def test_presence_only_skips_gate_and_analysis(self, mock_video_capture_cls):
+        """Standing frames during rest must not latch the readiness gate,
+        produce joint angles, count reps, or emit faults."""
+        pipeline = self._pipeline_with_standing_pose(mock_video_capture_cls)
+        pipeline.presence_only = True
+
+        for _ in range(10):
+            result = pipeline.process_frame()
+
+        # Presence is still tracked
+        assert result.skeleton_3d is not None
+
+        # But nothing downstream runs
+        assert result.joint_angles is None
+        assert result.rep_data is None
+        assert result.faults == []
+        assert not pipeline.is_ready
+        assert pipeline._readiness_gate.progress[0] == 0
+
+        pipeline.release()
+
+    @patch("biomechanics.pipeline.cv2.VideoCapture")
+    def test_gate_advances_when_presence_only_cleared(self, mock_video_capture_cls):
+        """Identical standing frames DO advance the readiness gate in
+        normal mode — the contrast case for presence-only."""
+        pipeline = self._pipeline_with_standing_pose(mock_video_capture_cls)
+
+        for _ in range(4):
+            result = pipeline.process_frame()
+
+        assert pipeline._readiness_gate.progress[0] == 4
+        assert result.joint_angles is None  # gate not yet latched
+
+        pipeline.release()

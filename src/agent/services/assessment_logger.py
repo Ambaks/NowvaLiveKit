@@ -124,8 +124,16 @@ class AssessmentLogger:
         target_reps: int = 1,
     ) -> None:
         self._assessment_dir = session_dir / "assessment"
-        self._keypoints_dir = self._assessment_dir / "keypoints"
         self._assessment_dir.mkdir(parents=True, exist_ok=True)
+        # One session can run several assessments (the user loops back
+        # through the flow) — never clobber a previous assessment's files.
+        run_suffix = ""
+        run_index = 2
+        while (self._assessment_dir / f"assessment_log{run_suffix}.json").exists():
+            run_suffix = f"_{run_index}"
+            run_index += 1
+        self._log_path = self._assessment_dir / f"assessment_log{run_suffix}.json"
+        self._keypoints_dir = self._assessment_dir / f"keypoints{run_suffix}"
         self._keypoints_dir.mkdir(exist_ok=True)
 
         self._log = AssessmentLog(
@@ -354,10 +362,7 @@ class AssessmentLogger:
         return None
 
     def _write_incremental(self) -> None:
-        self._write_json(
-            self._assessment_dir / "assessment_log.json",
-            self._log.model_dump(),
-        )
+        self._write_json(self._log_path, self._log.model_dump())
 
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:

@@ -14,7 +14,6 @@ from biomechanics.config import BiomechanicsConfig, FaultsConfig
 from biomechanics.faults.fault_types import FaultRule
 from biomechanics.faults.rules.depth import DepthRule
 from biomechanics.faults.rules.symmetry import SymmetryRule
-from biomechanics.faults.rules.heel_rise import HeelRiseRule
 from biomechanics.faults.rules.forward_lean import ForwardLeanRule
 from biomechanics.faults.rules.knee_valgus import KneeValgusRule
 from biomechanics.faults.rules.bar_tilt_asymmetry import BarTiltAsymmetryRule
@@ -73,9 +72,6 @@ class SquatProfile(ExerciseProfile):
                 moderate_cm=bt.tilt_asym_moderate_cm,
                 severe_cm=bt.tilt_asym_severe_cm,
             ),
-            HeelRiseRule(
-                threshold_degrees=fc.heel_rise.threshold_deg,
-            ),
             ForwardLeanRule(
                 mild_threshold=fc.forward_lean.mild,
                 moderate_threshold=fc.forward_lean.moderate,
@@ -127,7 +123,6 @@ class SquatProfile(ExerciseProfile):
             state["baseline_set"] = True
             state["peak_trunk_flexion"] = 180.0
             state["peak_asymmetry"] = 0.0
-            state["peak_dorsiflexion"] = 0.0
             state["current_rep_peak_adduction"] = 0.0
             state["rep_peak_hip_adductions"] = []
             state["current_rep_peak_valgus"] = 0.0
@@ -159,15 +154,6 @@ class SquatProfile(ExerciseProfile):
             state["peak_asymmetry"],
             abs(angles.hip_flexion_l - angles.hip_flexion_r),
             abs(angles.knee_flexion_l - angles.knee_flexion_r),
-        )
-
-        # Peak dorsiflexion reached. Previously computed as
-        # baseline - current, but dorsiflexion increases during the descent,
-        # so that expression was negative every frame and never moved off 0.
-        state["peak_dorsiflexion"] = max(
-            state["peak_dorsiflexion"],
-            angles.ankle_dorsiflexion_l,
-            angles.ankle_dorsiflexion_r,
         )
 
     def apply_baseline(self, rules: List[FaultRule], state: Dict) -> None:
@@ -236,14 +222,4 @@ class SquatProfile(ExerciseProfile):
                     "[SQUAT] Symmetry baseline: peak=%.1f° → %.1f/%.1f/%.1f",
                     peak, rule.mild_threshold, rule.moderate_threshold,
                     rule.severe_threshold,
-                )
-
-            elif ft_val == "heel_rise" and hasattr(rule, "threshold_degrees"):
-                peak_dorsi = state["peak_dorsiflexion"]
-                rule.threshold_degrees = max(
-                    rule.threshold_degrees, peak_dorsi + 20.0
-                )
-                logger.info(
-                    "[SQUAT] Heel rise baseline: peak dorsiflexion=%.1f° → threshold %.1f°",
-                    peak_dorsi, rule.threshold_degrees,
                 )

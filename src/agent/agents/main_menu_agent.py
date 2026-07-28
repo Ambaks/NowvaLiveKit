@@ -117,22 +117,46 @@ class MainMenuAgent(BaseNovaAgent):
             db.close()
 
     @function_tool
-    async def start_quick_exercise(self, exercise_name: str, context: RunContext):
+    async def start_quick_exercise(
+        self,
+        exercise_name: str,
+        context: RunContext,
+        sets: int | None = None,
+        reps: int | None = None,
+        weight: float | None = None,
+        rest_seconds: int | None = None,
+    ):
         """
         Call this when the user wants to do a single exercise without a scheduled workout.
         User might say: "I want to squat", "let me do some bench press",
-        "I just want to deadlift", "can I just do squats?" 
+        "I just want to deadlift", "can I just do squats?"
         Or the user might not mention a particular exercise but just say "I want to start a quick exercise"
+
+        IMPORTANT: Extract EVERY detail the user already mentioned and pass it as a parameter.
+        Only omit parameters the user did not mention.
+        Example: "I wanna squat, two sets of three, thirty seconds rest, bodyweight"
+        -> exercise_name="squat", sets=2, reps=3, rest_seconds=30, weight=0
 
         Args:
             exercise_name: The exercise the user wants to do (e.g., "squat", "bench press", "deadlift")
+            sets: Number of sets, if the user mentioned it
+            reps: Reps per set, if the user mentioned it
+            weight: Weight in lbs, if the user mentioned it. Use 0 for bodyweight.
+            rest_seconds: Rest between sets in seconds, if the user mentioned it
         """
-        logger.info(f"[MAIN MENU] User wants quick exercise: {exercise_name}")
+        logger.info(
+            f"[MAIN MENU] User wants quick exercise: {exercise_name} "
+            f"(sets={sets}, reps={reps}, weight={weight}, rest={rest_seconds})"
+        )
         return CollectExerciseInfoTask(
             exercise_name=exercise_name,
             user_id=self.user_id,
             state=self.state,
             userdata=self.userdata,
+            sets=sets,
+            reps=reps,
+            weight=weight,
+            rest_seconds=rest_seconds,
         )
 
     # ===== PROGRAM TOOLS =====

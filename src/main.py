@@ -39,6 +39,14 @@ logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 DEFAULT_EXERCISE_NAME = "Barbell Back Squat"
 COACHING_SOCKET_PATH = "/tmp/nowva_coaching.sock"
 
+# Session params seeded by --test_assess. The assessment itself is bodyweight
+# with a pipeline-defined rep count; these only matter if the run continues
+# past calibration into the workout.
+TEST_ASSESS_SETS = 3
+TEST_ASSESS_REPS = 5
+TEST_ASSESS_WEIGHT_LBS = 45.0
+TEST_ASSESS_REST_SECONDS = 120
+
 
 class _TeeStream:
     def __init__(self, original, log_file):
@@ -100,6 +108,7 @@ class NowvaApp:
         self._session_dir: Path | None = None
         self._fastapi_log = None
         self._cal_file: str | None = None
+        self.test_assess_mode = False
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -310,6 +319,29 @@ class NowvaApp:
             'email': session.get('email')
         }
 
+    def _seed_test_assessment_state(self) -> None:
+        """Mirror CollectExerciseInfoTask.start_workout() so the app boots
+        straight into the pre-workout form assessment (--test_assess)."""
+        from agent.agents.shared.helpers import start_calibration_mode
+        from agent.core.workout_session import WorkoutSession
+
+        start_calibration_mode(self.state, DEFAULT_EXERCISE_NAME, {"type": "quick_exercise"})
+        session = WorkoutSession.create_quick_session(
+            user_id=self.current_user["user_id"],
+            exercise_name=DEFAULT_EXERCISE_NAME,
+            sets=TEST_ASSESS_SETS,
+            reps=TEST_ASSESS_REPS,
+            weight=TEST_ASSESS_WEIGHT_LBS,
+            rest_seconds=TEST_ASSESS_REST_SECONDS,
+        )
+        self.state.set("workout.calibration_profile", None)  # drop stale profile from a prior run
+        self.state.set("workout.current_session", session.to_dict())
+        self.state.set("workout.exercise_name", DEFAULT_EXERCISE_NAME)
+        self.state.set("workout.active", True)
+        self.state.switch_mode("workout")
+        self.state.save_state()
+        print("[TEST ASSESS] State seeded — booting directly into form assessment")
+
     def create_user(self, first_name: str, email: str):
         """
         Create new user in database using auth system
@@ -391,6 +423,51 @@ class NowvaApp:
 
         print("Pose estimation process started")
 
+    def _start_coaching_ipc(self):
+        """Bind the coaching IPC server and serve it from a daemon thread.
+
+        Called at startup and again whenever workout mode restarts — the
+        server is stopped when a workout ends, so a second pass through
+        the flow needs a fresh bind for the voice agent to reconnect to.
+        """
+        def _coaching_message_handler(message: dict):
+            """Handle messages FROM voice agent (reverse direction)."""
+            msg_type = message.get("type")
+            if msg_type not in ("rest_start", "workout_complete", "demo_start",
+                                "demo_cue", "demo_end", "assessment_mode"):
+                return
+            if msg_type == "rest_start":
+                rest_sec = message.get("rest_seconds", 30)
+                print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
+            elif msg_type == "workout_complete":
+                print("[COACHING IPC] Received workout_complete from voice agent")
+            # Snapshot the reference — this runs on the coaching IPC thread
+            # while the main loop can nil self.ipc_server during shutdown
+            pose_ipc = self.ipc_server
+            if pose_ipc and pose_ipc.client_socket:
+                try:
+                    pose_ipc.send_message(message)
+                    print(f"[COACHING IPC] Forwarded {msg_type} to pose process")
+                except Exception as e:
+                    print(f"[COACHING IPC] Failed to forward {msg_type}: {e}")
+
+        self.coaching_ipc = IPCServer(socket_path=COACHING_SOCKET_PATH)
+        self.coaching_ipc.bind(message_callback=_coaching_message_handler)
+
+        def _run_coaching_server():
+            # Snapshot — the main loop nils self.coaching_ipc during shutdown
+            coaching = self.coaching_ipc
+            try:
+                coaching.accept_client()
+                coaching.listen()
+            except OSError:
+                # Expected when stop() closes the socket during shutdown
+                if coaching.running:
+                    raise
+
+        threading.Thread(target=_run_coaching_server, daemon=True).start()
+        print("[COACHING IPC] Server bound — waiting for voice agent to connect")
+
     async def run_onboarding(self, state_notify_fd: int | None = None):
         """
         Run voice-based onboarding flow
@@ -461,14 +538,15 @@ class NowvaApp:
         """Main application loop with voice agent coordination"""
         record_session = os.environ.get("NOWVA_RECORD_SESSION", "").lower() == "true"
 
-        if record_session:
+        if record_session or self.test_assess_mode:
             from datetime import datetime as _dt
             session_id = _dt.now().strftime("%Y-%m-%d_%H-%M-%S")
             self._session_dir = Path("user_test_runs") / session_id
             self._session_dir.mkdir(parents=True, exist_ok=True)
             os.environ["NOWVA_SESSION_OUTPUT_DIR"] = str(self._session_dir)
             self.session_logger.start_session(log_dir=str(self._session_dir))
-            await self._start_screen_recording(self._session_dir)
+            if record_session:
+                await self._start_screen_recording(self._session_dir)
         else:
             self.session_logger.start_session()
 
@@ -500,6 +578,11 @@ class NowvaApp:
         init_db()
 
         # Check for existing session
+        if self.test_assess_mode and not self.check_session():
+            print("[TEST ASSESS] No existing user session found.")
+            print("[TEST ASSESS] Run 'python src/main.py' once to complete onboarding, then retry.")
+            return
+
         if self.check_session():
             self.current_user = self.load_user_from_session()
             print("\n" + "="*50)
@@ -521,6 +604,9 @@ class NowvaApp:
             self.state.set("workout.greeting_done", False)
             self.state.set("shutdown_requested", False)
             self.state.save_state()
+
+            if self.test_assess_mode:
+                self._seed_test_assessment_state()
 
             # Small delay to ensure state file is written before voice agent loads it
             await asyncio.sleep(0.5)
@@ -568,43 +654,7 @@ class NowvaApp:
         # Bind coaching IPC server immediately so the socket is ready
         # before WorkoutAgent.on_enter() tries to connect. The server
         # just idles until a client connects — zero overhead until then.
-        def _coaching_message_handler(message: dict):
-            """Handle messages FROM voice agent (reverse direction)."""
-            msg_type = message.get("type")
-            if msg_type not in ("rest_start", "workout_complete", "demo_start",
-                                "demo_cue", "demo_end", "assessment_mode"):
-                return
-            if msg_type == "rest_start":
-                rest_sec = message.get("rest_seconds", 30)
-                print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
-            elif msg_type == "workout_complete":
-                print("[COACHING IPC] Received workout_complete from voice agent")
-            # Snapshot the reference — this runs on the coaching IPC thread
-            # while the main loop can nil self.ipc_server during shutdown
-            pose_ipc = self.ipc_server
-            if pose_ipc and pose_ipc.client_socket:
-                try:
-                    pose_ipc.send_message(message)
-                    print(f"[COACHING IPC] Forwarded {msg_type} to pose process")
-                except Exception as e:
-                    print(f"[COACHING IPC] Failed to forward {msg_type}: {e}")
-
-        self.coaching_ipc = IPCServer(socket_path=COACHING_SOCKET_PATH)
-        self.coaching_ipc.bind(message_callback=_coaching_message_handler)
-
-        def _run_coaching_server():
-            # Snapshot — the main loop nils self.coaching_ipc during shutdown
-            coaching = self.coaching_ipc
-            try:
-                coaching.accept_client()
-                coaching.listen()
-            except OSError:
-                # Expected when stop() closes the socket during shutdown
-                if coaching.running:
-                    raise
-
-        threading.Thread(target=_run_coaching_server, daemon=True).start()
-        print("[COACHING IPC] Server bound — waiting for voice agent to connect")
+        self._start_coaching_ipc()
 
         print("\n" + "="*50)
         print("SYSTEM READY")
@@ -684,8 +734,10 @@ class NowvaApp:
                 # (workout.current_session is set by confirm_quick_exercise/start_workout)
                 has_workout_session = self.state.get("workout.current_session") is not None
                 if current_mode == "workout" and not pose_running and has_workout_session:
-                    # Coaching IPC is already bound (see above). Only the
-                    # pose-estimation IPC and camera need to start here.
+                    # Coaching IPC is stopped when a workout ends — rebind
+                    # so a second workout in the same session reconnects.
+                    if not self.coaching_ipc:
+                        self._start_coaching_ipc()
 
                     # Start IPC server for pose estimation communication
                     if not self.ipc_server:
@@ -970,14 +1022,19 @@ async def main():
                         help="Skip real pose estimation (use simulate_squat_workout.py instead)")
     parser.add_argument("--profile", action="store_true",
                         help="Enable live session profiling (writes HTML report on exit)")
+    parser.add_argument("--test_assess", action="store_true",
+                        help="Dev fast path: boot straight into the pre-workout form assessment")
     args = parser.parse_args()
 
     if args.profile:
         os.environ["NOWVA_PROFILE"] = "1"
+    if args.test_assess:
+        os.environ["NOWVA_TEST_ASSESS"] = "1"
 
     app = NowvaApp()
     app.simulate_mode = args.simulate
     app.profile_mode = args.profile
+    app.test_assess_mode = args.test_assess
     await app.run()
 
 

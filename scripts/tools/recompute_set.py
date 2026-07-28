@@ -1,7 +1,9 @@
-"""Recompute set plots from raw set_data.json using current smoothing settings.
+"""Recompute set plots from raw set data.json using current smoothing settings.
+
+Expects a workout output directory containing set_<n>/ subfolders.
 
 Usage:
-    python recompute_set.py output/set_20260310_211631
+    python recompute_set.py output/workout_20260310_211631
 """
 
 import json
@@ -33,14 +35,16 @@ from biomechanics.utils.geometry import (
 def recompute(out_dir: str):
     out_dir = Path(out_dir)
 
-    # Find all set data files
-    data_files = sorted(p for p in out_dir.glob("set*_data.json") if "_plot_data" not in p.name)
+    # Find all set data files (workout_<ts>/set_<n>/data.json layout)
+    data_files = sorted(out_dir.glob("set_*/data.json"))
     if not data_files:
-        print(f"No set*_data.json files found in {out_dir}")
+        print(f"No set_*/data.json files found in {out_dir}")
         return
 
     for data_path in data_files:
-        set_num = int(data_path.stem.replace("set", "").replace("_data", ""))
+        set_dir = data_path.parent
+        set_num = int(set_dir.name.replace("set_", ""))
+        label = f"Set {set_num}"
         print(f"\n{'='*50}")
         print(f"  Recomputing Set {set_num} from {data_path.name}")
         print(f"{'='*50}")
@@ -105,11 +109,11 @@ def recompute(out_dir: str):
         trunk_ang = smooth_1d(np.array(trunk_angles_list), sma_window=3, sma_start=sma_start)
 
         # Generate 3D geometry plots
-        save_set_plots(set_num, timestamps, hip_mid, vel_mid,
-                       knee_ang, hip_ang, trunk_ang, rep_events, str(out_dir))
+        save_set_plots(label, timestamps, hip_mid, vel_mid,
+                       knee_ang, hip_ang, trunk_ang, rep_events, str(set_dir))
 
         # Load existing plot_data for pipeline angles (can't recompute IK from raw keypoints)
-        plot_data_path = out_dir / f"set{set_num}_plot_data.json"
+        plot_data_path = set_dir / "plot_data.json"
         pipe_knee = pipe_hip = pipe_trunk = None
         adduction_l = adduction_r = bilat_asym = None
 
@@ -124,19 +128,19 @@ def recompute(out_dir: str):
                 pipe_hip = np.array(old_plot["pipeline_hip_flexion_deg"])
                 pipe_trunk = np.array(old_plot["pipeline_trunk_flexion_deg"])
 
-                save_pipeline_angles_plot(set_num, t_rel, pipe_knee, pipe_hip, pipe_trunk,
-                                          rep_events, timestamps, str(out_dir))
+                save_pipeline_angles_plot(label, t_rel, pipe_knee, pipe_hip, pipe_trunk,
+                                          rep_events, timestamps, str(set_dir))
 
             if old_plot.get("hip_adduction_l_deg"):
                 adduction_l = np.array(old_plot["hip_adduction_l_deg"])
                 adduction_r = np.array(old_plot["hip_adduction_r_deg"])
-                save_hip_adduction_plot(set_num, t_rel, adduction_l, adduction_r,
-                                        rep_events, timestamps, str(out_dir))
+                save_hip_adduction_plot(label, t_rel, adduction_l, adduction_r,
+                                        rep_events, timestamps, str(set_dir))
 
             if old_plot.get("bilateral_asymmetry_deg"):
                 bilat_asym = np.array(old_plot["bilateral_asymmetry_deg"])
-                save_bilateral_asymmetry_plot(set_num, t_rel, bilat_asym,
-                                              rep_events, timestamps, str(out_dir))
+                save_bilateral_asymmetry_plot(label, t_rel, bilat_asym,
+                                              rep_events, timestamps, str(set_dir))
 
         # Save updated plot data
         plot_export = {
@@ -155,7 +159,7 @@ def recompute(out_dir: str):
             "hip_adduction_r_deg": adduction_r.tolist() if adduction_r is not None else [],
             "bilateral_asymmetry_deg": bilat_asym.tolist() if bilat_asym is not None else [],
         }
-        plot_path = str(out_dir / f"set{set_num}_plot_data.json")
+        plot_path = str(set_dir / "plot_data.json")
         with open(plot_path, "w") as f:
             json.dump(plot_export, f, indent=2)
         print(f"  Saved: {plot_path}")
@@ -163,12 +167,12 @@ def recompute(out_dir: str):
         # Segmentation + report
         seg_result = segment_set(plot_export)
         plot_segmentation(plot_export, seg_result,
-                          save_path=out_dir / f"set{set_num}_segmentation.png")
+                          save_path=set_dir / "segmentation.png")
         write_set_report(seg_result, set_number=set_num,
-                         save_path=out_dir / f"set{set_num}_report.md")
+                         save_path=set_dir / "report.md")
 
         # Dashboard
-        generate_set_dashboard(plot_export, seg_result, str(out_dir), set_num)
+        generate_set_dashboard(plot_export, seg_result, str(set_dir), set_num)
 
     print(f"\nDone — all outputs in: {out_dir}")
 

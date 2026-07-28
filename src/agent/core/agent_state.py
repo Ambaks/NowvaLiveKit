@@ -344,6 +344,7 @@ class AgentState:
                     self.state["user"]["username"] = user.username
                     self.state["user"]["name"] = user.name
                     self.state["user"]["email"] = user.email
+                    self.state["user"]["height_cm"] = float(user.height_cm) if user.height_cm else None
                     self.state["user"]["created_at"] = user.created_at.isoformat() if user.created_at else None
                     self._user_loaded_from_db = True  # Mark as loaded
                     print(f"[STATE] Loaded user info from database: {user.name} ({user.username})")
