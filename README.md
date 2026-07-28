@@ -43,26 +43,26 @@
 
 ## Project Status
 
-**Current Focus:** IK pipeline stabilization — asymmetry preservation, anatomical validation, and pre-IK filter reordering for robust diagnosis.
+**Current Focus:** Marketing site launch hardening — production-grade security, privacy compliance, mobile-first UX, and consent-based analytics.
 
 ### Recent Changes (July 2026)
+- **Website Launch Hardening (this branch):** New `/privacy` and `/terms` pages with full legal transparency (Neon Postgres hosting, Resend email delivery, consent-gated analytics, SHA-256-hashed IP rate limiting). Mobile navigation (hamburger menu + animated dropdown below md) with full ARIA wiring, scroll lock, and Escape handling. Durable preorder rate limiting (2-layer: in-memory + Postgres with 24h pruning, 2s timeout, fail-open). Google Analytics moved to basic consent mode — gtag.js loads only after visitor grants consent. 3D intro (IntroLoader/IntroStage) scoped to homepage only to prevent replays on client-side nav. All changes ESLint clean and npm run build passing.
 - **Keypoint Corrector Refactor:** Canonical skeleton now preserves athlete asymmetry (no longer symmetrizes L/R bones) so diagnosis cues ("widen stance") reflect actual anatomy. Bone lengths equalized, dorsiflexion capped, but athlete's own shape retained for visual feedback.
 - **Anatomical Validation Layer:** New `pose_validation.py` checks that choreographer output obeys joint limits (knee flexion, hip ROM, dorsiflexion, varus/valgus) and ground constraints. Guards against impossible movement targets downstream.
 - **Pre-IK Filter Chain:** Reorganized as `preik_chain.py` to enforce correct order (confidence blend → velocity clamp → bone constraints → ground clamp → position smooth → bone constraints again). End-to-end tests ensure filter interactions don't corrupt output.
 - **IK Solver Improvements:** Analytical IK now uses explicit kinematic tree (KINEMATIC_BONES), better handles singular configurations, improved handling of leg asymmetry in squat depth computation.
-- **Website Redesign:** Simplified Hero component (removed complex animation overhead), deleted TechProof section, renamed Mission to Manifesto. Enhanced preorder form with email validation and Resend integration. Added LogoWatermark and database backing.
 - **Test Expansion:** 73+ new tests covering pose validation, pre-IK chain, keypoint corrector asymmetry logic, and valgus knee tracking.
 
 ### YC Application Readiness
 - Core demo loop: webcam → real-time 3D skeleton → fault detection → voice cue (all on-device, <50ms latency).
-- Marketing site live on Vercel with 3D rack model, technical proof, pricing tier, and preorder capture.
+- Marketing site live on Vercel with 3D rack model, technical proof, pricing tier, and preorder capture; now hardened with full legal pages, privacy-first analytics, mobile UX, and rate limit protection.
 - Edge-first architecture validated: no cloud dependency for conversational layer, inference runs on Jetson Nano.
 
 ### Known Limitations / TODO
 - Barbell tracking (z-depth) remains noisy on single-camera setups; multi-camera triangulation in place but not yet field-tested at scale.
 - Rep counter BiLSTM classifier trained on 8 users; generalization on new anthropometry TBD.
 - Program generator V5 working but not yet integrated into the live voice agent for automated workout difficulty scaling.
-- Website Vercel import and DNS verification pending (domain: nowva.ai via Cloudflare Tunnel).
+- Website Vercel domain import and DNS verification pending (domain: nowva.ai via Cloudflare Tunnel); Resend domain verification needed for email deliverability.
 
 ---
 

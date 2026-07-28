@@ -59,8 +59,15 @@ export function CookieBanner() {
       className="fixed bottom-4 left-4 z-80 max-w-sm rounded-2xl border border-border bg-surface p-5 shadow-2xl"
     >
       <p className="text-sm leading-relaxed text-fg-2">
-        We use one analytics cookie to understand how visitors use this page.
-        No ads, no tracking across sites.
+        We use{" "}
+        <a
+          href="/privacy"
+          className="text-accent-ink underline underline-offset-2 transition-opacity hover:opacity-75"
+        >
+          Google Analytics
+        </a>{" "}
+        to understand how visitors use this page — nothing loads until you
+        allow it. No ads, no tracking across sites.
       </p>
       <div className="mt-4 flex gap-3">
         <button
