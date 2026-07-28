@@ -128,6 +128,51 @@ class TestDepthRule:
         )
         assert fault is None
 
+    def test_shallow_rep_quarter_class(self, depth_rule):
+        """Depth class 1 should produce the same MODERATE quarter fault."""
+        angles = create_joint_angles()
+        fault = depth_rule.evaluate_depth_class(
+            max_depth_class=1,
+            angles=angles,
+            rep_number=3,
+            max_knee_flexion=52.0,
+        )
+        assert fault is not None
+        assert fault.severity == FaultSeverity.MODERATE
+        assert fault.details["category"] == DepthCategory.QUARTER
+        assert fault.details["shallow_rep"] is True
+        assert fault.details["max_depth_class"] == 1
+        assert fault.details["max_knee_flexion"] == 52.0
+        assert fault.rep_number == 3
+
+    def test_shallow_rep_half_class(self, depth_rule):
+        """Depth class 2 should produce the MILD half fault."""
+        angles = create_joint_angles()
+        fault = depth_rule.evaluate_depth_class(
+            max_depth_class=2, angles=angles, rep_number=1,
+        )
+        assert fault is not None
+        assert fault.severity == FaultSeverity.MILD
+        assert fault.details["category"] == DepthCategory.HALF
+
+    def test_shallow_rep_fires_regardless_of_measured_angle(self, depth_rule):
+        """The class decides, not the knee angle — the class rejected the rep."""
+        angles = create_joint_angles(knee_flexion_l=120.0, knee_flexion_r=120.0)
+        fault = depth_rule.evaluate_depth_class(
+            max_depth_class=1,
+            angles=angles,
+            rep_number=1,
+            max_knee_flexion=120.0,
+        )
+        assert fault is not None
+        assert fault.details["category"] == DepthCategory.QUARTER
+
+    def test_parallel_class_no_shallow_fault(self, depth_rule):
+        """Classes at or past parallel are acceptable depth."""
+        angles = create_joint_angles()
+        assert depth_rule.evaluate_depth_class(3, angles) is None
+        assert depth_rule.evaluate_depth_class(4, angles) is None
+
     def test_tracks_max_during_rep(self, depth_rule, history):
         """Depth rule should track max depth during rep."""
         # Enter rep
@@ -504,6 +549,28 @@ class TestRuleEngine:
         assert len(faults) == 1
         assert faults[0].fault_type == "depth"
         assert faults[0].severity == FaultSeverity.MODERATE
+
+    def test_shallow_rep_evaluation(self, engine):
+        """Engine should turn a rejected depth class into a depth fault."""
+        angles = create_joint_angles(frame=0)
+        faults = engine.evaluate_shallow_rep(
+            max_depth_class=1,
+            angles=angles,
+            rep_number=4,
+            max_knee_flexion=48.0,
+        )
+        assert len(faults) == 1
+        assert faults[0].fault_type == "depth"
+        assert faults[0].severity == FaultSeverity.MODERATE
+        assert faults[0].details["shallow_rep"] is True
+
+    def test_shallow_rep_evaluation_without_depth_rule(self, engine):
+        """Profiles with no depth rule simply produce nothing."""
+        engine.remove_rule(FaultType.DEPTH)
+        faults = engine.evaluate_shallow_rep(
+            max_depth_class=1, angles=create_joint_angles(), rep_number=1,
+        )
+        assert faults == []
 
     def test_get_rule(self, engine):
         """Should be able to get specific rule by type."""

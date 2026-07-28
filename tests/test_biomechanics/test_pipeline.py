@@ -253,3 +253,38 @@ class TestPresenceOnlyMode:
         assert result.joint_angles is None  # gate not yet latched
 
         pipeline.release()
+
+
+class TestLoggedRepCount:
+    """The displayed count must be the count that actually gets logged."""
+
+    @patch("biomechanics.pipeline.cv2.VideoCapture")
+    def test_rep_count_follows_hip_counter_without_bilstm(self, mock_video_capture_cls):
+        mock_video_capture_cls.return_value = _make_fake_capture(1)
+
+        from biomechanics.pipeline import BiomechanicsPipeline
+
+        pipeline = BiomechanicsPipeline(BiomechanicsConfig())
+        assert pipeline._bilstm is None
+
+        pipeline._rep_counter.rep_count = 7
+        assert pipeline.rep_count == 7
+
+        pipeline.release()
+
+    @patch("biomechanics.pipeline.cv2.VideoCapture")
+    def test_rep_count_follows_bilstm_when_enabled(self, mock_video_capture_cls):
+        """The hip counter accepts shallow reps the BiLSTM rejects — the
+        HUD has to follow the counter that feeds the session tracker."""
+        mock_video_capture_cls.return_value = _make_fake_capture(1)
+
+        from biomechanics.pipeline import BiomechanicsPipeline
+
+        pipeline = BiomechanicsPipeline(BiomechanicsConfig())
+        pipeline._bilstm = MagicMock()
+        pipeline._bilstm.rep_count = 6
+
+        pipeline._rep_counter.rep_count = 11
+        assert pipeline.rep_count == 6
+
+        pipeline.release()

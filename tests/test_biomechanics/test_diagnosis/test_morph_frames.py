@@ -30,8 +30,10 @@ MEASURED_BONES = {
     "thigh_l": (HIP_L, 13),
     "shank_l": (13, 15),
     "foot_l": (15, 17),
+    "heel_l": (15, 19),
     "thigh_r": (HIP_R, 14),
     "shank_r": (14, 16),
+    "heel_r": (16, 20),
     "torso_l": (HIP_L, 5),
     "torso_r": (HIP_R, 6),
     "upper_arm_l": (5, 7),
@@ -41,7 +43,7 @@ MEASURED_BONES = {
 
 
 def _squat_pose() -> np.ndarray:
-    points = np.zeros((19, 3))
+    points = np.zeros((21, 3))
     points[11] = [-0.12, 0.75, 0.0]
     points[12] = [0.12, 0.75, 0.0]
     points[13] = [-0.15, 0.45, 0.18]
@@ -50,6 +52,8 @@ def _squat_pose() -> np.ndarray:
     points[16] = [0.15, 0.06, 0.0]
     points[17] = [-0.15, 0.0, 0.20]
     points[18] = [0.15, 0.0, 0.20]
+    points[19] = [-0.15, 0.0, -0.07]
+    points[20] = [0.15, 0.0, -0.07]
     points[5] = [-0.20, 1.25, 0.0]
     points[6] = [0.20, 1.25, 0.0]
     points[7] = [-0.24, 0.99, 0.05]
@@ -80,6 +84,8 @@ def _rotate_all_bones(
     for hip in (HIP_L, HIP_R):
         out[hip] = pelvis + rotate_about_axis(pose[hip] - pelvis, axis, angle_rad)
     for parent, child in KINEMATIC_BONES:
+        if child >= pose.shape[0]:
+            continue
         out[child] = out[parent] + rotate_about_axis(
             pose[child] - pose[parent], axis, angle_rad,
         )

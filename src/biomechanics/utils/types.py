@@ -92,6 +92,8 @@ class CocoKeypoints:
     RIGHT_ANKLE = 16
     LEFT_FOOT_INDEX = 17
     RIGHT_FOOT_INDEX = 18
+    LEFT_HEEL = 19
+    RIGHT_HEEL = 20
 
 
 class MultiViewPose(BaseModel):
@@ -575,6 +577,10 @@ class PipelineFrame(BaseModel):
     bilstm_depth_class_name: Optional[str] = None
     bilstm_class_probabilities: Optional[List[float]] = None
 
+    # Max depth class of a descent rejected for insufficient depth.
+    # Set only on the frame the shallow rep completes.
+    shallow_rep_class: Optional[int] = None
+
     # Metadata
     latency_ms: Dict[str, float] = Field(default_factory=dict)  # Per-layer timing
 
@@ -593,13 +599,13 @@ class PipelineFrame(BaseModel):
 # HELPER FUNCTIONS
 # =============================================================================
 
-def create_empty_skeleton_2d(num_keypoints: int = 19) -> Skeleton2D:
+def create_empty_skeleton_2d(num_keypoints: int = 21) -> Skeleton2D:
     """Create an empty 2D skeleton with zero-confidence keypoints."""
     keypoints = [Keypoint2D(x=0.0, y=0.0, confidence=0.0) for _ in range(num_keypoints)]
     return Skeleton2D(keypoints=keypoints)
 
 
-def create_empty_skeleton_3d(num_keypoints: int = 19) -> Skeleton3D:
+def create_empty_skeleton_3d(num_keypoints: int = 21) -> Skeleton3D:
     """Create an empty 3D skeleton with zero-confidence keypoints."""
     keypoints = [Point3D(x=0.0, y=0.0, z=0.0, confidence=0.0) for _ in range(num_keypoints)]
     return Skeleton3D(keypoints=keypoints)

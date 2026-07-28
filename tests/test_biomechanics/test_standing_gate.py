@@ -44,6 +44,72 @@ def _standing_skeleton() -> np.ndarray:
     return points
 
 
+def _standing_skeleton_with_feet(heel_y: float = 0.0) -> np.ndarray:
+    """Standing skeleton extended with toe and heel keypoints.
+
+    Ankles sit at y=0.10 with the toes on the floor ahead of them. Raising
+    ``heel_y`` lifts both heels, which is what standing on tiptoe looks like.
+    """
+    points = np.zeros((21, 3))
+    points[:17] = _standing_skeleton()
+    points[CK.LEFT_FOOT_INDEX] = [0.10, 0.0, 0.16]
+    points[CK.RIGHT_FOOT_INDEX] = [-0.10, 0.0, 0.16]
+    points[CK.LEFT_HEEL] = [0.10, heel_y, -0.06]
+    points[CK.RIGHT_HEEL] = [-0.10, heel_y, -0.06]
+    return points
+
+
+class TestFlatFootCheck:
+
+    def test_flat_feet_pass(self):
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        assert gate.check(_make_skeleton(_standing_skeleton_with_feet()))
+        assert gate.last_failure is None
+
+    def test_raised_heels_fail(self):
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        # 10 cm of heel rise over a ~24 cm foot: ratio 0.41, well past 0.30.
+        assert not gate.check(_make_skeleton(_standing_skeleton_with_feet(heel_y=0.10)))
+        assert gate.last_failure == "flat_foot"
+
+    def test_slight_heel_rise_still_passes(self):
+        # 4 cm reads as ratio 0.18 — inside the noise-tolerant threshold, so
+        # normal landmark jitter must not lock the athlete out of calibration.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        assert gate.check(_make_skeleton(_standing_skeleton_with_feet(heel_y=0.04)))
+
+    def test_one_raised_heel_fails(self):
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = _standing_skeleton_with_feet()
+        pts[CK.LEFT_HEEL][1] = 0.12
+        assert not gate.check(_make_skeleton(pts))
+        assert gate.last_failure == "flat_foot"
+
+    def test_detects_heel_rise_in_y_down_frame(self):
+        # MediaPipe world landmarks are Y-down; the check derives "up" from
+        # the torso rather than assuming a sign.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = _standing_skeleton_with_feet(heel_y=0.10)
+        pts[:, 1] *= -1.0
+        assert not gate.check(_make_skeleton(pts))
+        assert gate.last_failure == "flat_foot"
+
+    def test_untracked_heels_skip_the_check(self):
+        # Heels are frequently occluded. A zero-confidence heel must not fail
+        # the gate, or those users can never finish calibrating.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = _standing_skeleton_with_feet(heel_y=0.12)
+        confidences = np.ones(len(pts))
+        confidences[CK.LEFT_HEEL] = 0.0
+        confidences[CK.RIGHT_HEEL] = 0.0
+        assert gate.check(_make_skeleton(pts, confidences=confidences))
+
+    def test_skeleton_without_heel_keypoints_passes(self):
+        # Poses captured before heel tracking are narrower than 21 keypoints.
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        assert gate.check(_make_skeleton(_standing_skeleton()))
+
+
 class TestStandingPoseGate:
 
     def test_passes_after_consecutive_frames(self):

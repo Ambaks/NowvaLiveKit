@@ -232,6 +232,37 @@ class RuleEngine:
 
         return faults
 
+    def evaluate_shallow_rep(
+        self,
+        max_depth_class: int,
+        angles: JointAngles,
+        rep_number: int,
+        max_knee_flexion: float = 0.0,
+    ) -> List[FaultEvent]:
+        """
+        Evaluate a rep that was rejected for insufficient depth.
+
+        Mirrors evaluate_rep_complete, but the depth class from the rep
+        counter is the input rather than the measured knee angle — the rep
+        was rejected on that class, so the fault must follow it.
+        """
+        faults: List[FaultEvent] = []
+
+        for rule in self.rules:
+            if rule.fault_type == FaultType.DEPTH:
+                if hasattr(rule, "evaluate_depth_class"):
+                    fault = rule.evaluate_depth_class(
+                        max_depth_class=max_depth_class,
+                        angles=angles,
+                        rep_number=rep_number,
+                        max_knee_flexion=max_knee_flexion,
+                    )
+                    if fault is not None:
+                        faults.append(fault)
+                break
+
+        return faults
+
     def get_rule(self, fault_type: FaultType) -> Optional[FaultRule]:
         """Get a specific rule by fault type."""
         for rule in self.rules:

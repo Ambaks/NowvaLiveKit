@@ -35,8 +35,8 @@ class TestCocoKeypoints:
     """Test COCO keypoint constants."""
 
     def test_coco_keypoint_names_count(self):
-        """COCO+ format should have exactly 19 keypoints (COCO 17 + 2 foot)."""
-        assert len(COCO_KEYPOINT_NAMES) == 19
+        """COCO+ format should have exactly 21 keypoints (COCO 17 + toes + heels)."""
+        assert len(COCO_KEYPOINT_NAMES) == 21
 
     def test_coco_keypoint_names_order(self):
         """Keypoint names should be in standard COCO order."""
@@ -60,14 +60,25 @@ class TestCocoKeypoints:
             "right_ankle",
             "left_foot_index",
             "right_foot_index",
+            "left_heel",
+            "right_heel",
         ]
         assert COCO_KEYPOINT_NAMES == expected_names
 
     def test_coco_skeleton_connections_valid(self):
         """Skeleton connections should reference valid keypoint indices."""
         for start_idx, end_idx in COCO_SKELETON_CONNECTIONS:
-            assert 0 <= start_idx < 19, f"Invalid start index: {start_idx}"
-            assert 0 <= end_idx < 19, f"Invalid end index: {end_idx}"
+            assert 0 <= start_idx < 21, f"Invalid start index: {start_idx}"
+            assert 0 <= end_idx < 21, f"Invalid end index: {end_idx}"
+
+    def test_foot_forms_a_closed_triangle(self):
+        """Ankle, heel and toe must all be linked, or the foot renders as a
+        single spike and a flat-footed athlete looks like they are on tiptoe."""
+        connections = {tuple(sorted(pair)) for pair in COCO_SKELETON_CONNECTIONS}
+        for ankle, heel, toe in ((15, 19, 17), (16, 20, 18)):
+            assert tuple(sorted((ankle, heel))) in connections
+            assert tuple(sorted((heel, toe))) in connections
+            assert tuple(sorted((ankle, toe))) in connections
 
     def test_keypoint_index_lookup(self):
         """keypoint_index should return correct index for name."""
@@ -89,7 +100,7 @@ class TestCocoKeypoints:
     def test_keypoint_name_invalid_index(self):
         """keypoint_name should raise IndexError for out-of-range index."""
         with pytest.raises(IndexError):
-            PoseEstimator.keypoint_name(19)
+            PoseEstimator.keypoint_name(21)
         with pytest.raises(IndexError):
             PoseEstimator.keypoint_name(-1)
 
@@ -208,10 +219,16 @@ class TestBlazePoseToCoco:
     """Test BlazePose to COCO landmark mapping."""
 
     def test_mapping_covers_all_coco_keypoints(self):
-        """All 19 keypoints (COCO 17 + 2 foot) should be mapped."""
+        """All 21 keypoints (COCO 17 + toes + heels) should be mapped."""
         mapped_coco_indices = set(BLAZEPOSE_TO_COCO.values())
-        expected = set(range(19))
+        expected = set(range(21))
         assert mapped_coco_indices == expected
+
+    def test_heels_map_from_blazepose_landmarks(self):
+        """BlazePose 29/30 are the heels; dropping them is what made the
+        rendered foot a spike from ankle to toe."""
+        assert BLAZEPOSE_TO_COCO[29] == 19
+        assert BLAZEPOSE_TO_COCO[30] == 20
 
     def test_mapping_is_bijective(self):
         """Mapping should be one-to-one (no COCO index mapped twice)."""

@@ -33,6 +33,8 @@ COCO_KEYPOINT_NAMES = [
     "right_ankle",     # 16
     "left_foot_index", # 17
     "right_foot_index",# 18
+    "left_heel",       # 19
+    "right_heel",      # 20
 ]
 
 # COCO skeleton connections (pairs of keypoint indices)
@@ -57,6 +59,10 @@ COCO_SKELETON_CONNECTIONS = [
     (14, 16),  # right_knee - right_ankle
     (15, 17),  # left_ankle - left_foot_index
     (16, 18),  # right_ankle - right_foot_index
+    (15, 19),  # left_ankle - left_heel
+    (19, 17),  # left_heel - left_foot_index
+    (16, 20),  # right_ankle - right_heel
+    (20, 18),  # right_heel - right_foot_index
 ]
 
 

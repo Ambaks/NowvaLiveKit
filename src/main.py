@@ -603,6 +603,12 @@ class NowvaApp:
             self.state.set("workout.active", False)
             self.state.set("workout.greeting_done", False)
             self.state.set("shutdown_requested", False)
+            # A session killed mid-calibration leaves these armed; a stale
+            # calibration.active would force the next pose launch into
+            # assessment mode even when the workout flow chose otherwise
+            self.state.set("calibration.active", None)
+            self.state.set("calibration.movement_pattern", None)
+            self.state.set("calibration.pending_workout", None)
             self.state.save_state()
 
             if self.test_assess_mode:
@@ -1024,12 +1030,17 @@ async def main():
                         help="Enable live session profiling (writes HTML report on exit)")
     parser.add_argument("--test_assess", action="store_true",
                         help="Dev fast path: boot straight into the pre-workout form assessment")
+    parser.add_argument("--valgus", action="store_true",
+                        help="Record a knee-valgus debug session (preview video, per-frame "
+                             "knee metrics, faults, IPC traffic) and write an HTML report")
     args = parser.parse_args()
 
     if args.profile:
         os.environ["NOWVA_PROFILE"] = "1"
     if args.test_assess:
         os.environ["NOWVA_TEST_ASSESS"] = "1"
+    if args.valgus:
+        os.environ["NOWVA_VALGUS_DEBUG"] = "1"
 
     app = NowvaApp()
     app.simulate_mode = args.simulate

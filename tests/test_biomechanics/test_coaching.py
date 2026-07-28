@@ -266,6 +266,38 @@ class TestIPCBridge:
         fault_msgs = [m for m in mock_ipc_client.messages if m["type"] == "fault"]
         assert len(fault_msgs) == 2
 
+    def test_send_shallow_rep_message(self, ipc_bridge, mock_ipc_client):
+        """Shallow rep should carry the depth class and the deeper cue."""
+        fault = make_fault("depth", severity=FaultSeverity.MODERATE, timestamp=10.0)
+        fault.details = {"max_knee_flexion": 51.3, "shallow_rep": True}
+        ipc_bridge.send_shallow_rep(1, fault=fault, set_number=2)
+
+        msg = mock_ipc_client.messages[-1]
+        assert msg["type"] == "shallow_rep"
+        assert msg["depth_class"] == 1
+        assert msg["depth_class_name"] == "Quarter"
+        assert msg["cue"] == "deeper"
+        assert msg["fault_type"] == "depth"
+        assert msg["severity"] == "moderate"
+        assert msg["max_knee_flexion"] == 51.3
+        assert msg["set_number"] == 2
+
+    def test_send_shallow_rep_ignores_fault_cooldown(self, ipc_bridge, mock_ipc_client):
+        """Every shallow rep must reach the agent — no rate limiting."""
+        fault = make_fault("depth", timestamp=10.0)
+        for _ in range(4):
+            ipc_bridge.send_shallow_rep(1, fault=fault)
+        shallow_msgs = [m for m in mock_ipc_client.messages if m["type"] == "shallow_rep"]
+        assert len(shallow_msgs) == 4
+
+    def test_send_shallow_rep_without_fault(self, ipc_bridge, mock_ipc_client):
+        """Message is still useful when no depth rule produced a fault."""
+        ipc_bridge.send_shallow_rep(2)
+        msg = mock_ipc_client.messages[-1]
+        assert msg["type"] == "shallow_rep"
+        assert msg["depth_class_name"] == "Half"
+        assert "fault_type" not in msg
+
     def test_send_rep_complete_messages(self, ipc_bridge, mock_ipc_client):
         """Should send rep_complete and legacy rep_count (no play_cue — orchestrator handles those)."""
         ipc_bridge.prepare_exercise("squat")

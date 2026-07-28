@@ -88,6 +88,9 @@ class MainMenuAgent(BaseNovaAgent):
 
             if self.calibration_profile:
                 self.state.set("workout.calibration_profile", self.calibration_profile)
+                # Explicitly disarm calibration mode — a stale flag from a dead
+                # session would make main.py launch the pipeline in assessment mode
+                self.state.set("calibration.active", None)
                 logger.info(f"[CALIBRATION] Found existing calibration for {exercise_name}")
             else:
                 start_calibration_mode(self.state, exercise_name, {

@@ -128,9 +128,10 @@ def validate_pose(keypoints: np.ndarray | list[list[float]]) -> PoseValidation:
     points = np.asarray(keypoints, dtype=np.float64)
     violations: list[str] = []
 
-    if points.shape != (19, 3):
+    # 19 keypoints for poses captured before heels were tracked, 21 with them.
+    if points.ndim != 2 or points.shape[0] not in (19, 21) or points.shape[1] != 3:
         return PoseValidation(
-            is_valid=False, violations=[f"expected (19, 3), got {points.shape}"],
+            is_valid=False, violations=[f"expected (19, 3) or (21, 3), got {points.shape}"],
         )
     if not np.all(np.isfinite(points)):
         return PoseValidation(

@@ -2,12 +2,94 @@
 Tests for quick-exercise instruction building with prefilled parameters.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from agent.agents.quickExerciseAgent import build_task_instructions
+import agent.agents.quickExerciseAgent as quick_exercise_module
+from agent.agents.quickExerciseAgent import CollectExerciseInfoTask, build_task_instructions
+from agent.core.agent_state import AgentState
+
+
+class _StubAgent:
+    def __init__(self, state=None, userdata=None):
+        self.state = state
+        self.userdata = userdata
+
+
+class _StubWorkoutAgent(_StubAgent):
+    pass
+
+
+class _StubTeachingAgent(_StubAgent):
+    pass
+
+
+def _run_start_workout(state: AgentState, calibration_profile: dict | None):
+    async def _run():
+        task = CollectExerciseInfoTask(
+            exercise_name="squat",
+            user_id="test-user",
+            state=state,
+            userdata=object(),
+        )
+        return await task.start_workout(sets=2, reps=4, weight=0.0, rest_seconds=30)
+
+    async def _fake_check_calibration(user_id: str, exercise_name: str):
+        return calibration_profile
+
+    return _fake_check_calibration, _run
+
+
+@pytest.fixture
+def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AgentState:
+    monkeypatch.setattr(
+        AgentState, "_load_user_from_database", lambda self, user_id: None
+    )
+    return AgentState(state_dir=tmp_path)
+
+
+class TestStartWorkoutCalibrationFlag:
+    def test_stale_calibration_flag_cleared_when_profile_found(
+        self, state: AgentState, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Regression: a session killed mid-calibration leaves calibration.active=True
+        # in the persisted state. When the next quick exercise finds a calibration
+        # profile in the DB, the stale flag must be cleared — otherwise main.py
+        # launches the pipeline in assessment mode while the voice side runs a
+        # normal workout set.
+        state.set("calibration.active", True)
+        state.set("calibration.pending_workout", {"type": "quick_exercise"})
+
+        monkeypatch.setattr(quick_exercise_module, "WorkoutAgent", _StubWorkoutAgent)
+        monkeypatch.setattr(quick_exercise_module, "TeachingAgent", _StubTeachingAgent)
+        fake_check, run = _run_start_workout(state, calibration_profile={"depth": {}})
+        monkeypatch.setattr(quick_exercise_module, "check_calibration", fake_check)
+
+        result = asyncio.run(run())
+
+        assert isinstance(result, _StubWorkoutAgent)
+        assert not state.get("calibration.active")
+        assert state.get("workout.calibration_profile") == {"depth": {}}
+        assert state.get_mode() == "workout"
+
+    def test_no_profile_enters_calibration_mode(
+        self, state: AgentState, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(quick_exercise_module, "WorkoutAgent", _StubWorkoutAgent)
+        monkeypatch.setattr(quick_exercise_module, "TeachingAgent", _StubTeachingAgent)
+        fake_check, run = _run_start_workout(state, calibration_profile=None)
+        monkeypatch.setattr(quick_exercise_module, "check_calibration", fake_check)
+
+        result = asyncio.run(run())
+
+        assert isinstance(result, _StubTeachingAgent)
+        assert state.get("calibration.active") is True
+        assert state.get_mode() == "workout"
 
 
 class TestBuildTaskInstructions:
