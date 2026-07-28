@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,7 +18,10 @@ from .keypoint_corrector import (
     KeypointCorrector,
     HIP_L, HIP_R, KNEE_L, KNEE_R, ANKLE_L, ANKLE_R,
 )
+from .pose_validation import validate_pose
 from .types import DiagnosisResult, HypothesizedCause
+
+logger = logging.getLogger(__name__)
 
 CORRECTOR_CAUSE_ORDER: tuple[str, ...] = (
     "narrow_stance",
@@ -156,6 +160,21 @@ def build_pose_stack(
         if corrected is None:
             return None
         pose_stack[k] = np.asarray(corrected, dtype=np.float32)
+
+    # Hard gate: these poses are shown to the athlete as a movement target, so
+    # an anatomically impossible one is dropped rather than rendered. Bail on
+    # the whole stack — a partial stack would leave the narration describing
+    # corrections the athlete never sees.
+    for index in range(len(pose_stack)):
+        validation = validate_pose(pose_stack[index].astype(np.float64))
+        if not validation.is_valid:
+            label = "observed" if index == 0 else ordered[index - 1].cause_id
+            logger.warning(
+                "[DEMO BUILDER] Rejected pose stack — %s pose is not "
+                "anatomically valid: %s",
+                label, "; ".join(validation.violations),
+            )
+            return None
 
     return pose_stack
 

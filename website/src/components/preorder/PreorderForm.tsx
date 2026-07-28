@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Button } from "@/components/ui/Button";
 import { trackEvent } from "@/lib/analytics";
@@ -12,11 +12,13 @@ type Status = "idle" | "submitting" | "success" | "error";
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 const INPUT_CLASSES =
-  "w-full rounded-xl border border-border bg-bg px-4 py-3 text-sm text-fg placeholder:text-fg-3 transition-colors duration-200 focus:border-accent focus:outline-none";
+  "w-full rounded-xl border border-border bg-bg px-4 py-3 text-base text-fg placeholder:text-fg-3 transition-colors duration-200 focus:border-accent focus:outline-none";
 
 export function PreorderForm() {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [invalidFields, setInvalidFields] = useState<string[]>([]);
+  const successHeadingRef = useRef<HTMLParagraphElement>(null);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,10 +33,12 @@ export function PreorderForm() {
 
     const parsed = preorderSchema.safeParse(payload);
     if (!parsed.success) {
+      setInvalidFields(parsed.error.issues.map((issue) => String(issue.path[0])));
       setError(parsed.error.issues[0]?.message ?? "Please check your name and email.");
       return;
     }
 
+    setInvalidFields([]);
     setError(null);
     setStatus("submitting");
     try {
@@ -79,6 +83,7 @@ export function PreorderForm() {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, ease: EASE }}
+            onAnimationComplete={() => successHeadingRef.current?.focus()}
             className="rounded-xl border border-accent/40 bg-accent/10 p-6 text-center"
           >
             <motion.span
@@ -101,7 +106,11 @@ export function PreorderForm() {
                 />
               </svg>
             </motion.span>
-            <p className="mt-4 font-display text-lg font-bold text-fg">
+            <p
+              ref={successHeadingRef}
+              tabIndex={-1}
+              className="mt-4 font-display text-lg font-bold text-fg focus:outline-none"
+            >
               You&apos;re in the founding batch.
             </p>
             <p className="mt-2 text-sm leading-relaxed text-fg-2">
@@ -128,6 +137,10 @@ export function PreorderForm() {
                   autoComplete="name"
                   placeholder="Your name"
                   required
+                  aria-invalid={invalidFields.includes("name") || undefined}
+                  aria-describedby={
+                    invalidFields.includes("name") ? "preorder-error" : undefined
+                  }
                   className={INPUT_CLASSES}
                 />
               </label>
@@ -139,6 +152,10 @@ export function PreorderForm() {
                   autoComplete="email"
                   placeholder="you@example.com"
                   required
+                  aria-invalid={invalidFields.includes("email") || undefined}
+                  aria-describedby={
+                    invalidFields.includes("email") ? "preorder-error" : undefined
+                  }
                   className={INPUT_CLASSES}
                 />
               </label>
@@ -154,6 +171,7 @@ export function PreorderForm() {
             <AnimatePresence initial={false}>
               {error && (
                 <motion.p
+                  id="preorder-error"
                   role="alert"
                   initial={{ opacity: 0, y: -4 }}
                   animate={{ opacity: 1, y: 0 }}

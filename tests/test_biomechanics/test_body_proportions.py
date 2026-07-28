@@ -166,6 +166,10 @@ class TestBodyProportions:
 
 
 class TestStandingGateBlocksCalibration:
+    # The gate is advanced by the caller once per frame, exactly as the
+    # pipeline does. enforce() only reads is_ready — it must never advance
+    # the gate itself, or the required consecutive-frame count is reached in
+    # a fraction of the frames it asks for.
 
     def test_gate_blocks_calibration(self):
         """Calibration frames should not count until gate passes."""
@@ -177,7 +181,9 @@ class TestStandingGateBlocksCalibration:
 
         # 10 frames with bad pose — gate doesn't pass, calibration doesn't advance
         for i in range(10):
-            bc.enforce(_make_skeleton(bad_pts, frame_index=i))
+            skeleton = _make_skeleton(bad_pts, frame_index=i)
+            gate.check(skeleton)
+            bc.enforce(skeleton)
 
         assert not gate.is_ready
         assert not bc.is_calibrated
@@ -190,11 +196,29 @@ class TestStandingGateBlocksCalibration:
 
         # 2 frames to pass gate + 5 frames for calibration = 7 total
         for i in range(7):
-            bc.enforce(_make_skeleton(good_pts, frame_index=i))
+            skeleton = _make_skeleton(good_pts, frame_index=i)
+            gate.check(skeleton)
+            bc.enforce(skeleton)
 
         assert gate.is_ready
         assert bc.is_calibrated
         assert bc.body_proportions is not None
+
+    def test_enforce_does_not_advance_gate(self):
+        """enforce() must not advance the gate — the pipeline owns that."""
+        gate = StandingPoseGate(required_consecutive_frames=5)
+        bc = BoneLengthConstraints(calibration_frames=5, standing_gate=gate)
+        good_pts = _standing_skeleton()
+
+        for i in range(4):
+            skeleton = _make_skeleton(good_pts, frame_index=i)
+            gate.check(skeleton)
+            # Two enforce() calls per frame, as the pipeline does.
+            bc.enforce(skeleton)
+            bc.enforce(skeleton)
+
+        assert gate.progress == (4, 5)
+        assert not gate.is_ready
 
 
 def _make_engine_with_squat_rules() -> RuleEngine:

@@ -138,7 +138,7 @@ async def entrypoint(ctx: agents.JobContext):
         voice=os.getenv("CARTESIA_VOICE_ID", "3e39e9a5-585c-4f5f-bac6-5e4905c51095"),
         model="sonic-3",
         language="en",
-        speed="normal",
+        speed=1.0,  # sonic-3 requires a float in [0.6, 2.0]
     )
     logger.info("[NOVA] Cascade pipeline initialized")
 

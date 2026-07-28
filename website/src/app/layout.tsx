@@ -6,7 +6,14 @@ import { IntroLoader } from "@/components/layout/IntroLoader";
 import { IntroStage } from "@/components/intro/IntroStage";
 import { Providers } from "@/components/layout/Providers";
 import { CookieBanner } from "@/components/layout/CookieBanner";
-import { GA_ID, SITE_NAME, SITE_URL } from "@/lib/constants";
+import {
+  CONTACT_EMAIL,
+  GA_ID,
+  PRICE_MONTHLY,
+  PRICE_UPFRONT,
+  SITE_NAME,
+  SITE_URL,
+} from "@/lib/constants";
 
 const bricolage = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -28,7 +35,10 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "NOWVA — The First Rack That Coaches You",
   description:
-    "Cameras in the steel. A real-time biomechanics engine underneath. A full AI strength coach that corrects your form rep by rep, programs your training, and plans your nutrition — 100% on-device. Reserve for $0.",
+    "Cameras in the steel. An AI coach that corrects your form rep by rep, programs your training, and plans your nutrition — 100% on-device. Reserve for $0.",
+  alternates: {
+    canonical: SITE_URL,
+  },
   openGraph: {
     title: "NOWVA — The First Rack That Coaches You",
     description:
@@ -47,8 +57,42 @@ export const metadata: Metadata = {
   },
 };
 
+/* The site theme is class-driven and defaults to dark regardless of OS
+   preference, so a media-keyed themeColor would mismatch on light-OS
+   first visits. */
 export const viewport: Viewport = {
   themeColor: "#09090e",
+};
+
+/* Organization + Product structured data for search engines. */
+const JSON_LD = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${SITE_URL}/#organization`,
+      name: SITE_NAME,
+      url: SITE_URL,
+      logo: `${SITE_URL}/logo-black.png`,
+      email: CONTACT_EMAIL,
+    },
+    {
+      "@type": "Product",
+      name: "Nowva Rack",
+      description:
+        "The AI power rack that corrects your form rep by rep, programs your training, and plans your nutrition — 100% on-device.",
+      image: `${SITE_URL}/og.png`,
+      brand: { "@type": "Brand", name: SITE_NAME },
+      offers: {
+        "@type": "Offer",
+        price: PRICE_UPFRONT,
+        priceCurrency: "USD",
+        availability: "https://schema.org/PreOrder",
+        url: `${SITE_URL}/#reserve`,
+        description: `$${PRICE_UPFRONT.toLocaleString("en-US")} when your rack ships, then $${PRICE_MONTHLY}/month starting after your second month. Reservation is free.`,
+      },
+    },
+  ],
 };
 
 /* Show the intro loader once per tab session; repeats skip it before paint. */
@@ -71,6 +115,12 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: INTRO_SCRIPT }} />
         <script dangerouslySetInnerHTML={{ __html: CONSENT_SCRIPT }} />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(JSON_LD).replace(/</g, "\\u003c"),
+          }}
+        />
       </head>
       <body className="min-h-screen font-sans">
         <IntroLoader />

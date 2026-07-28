@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 import { preorderSchema } from "@/lib/validation";
 import { CONTACT_EMAIL } from "@/lib/constants";
+import { insertReservation } from "@/lib/db";
+import {
+  confirmationHtml,
+  confirmationSubject,
+  confirmationText,
+} from "@/lib/preorder-email";
 
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_PER_WINDOW = 5;
@@ -16,6 +22,9 @@ function rateLimited(ip: string): boolean {
     for (const [key, stamps] of hits) {
       if (now - (stamps[stamps.length - 1] ?? 0) > WINDOW_MS) hits.delete(key);
     }
+    /* Every entry still fresh (distributed burst) — drop the counters
+       rather than grow unboundedly; losing them is fine for a soft limit. */
+    if (hits.size > MAX_TRACKED_IPS) hits.clear();
   }
   const recent = (hits.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
   recent.push(now);
@@ -68,7 +77,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
+  /* The Vercel project has the key stored as RESEND_APIKEY (no underscore);
+     accept both names so the deployed form works either way. */
+  const apiKey = process.env.RESEND_API_KEY ?? process.env.RESEND_APIKEY;
   if (!apiKey) {
     console.error("[preorder] RESEND_API_KEY is not set");
     return NextResponse.json(
@@ -77,28 +88,103 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  try {
-    const resend = new Resend(apiKey);
-    const { error } = await resend.emails.send({
-      from: "Nowva Preorders <preorders@nowva.ai>",
-      to: process.env.PREORDER_TO ?? CONTACT_EMAIL,
-      replyTo: email,
-      subject: `New preorder reservation — ${name}`,
-      text: [
-        "New founding-batch reservation",
-        "",
-        `Name:  ${name}`,
-        `Email: ${email}`,
-        `Time:  ${new Date().toISOString()}`,
-      ].join("\n"),
-    });
-    if (error) throw new Error(error.message);
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("[preorder] send failed:", err);
-    return NextResponse.json(
-      { ok: false, error: "We couldn't save your reservation. Please try again." },
-      { status: 500 },
-    );
+  const resend = new Resend(apiKey);
+  const normalizedEmail = email.toLowerCase();
+
+  /* Capture the lead in Postgres before any Resend call so an email outage
+     can't lose it. Missing config or a failed insert falls back to
+     email-only capture. */
+  let dbOutcome: "inserted" | "duplicate" | "failed" | "skipped" = "skipped";
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error("[preorder] DATABASE_URL is not set — email-only fallback");
+  } else {
+    try {
+      dbOutcome = await insertReservation(databaseUrl, name, normalizedEmail);
+    } catch (err) {
+      dbOutcome = "failed";
+      console.error("[preorder] db insert failed — email-only fallback:", err);
+    }
   }
+
+  /* Internal alert — skipped for duplicates. Its failure is only fatal when
+     the database didn't capture the lead either. */
+  if (dbOutcome !== "duplicate") {
+    try {
+      const { error } = await resend.emails.send({
+        from: "Nowva Preorders <info@nowvasports.com>",
+        to: process.env.PREORDER_TO ?? CONTACT_EMAIL,
+        replyTo: email,
+        subject: `New preorder reservation — ${name}`,
+        text: [
+          "New founding-batch reservation",
+          "",
+          `Name:  ${name}`,
+          `Email: ${email}`,
+          `Time:  ${new Date().toISOString()}`,
+        ].join("\n"),
+      });
+      if (error) throw new Error(error.message);
+    } catch (err) {
+      console.error(
+        `[preorder] alert send failed for ${normalizedEmail} (db=${dbOutcome}):`,
+        err,
+      );
+      if (dbOutcome !== "inserted") {
+        return NextResponse.json(
+          { ok: false, error: "We couldn't save your reservation. Please try again." },
+          { status: 500 },
+        );
+      }
+    }
+  }
+
+  /* Resend Audience keeps the broadcast list in step with the table.
+     The audienceId form is deprecated in favor of segments but supported
+     in resend@6.18; switch to `segments: [{ id }]` if the account
+     migrates to Segments. */
+  if (dbOutcome === "inserted") {
+    const audienceId = process.env.RESEND_AUDIENCE_ID;
+    if (!audienceId) {
+      console.warn("[preorder] RESEND_AUDIENCE_ID is not set — audience sync skipped");
+    } else {
+      try {
+        const { error } = await resend.contacts.create({
+          audienceId,
+          email: normalizedEmail,
+          firstName: name,
+        });
+        if (error) throw new Error(error.message);
+      } catch (err) {
+        console.error("[preorder] audience sync failed:", err);
+      }
+    }
+  }
+
+  /* Customer confirmation — only when the database verified this is a new
+     reservation. Without a DB answer ("skipped"/"failed") duplicates can't
+     be detected, so sending would let repeat POSTs mail-bomb an arbitrary
+     address; in those fallback modes the alert email captures the lead and
+     the on-screen success message stands alone. A failure here logs
+     instead of erroring the request. */
+  if (dbOutcome === "inserted") {
+    try {
+      const { error } = await resend.emails.send({
+        from: "Nowva <info@nowvasports.com>",
+        to: email,
+        replyTo: CONTACT_EMAIL,
+        subject: confirmationSubject(),
+        html: confirmationHtml(name),
+        text: confirmationText(name),
+      });
+      if (error) throw new Error(error.message);
+    } catch (err) {
+      console.error(
+        `[preorder] CRITICAL: confirmation send failed for ${normalizedEmail} (db=${dbOutcome}) — user saw success:`,
+        err,
+      );
+    }
+  }
+
+  return NextResponse.json({ ok: true });
 }

@@ -20,11 +20,13 @@ export function Navbar() {
       lastY = y;
     };
     window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   return (
     <header
+      inert={hidden}
       className={cn(
         "fixed inset-x-0 top-0 z-50 transition-transform duration-500 ease-out",
         hidden && "-translate-y-full",
@@ -68,7 +70,9 @@ export function Navbar() {
           <div className="flex items-center gap-3">
             <ThemeToggle />
             <Button href="#reserve" size="md" cta="navbar">
-              Reserve — $0 today
+              <span className="whitespace-nowrap">
+                Reserve<span className="hidden sm:inline"> — $0 today</span>
+              </span>
             </Button>
           </div>
         </nav>

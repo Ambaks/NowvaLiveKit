@@ -40,6 +40,7 @@ export function OneSet() {
         <SectionHeading
           eyebrow="One set with Nowva"
           title="Step in. Nova takes it from there."
+          lead="Here's a single set of squats, beat by beat — and squats are just the start. The rack will coach 150+ exercises the same way."
         />
 
         <div className="relative mt-16 grid gap-10 md:grid-cols-4 md:gap-6">

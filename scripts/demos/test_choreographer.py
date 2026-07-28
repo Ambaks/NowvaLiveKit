@@ -362,7 +362,7 @@ def run_replay(session_path: str | None) -> None:
 
     anthro = session.get("athlete_params")
     baseline = session.get("baseline")
-    rom = {"dorsiflexion_drop": baseline["peakDorsi"]} if baseline else None
+    rom = {"peak_dorsiflexion": baseline["peakDorsi"]} if baseline else None
 
     demo = build_demo_data(worst_kpts, diagnosis, anthro=anthro, rom=rom)
     if demo is None:

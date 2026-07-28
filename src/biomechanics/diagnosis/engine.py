@@ -34,12 +34,6 @@ UNEXPLAINED_LEAK_SCORE = 0.10
 
 HYPOTHESIS_SCORE_THRESHOLD = 0.15
 
-# Turning the feet out to the target angle is a safe, universally beneficial
-# cue. Whenever one of these faults fires and the feet are turned out less than
-# the target, narrow_foot_angle is surfaced even if the Bayesian competition
-# ranked it below the hypothesis threshold.
-FOOT_ANGLE_LINKED_SYMPTOMS = ("depth_limit", "excessive_trunk_lean")
-
 
 class HypothesisEngine:
     def diagnose(self, set_features: SetFeatures) -> DiagnosisResult:
@@ -54,14 +48,14 @@ class HypothesisEngine:
         cause_scores = self._score_causes(
             detected_symptoms, representative_rep, anthro, rom, set_summary
         )
-        force_foot_angle = self._foot_angle_cue_forced(
-            detected_symptoms, representative_rep, anthro, rom
-        )
+        # Every cause competes on evidence. narrow_foot_angle used to be
+        # force-surfaced past this threshold as "a safe, universally
+        # beneficial cue" — 30-40° of prescribed toe-out is neither, and hip
+        # external-rotation ROM is not measured anywhere.
         filtered_causes = {
             cause_id: info
             for cause_id, info in cause_scores.items()
             if info["aggregate_score"] > HYPOTHESIS_SCORE_THRESHOLD
-            or (cause_id == "narrow_foot_angle" and force_foot_angle)
         }
 
         hypotheses = self._build_hypotheses(
@@ -87,24 +81,6 @@ class HypothesisEngine:
             confidence=confidence,
         )
 
-    def _foot_angle_cue_forced(
-        self,
-        detected_symptoms: list[DetectedSymptom],
-        representative_rep: RepKinematicSummary,
-        anthro: dict,
-        rom: dict,
-    ) -> bool:
-        linked_fired = any(
-            symptom.symptom_id in FOOT_ANGLE_LINKED_SYMPTOMS
-            for symptom in detected_symptoms
-        )
-        if not linked_fired:
-            return False
-        avg_foot_angle = (
-            representative_rep.foot_direction_angle_l
-            + representative_rep.foot_direction_angle_r
-        ) / 2.0
-        return avg_foot_angle < foot_angle_target_deg(anthro, rom)
 
     def _detect_symptoms(
         self, reps: list[RepKinematicSummary], anthro: dict
@@ -375,7 +351,7 @@ class HypothesisEngine:
             / 2.0,
             "recommended_angle": foot_angle_target_deg(anthro, rom),
             "current_df": max(rep.ankle_df_l_max, rep.ankle_df_r_max),
-            "expected_df": rom.get("dorsiflexion_drop", 35.0),
+            "expected_df": rom.get("peak_dorsiflexion", 35.0),
             "heavier_side": "left"
             if rep.hip_y_l_at_bottom < rep.hip_y_r_at_bottom
             else "right",

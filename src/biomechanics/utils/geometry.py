@@ -9,6 +9,24 @@ import numpy as np
 from typing import Tuple, Optional
 
 
+# Single source of truth for the production coordinate frame.
+# 3D keypoints come from MediaPipe world landmarks, which are Y-DOWN: a
+# keypoint that is physically higher has a SMALLER y. The world's "up"
+# direction is therefore -Y. No module may write a bare [0, 1, 0] for
+# vertical — import WORLD_UP.
+WORLD_UP = np.array([0.0, -1.0, 0.0])
+
+
+def is_above(point_a: np.ndarray, point_b: np.ndarray) -> bool:
+    """True if point_a is physically higher than point_b in the Y-down frame."""
+    return bool(point_a[1] < point_b[1])
+
+
+def height_above(point_a: np.ndarray, point_b: np.ndarray) -> float:
+    """Signed height of point_a above point_b, positive when a is higher."""
+    return float(point_b[1] - point_a[1])
+
+
 def angle_between_vectors(v1: np.ndarray, v2: np.ndarray) -> float:
     """
     Calculate the angle between two vectors in degrees.
@@ -245,13 +263,13 @@ def calculate_trunk_angle(
     Args:
         shoulder_mid: Midpoint of shoulders
         hip_mid: Midpoint of hips
-        vertical: Vertical direction (default: [0, 1, 0] for Y-up)
+        vertical: Vertical direction (default: WORLD_UP, the production frame)
 
     Returns:
         Trunk angle in degrees (0 = perfectly upright)
     """
     if vertical is None:
-        vertical = np.array([0, 1, 0])
+        vertical = WORLD_UP
 
     trunk_vector = shoulder_mid - hip_mid
     return angle_between_vectors(trunk_vector, vertical)

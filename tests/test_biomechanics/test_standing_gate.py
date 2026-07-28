@@ -184,6 +184,28 @@ class TestStandingPoseGate:
         assert not gate.is_ready
         assert gate.last_failure == "leg_extension"
 
+    def test_corrupted_landmarks_report_tracking_lost(self):
+        # Regression (session 2026-07-27_15-55-59): raw MediaPipe world
+        # landmarks folded the legs frontally — ankles hallucinated back up
+        # near hip height, putting hip and ankle on the same side of the
+        # knee (flexion reads 135-180°). That is a tracking failure, not
+        # bent knees, and must not be labelled "knee_extension".
+        gate = StandingPoseGate(required_consecutive_frames=1)
+        pts = np.zeros((19, 3))
+        pts[CK.LEFT_SHOULDER] = [-0.18, -0.50, 0.0]
+        pts[CK.RIGHT_SHOULDER] = [0.18, -0.50, 0.0]
+        pts[CK.LEFT_HIP] = [-0.10, 0.0, 0.0]
+        pts[CK.RIGHT_HIP] = [0.10, 0.0, 0.0]
+        pts[CK.LEFT_KNEE] = [-0.10, 0.45, -0.30]
+        pts[CK.RIGHT_KNEE] = [0.10, 0.45, -0.30]
+        pts[CK.LEFT_ANKLE] = [-0.10, 0.05, -0.60]
+        pts[CK.RIGHT_ANKLE] = [0.10, 0.05, -0.60]
+
+        for _ in range(10):
+            assert not gate.check(_make_skeleton(pts))
+        assert not gate.is_ready
+        assert gate.last_failure == "tracking_lost"
+
     def test_y_down_standing_passes(self):
         # Live MediaPipe world landmarks are Y-down hip-centered; the gate
         # must accept a proper standing pose in that convention too.

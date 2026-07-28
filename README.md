@@ -43,14 +43,15 @@
 
 ## Project Status
 
-**Current Focus:** Squat Visualizer v2 — Interactive 3D rack explorer and stabilized biomechanics validation.
+**Current Focus:** IK pipeline stabilization — asymmetry preservation, anatomical validation, and pre-IK filter reordering for robust diagnosis.
 
 ### Recent Changes (July 2026)
-- **Standing Gate Refactor:** Added frontal-plane knee flexion check (using only x/y, not noisy z-depth) and new `_check_leg_extension()` validation to reject depth-hallucinated "folded leg" artifacts. Legs must extend ~60% of their length vertically away from the hip.
-- **Ground Clamp Validation:** Rejects calibration if median leg extension is below threshold (0.75), preventing folded-leg hallucinations from corrupting the session's ground truth. Logs rejection count and recollects observations.
-- **IPC Raw Forwarding:** Enhanced ipc_communication.py with `_send_framed_raw()` and `_recv_framed_with_raw()` to forward pre-serialized frame_data without re-encoding, reducing latency and memory churn for high-frequency messages.
-- **Website 3D Rack Explorer:** New interactive 3D model viewer in `website/src/components/rack/` (RackExplorer, RackStage, SceneParts) with part exploding, assembly visualization, and Draco compression. Updated Hero component with animated stat counters synced to 3D intro scene. Messaging refactored to emphasize on-device AI, rapid feedback, and anatomical calibration.
-- **Test Coverage:** Comprehensive tests added for IPC raw forwarding, ground clamp rejection logic, standing gate leg extension check, and evidence test refinements.
+- **Keypoint Corrector Refactor:** Canonical skeleton now preserves athlete asymmetry (no longer symmetrizes L/R bones) so diagnosis cues ("widen stance") reflect actual anatomy. Bone lengths equalized, dorsiflexion capped, but athlete's own shape retained for visual feedback.
+- **Anatomical Validation Layer:** New `pose_validation.py` checks that choreographer output obeys joint limits (knee flexion, hip ROM, dorsiflexion, varus/valgus) and ground constraints. Guards against impossible movement targets downstream.
+- **Pre-IK Filter Chain:** Reorganized as `preik_chain.py` to enforce correct order (confidence blend → velocity clamp → bone constraints → ground clamp → position smooth → bone constraints again). End-to-end tests ensure filter interactions don't corrupt output.
+- **IK Solver Improvements:** Analytical IK now uses explicit kinematic tree (KINEMATIC_BONES), better handles singular configurations, improved handling of leg asymmetry in squat depth computation.
+- **Website Redesign:** Simplified Hero component (removed complex animation overhead), deleted TechProof section, renamed Mission to Manifesto. Enhanced preorder form with email validation and Resend integration. Added LogoWatermark and database backing.
+- **Test Expansion:** 73+ new tests covering pose validation, pre-IK chain, keypoint corrector asymmetry logic, and valgus knee tracking.
 
 ### YC Application Readiness
 - Core demo loop: webcam → real-time 3D skeleton → fault detection → voice cue (all on-device, <50ms latency).

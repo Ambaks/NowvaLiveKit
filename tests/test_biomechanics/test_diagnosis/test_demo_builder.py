@@ -195,7 +195,7 @@ class TestBuildPoseStack:
         ])
 
         pose_stack = build_pose_stack(
-            observed.tolist(), diagnosis, rom={"dorsiflexion_drop": 35.0},
+            observed.tolist(), diagnosis, rom={"peak_dorsiflexion": 35.0},
         )
         assert pose_stack is not None
 

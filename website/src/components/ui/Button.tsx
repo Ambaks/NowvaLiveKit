@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 
 const VARIANTS = {
-  cta: "btn-shine bg-cta text-on-cta hover:bg-cta-hover shadow-[0_0_0_0_transparent] hover:shadow-[0_8px_40px_-8px_var(--glow-cta)] font-semibold",
+  cta: "btn-shine btn-cta-grad text-on-cta shadow-[0_0_0_0_transparent] hover:shadow-[0_8px_40px_-8px_var(--glow-cta)] font-semibold",
   ghost:
     "border border-border-strong text-fg hover:border-accent hover:text-accent-ink hover:shadow-[0_0_32px_-12px_var(--glow)] bg-transparent",
 } as const;

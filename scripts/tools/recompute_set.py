@@ -21,10 +21,13 @@ from biomechanics.analysis.set_finalizer import (
 )
 from biomechanics.analysis.rep_segmenter import segment_set, plot_segmentation, write_set_report
 from biomechanics.viz.html_dashboard import generate_set_dashboard
-from biomechanics.utils.geometry import joint_angle_3_points, calculate_trunk_angle
+from biomechanics.utils.geometry import (
+    WORLD_UP,
+    joint_angle_3_points,
+    calculate_trunk_angle,
+)
 
 
-_VERTICAL_Y_DOWN = np.array([0.0, -1.0, 0.0])
 
 
 def recompute(out_dir: str):
@@ -86,7 +89,7 @@ def recompute(out_dir: str):
 
             knee_angles_list.append(joint_angle_3_points(hip_mid, knee_mid, ankle_mid))
             hip_angles_list.append(joint_angle_3_points(shoulder_mid, hip_mid, knee_mid))
-            trunk_angles_list.append(calculate_trunk_angle(shoulder_mid, hip_mid, vertical=_VERTICAL_Y_DOWN))
+            trunk_angles_list.append(calculate_trunk_angle(shoulder_mid, hip_mid, vertical=WORLD_UP))
 
         timestamps = np.array(timestamps_list)
         t_rel = timestamps - timestamps[0]

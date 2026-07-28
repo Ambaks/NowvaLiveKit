@@ -17,6 +17,7 @@ import {
 } from "react";
 import { Canvas } from "@react-three/fiber";
 import { ContactShadows, useGLTF } from "@react-three/drei";
+import type * as THREE from "three";
 import { useReducedMotion } from "motion/react";
 
 import { explodeConfig } from "./explode";
@@ -38,18 +39,38 @@ useGLTF.preload(MODEL_URL, DRACO_PATH);
 
 /* ------------------------------------------------------------------ scene */
 
-/* Built once per loaded glTF and keyed on it, so StrictMode's mount ->
-   unmount -> remount cycle reuses the same merged geometry instead of
-   rebuilding it. */
-const assemblyCache = new WeakMap<object, BuiltAssembly>();
+/* Built once per loaded glTF and stashed on its scene, so StrictMode's mount ->
+   unmount -> remount cycle (and Fast Refresh, which would reset a module-level
+   cache after the source buffers below are freed) reuses the same merged
+   geometry instead of rebuilding it. */
+const BUILT_ASSEMBLY_KEY = "builtAssembly";
+
+/* The merged copies are the only geometry this stage ever renders. Once they
+   exist, drop the decoded source buffers — 864 primitives of positions and
+   normals otherwise sit in heap for the page's lifetime purely as merge input.
+   The scene graph itself stays in drei's cache (see the no-clear note below). */
+function releaseSourceGeometry(scene: THREE.Object3D): void {
+  scene.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    mesh.geometry.dispose();
+    for (const name of Object.keys(mesh.geometry.attributes)) {
+      mesh.geometry.deleteAttribute(name);
+    }
+    mesh.geometry.setIndex(null);
+  });
+}
 
 function Loader({ onReady }: { onReady: (assembly: BuiltAssembly) => void }) {
   const gltf = useGLTF(MODEL_URL, DRACO_PATH);
   const assembly = useMemo(() => {
-    let built = assemblyCache.get(gltf);
+    let built = gltf.scene.userData[BUILT_ASSEMBLY_KEY] as
+      | BuiltAssembly
+      | undefined;
     if (!built) {
       built = buildAssembly(gltf);
-      assemblyCache.set(gltf, built);
+      gltf.scene.userData[BUILT_ASSEMBLY_KEY] = built;
+      releaseSourceGeometry(gltf.scene);
     }
     return built;
   }, [gltf]);
@@ -65,6 +86,32 @@ function Lights() {
       <directionalLight position={[-6, 3, -2]} intensity={0.75} color="#8fa8ff" />
       <directionalLight position={[0, 2, -7]} intensity={0.55} color="#c9b6ff" />
     </>
+  );
+}
+
+/* drei's ContactShadows re-bakes for `frames` frames after every render of the
+   component (its bake counter is a per-render closure). Subscribing this
+   wrapper to the explode amount re-renders it only while t is changing, so the
+   shadow re-bakes during scrubs and run sequences and stays a static texture
+   the rest of the session — part positions are the only thing it depends on. */
+function BakedShadows({ assembly }: { assembly: BuiltAssembly }) {
+  const [, setBakeT] = useState(0);
+  useEffect(() => viewer.subscribeT(setBakeT), []);
+
+  return (
+    <ContactShadows
+      position={[
+        assembly.center.x,
+        assembly.box.min.y + 0.001,
+        assembly.center.z,
+      ]}
+      scale={Math.max(assembly.size.x, assembly.size.z) * 2.4}
+      resolution={512}
+      frames={1}
+      blur={2.8}
+      opacity={0.55}
+      far={Math.max(assembly.size.x, assembly.size.z)}
+    />
   );
 }
 
@@ -113,7 +160,9 @@ function Markers({
             aria-label={displayNameFor(part.id, part.nodeName)}
             aria-pressed={isSelected}
             className={
-              "pointer-events-auto absolute left-0 top-0 rounded-full transition-colors " +
+              /* The visible dot stays tiny; the ::before pseudo pads the hit
+                 area out to >=44px for touch. */
+              "pointer-events-auto absolute left-0 top-0 rounded-full transition-colors before:absolute before:-inset-4.5 before:content-[''] " +
               (isSelected
                 ? "size-3 bg-cta ring-2 ring-cta/35"
                 : "size-2 bg-white/85 ring-1 ring-black/50 hover:bg-accent")
@@ -170,7 +219,7 @@ function PartPanel({
           type="button"
           onClick={onClose}
           aria-label="Close part details"
-          className="-mr-1.5 -mt-1.5 shrink-0 rounded-md p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white"
+          className="relative -mr-1.5 -mt-1.5 shrink-0 rounded-md p-1.5 text-white/50 transition-colors before:absolute before:-inset-2.5 before:content-[''] hover:bg-white/10 hover:text-white"
         >
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden>
             <path
@@ -277,7 +326,11 @@ export default function RackStage() {
   const [assembly, setAssembly] = useState<BuiltAssembly | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [phase, setPhase] = useState<SequencePhase>("idle");
+  const [inView, setInView] = useState(
+    () => typeof IntersectionObserver === "undefined",
+  );
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const handles = useRef(createMarkerHandles());
   const reducedMotion = useReducedMotion() ?? false;
 
@@ -300,6 +353,23 @@ export default function RackStage() {
 
   useEffect(() => viewer.subscribePhase(setPhase), []);
 
+  /* The stage stays mounted for the page's lifetime, so the render loop only
+     runs while it is actually near the viewport — frameloop flips to "never"
+     the moment the section scrolls away, instead of drawing a dead scene at
+     full rate under the rest of the page. */
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => setInView(entries.some((entry) => entry.isIntersecting)),
+      { rootMargin: "160px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setSelectedId(null);
@@ -314,12 +384,14 @@ export default function RackStage() {
 
   return (
     <div
+      ref={rootRef}
       className={
         "absolute inset-0 transition-opacity duration-1000 " +
         (assembly ? "opacity-100" : "opacity-0")
       }
     >
       <Canvas
+        frameloop={inView ? "always" : "never"}
         dpr={[1, 2]}
         gl={{ antialias: true, powerPreference: "high-performance" }}
         camera={{ fov: 38, position: [3.4, 2.2, 4.6], near: 0.1, far: 80 }}
@@ -351,18 +423,7 @@ export default function RackStage() {
               handles={handles}
               selectedId={selectedId}
             />
-            <ContactShadows
-              position={[
-                assembly.center.x,
-                assembly.box.min.y + 0.001,
-                assembly.center.z,
-              ]}
-              scale={Math.max(assembly.size.x, assembly.size.z) * 2.4}
-              resolution={512}
-              blur={2.8}
-              opacity={0.55}
-              far={Math.max(assembly.size.x, assembly.size.z)}
-            />
+            <BakedShadows assembly={assembly} />
           </>
         )}
       </Canvas>
@@ -378,7 +439,14 @@ export default function RackStage() {
 
       <PartPanel part={selectedPart} onClose={() => setSelectedId(null)} />
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-8 z-30 flex justify-center px-5 md:bottom-10">
+      <div
+        className={
+          /* On <md the part panel is a bottom sheet the pill would cover, so
+             the controls yield to it while a part is selected. */
+          "pointer-events-none absolute inset-x-0 bottom-8 z-30 justify-center px-5 md:bottom-10 " +
+          (selectedPart ? "hidden md:flex" : "flex")
+        }
+      >
         <ExplodeControls phase={phase} disabled={!assembly} />
       </div>
     </div>

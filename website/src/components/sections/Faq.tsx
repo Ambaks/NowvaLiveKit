@@ -45,7 +45,7 @@ const ITEMS = [
   },
   {
     q: "Is the design final?",
-    a: "No — what you see are early CAD renders and the design is still evolving. What's further along is the intelligence: the biomechanics engine you see in the telemetry above runs today in our lab.",
+    a: "No — what you see are early CAD renders and the design is still evolving. What's further along is the intelligence: the biomechanics engine runs today in our lab, live on the barbell squat.",
   },
   {
     q: "What exercises does it coach?",

@@ -1,12 +1,16 @@
 """Joint Range-of-Motion Clamping for 3D Keypoints
 
 Clamps joint angles implied by keypoint positions to physiological
-limits. Operates on Skeleton3D AFTER bone-length enforcement and
-BEFORE position smoothing in the pre-IK filter chain.
+limits. When a joint exceeds its ROM limit, the distal keypoint is
+rotated about the proximal joint to bring the angle within range.
+Bone lengths are preserved (only direction changes).
 
-When a joint exceeds its ROM limit, the distal keypoint is rotated
-about the proximal joint to bring the angle within range. Bone
-lengths are preserved (only direction changes).
+NOT wired into the pre-IK filter chain. It ran unconditionally until
+2026-07-27 with two bugs that folded the legs on every frame: limits
+written as flexion angles were compared against interior angles, and
+shin tilt assumed a Y-up frame. Both are fixed here, but the population
+ROM constants below are still not a safe per-frame clamp for a real
+athlete — reintroduce only against per-user calibrated ROM.
 """
 
 from __future__ import annotations
@@ -50,20 +54,25 @@ def _clamp_joint(
     proximal: np.ndarray,
     joint: np.ndarray,
     distal: np.ndarray,
-    min_angle_deg: float,
-    max_angle_deg: float,
+    min_flexion_deg: float,
+    max_flexion_deg: float,
 ) -> np.ndarray | None:
-    """Rotate distal about joint to clamp the proximal-joint-distal angle.
+    """Rotate distal about joint to clamp the joint's flexion into range.
 
-    Returns corrected distal position, or None if no correction needed.
-    The distance from joint to distal is preserved.
+    Limits are FLEXION angles (0 = straight limb). The geometric angle at
+    the joint is the interior angle (180 = straight), so the limits are
+    converted before comparison. Returns the corrected distal position, or
+    None if no correction is needed. Joint-to-distal distance is preserved.
     """
+    interior_min = 180.0 - max_flexion_deg
+    interior_max = 180.0 - min_flexion_deg
+
     angle = _joint_angle_deg(proximal, joint, distal)
 
-    if min_angle_deg <= angle <= max_angle_deg:
+    if interior_min <= angle <= interior_max:
         return None
 
-    target = max(min_angle_deg, min(max_angle_deg, angle))
+    target = max(interior_min, min(interior_max, angle))
     delta_rad = math.radians(target - angle)
 
     v_prox = proximal - joint
@@ -91,10 +100,12 @@ def _clamp_joint(
 
 
 def _shin_tilt_from_vertical_deg(knee: np.ndarray, ankle: np.ndarray) -> float:
+    # Y-down frame: the knee sits above the ankle, so a vertical shin has a
+    # positive y component pointing from knee to ankle.
     shin = ankle - knee
-    vert = -shin[1]
+    down = shin[1]
     horiz = math.sqrt(shin[0] ** 2 + shin[2] ** 2)
-    return math.degrees(math.atan2(horiz, max(vert, 1e-9)))
+    return math.degrees(math.atan2(horiz, down))
 
 
 class ROMClamp:
@@ -165,7 +176,7 @@ class ROMClamp:
                 if shin_len < 1e-9:
                     continue
                 target_rad = math.radians(ANKLE_DORSI_MAX_DEG)
-                new_y = -shin_len * math.cos(target_rad)
+                new_y = shin_len * math.cos(target_rad)
                 horiz = math.sqrt(shin[0] ** 2 + shin[2] ** 2)
                 if horiz < 1e-9:
                     continue

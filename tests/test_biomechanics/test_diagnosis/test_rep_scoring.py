@@ -48,7 +48,7 @@ def _default_anthro() -> dict:
 
 def _default_rom() -> dict:
     return {
-        "dorsiflexion_drop": 35.0,
+        "peak_dorsiflexion": 35.0,
         "avg_depth": 120.0,
     }
 

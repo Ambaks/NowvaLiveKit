@@ -145,9 +145,13 @@ class BoneLengthConstraints:
         confidences = np.array([kp.confidence for kp in skeleton.keypoints])
 
         if not self._calibrated:
-            # Wait for standing pose gate before recording calibration data
+            # Wait for the standing pose gate before recording calibration data.
+            # Read-only: the pipeline advances the gate once per frame. Calling
+            # check() here too would advance it once per enforce() call, and
+            # enforce() runs twice a frame — required_consecutive_frames would
+            # latch in a third of the frames it asks for, on skeletons at
+            # different stages of the filter chain.
             if self._standing_gate is not None and not self._standing_gate.is_ready:
-                self._standing_gate.check(skeleton)
                 return skeleton
 
             self._record_calibration(points, confidences)

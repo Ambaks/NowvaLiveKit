@@ -277,3 +277,56 @@ class TestSignConvention:
         result = est.estimate(None, skel)
         assert result.valgus_l > 0, "Left knee medial shift must be positive"
         assert result.valgus_r > 0, "Right knee medial shift must be positive"
+
+
+class TestFPPADepthInvariance:
+    """FPPA was normalized by the live hip-to-ankle vertical span, which
+    collapses as the athlete descends — identical knee cave read ~1.4x larger
+    at parallel and ~1.8x at the bottom. The valgus rule samples only at the
+    bottom, so it always measured at maximum inflation. Pelvis width is
+    frontal and holds across depth."""
+
+    CAVE_PX = 24.0
+
+    def _rep_at_depth(self, hip_y: float) -> Skeleton2D:
+        """Same physical knee cave, hips descending toward the ankles."""
+        knee_y = (hip_y + 900) / 2.0
+        return _make_skeleton_2d({
+            11: (440, hip_y), 12: (360, hip_y),
+            13: (440 - self.CAVE_PX, knee_y), 14: (360 + self.CAVE_PX, knee_y),
+        })
+
+    def test_valgus_is_constant_across_depth(self):
+        estimator = SingleCameraValgusEstimator()
+        standing = estimator.estimate(self._rep_at_depth(500))
+        parallel = estimator.estimate(self._rep_at_depth(700))
+        bottom = estimator.estimate(self._rep_at_depth(800))
+
+        assert standing.valgus_l == pytest.approx(parallel.valgus_l, abs=0.5)
+        assert standing.valgus_l == pytest.approx(bottom.valgus_l, abs=0.5)
+        assert standing.valgus_r == pytest.approx(bottom.valgus_r, abs=0.5)
+
+    def test_medial_knee_is_positive(self):
+        result = SingleCameraValgusEstimator().estimate(self._rep_at_depth(700))
+        assert result.valgus_l > 0
+        assert result.valgus_r > 0
+
+    def test_no_cave_reads_zero(self):
+        estimator = SingleCameraValgusEstimator()
+        result = estimator.estimate(_make_skeleton_2d())
+        assert result.valgus_l == pytest.approx(0.0, abs=ANGLE_TOLERANCE)
+        assert result.valgus_r == pytest.approx(0.0, abs=ANGLE_TOLERANCE)
+
+    def test_scale_invariant_to_camera_distance(self):
+        """Both the deviation and pelvis width are in pixels, so standing
+        twice as far away must not change the reading."""
+        estimator = SingleCameraValgusEstimator()
+        near = estimator.estimate(self._rep_at_depth(700))
+        far = _make_skeleton_2d({
+            11: (420, 600), 12: (380, 600),
+            13: (420 - self.CAVE_PX / 2, 700), 14: (380 + self.CAVE_PX / 2, 700),
+            15: (420, 800), 16: (380, 800),
+        })
+        assert estimator.estimate(far).valgus_l == pytest.approx(
+            near.valgus_l, abs=0.5,
+        )

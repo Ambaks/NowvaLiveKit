@@ -355,3 +355,76 @@ class TestBalanceLean:
         assert lean is not None
         assert math.isfinite(lean)
         assert abs(math.degrees(lean)) < 30.0
+
+
+class TestCanonicalizePreservesAsymmetry:
+    """canonicalize() produces the pose shown to the athlete as their own.
+    It used to average left/right bone VECTORS, which erased the athlete's
+    asymmetry — including the hip drop weight_shift_cue exists to explain —
+    before they ever saw it. Only segment LENGTHS are matched now; the
+    corrected target pose is still fully symmetric."""
+
+    def _asymmetric(self) -> np.ndarray:
+        """Identical bone lengths, different joint angles.
+
+        A raw left/right LENGTH difference is measurement error and is
+        supposed to be equalized, so the fixture keeps the femurs and tibias
+        the same length and drops one hip by tilting that leg instead.
+        """
+        kpts = _make_19pt_skeleton()
+        tibia = np.linalg.norm(kpts[ANKLE_L] - kpts[KNEE_L])
+        femur = np.linalg.norm(kpts[KNEE_L] - kpts[HIP_L])
+
+        # Left shin tilted further forward, same length.
+        shin_dir = np.array([0.55, 0.80, 0.0])
+        shin_dir /= np.linalg.norm(shin_dir)
+        kpts[KNEE_L] = kpts[ANKLE_L] + shin_dir * tibia
+
+        # Left thigh keeps its length, so the left hip lands lower.
+        thigh_dir = np.array([-0.45, 0.89, 0.0])
+        thigh_dir /= np.linalg.norm(thigh_dir)
+        kpts[HIP_L] = kpts[KNEE_L] + thigh_dir * femur
+        return kpts
+
+    def test_hip_drop_survives_canonicalization(self):
+        """Full symmetrization drove this to exactly zero.
+
+        It survives damped rather than intact: bottom_up_build reconciles the
+        pelvis by averaging two disagreeing hip estimates, which pulls the two
+        sides back together. That averaging is a known separate defect — until
+        it is fixed, the rendered hip drop understates the real one.
+        """
+        corrector = KeypointCorrector()
+        out = np.array(corrector.canonicalize(self._asymmetric().tolist()))
+        assert abs(out[HIP_L][1] - out[HIP_R][1]) > 0.005
+
+    def test_bone_lengths_are_equalized(self):
+        corrector = KeypointCorrector()
+        out = np.array(corrector.canonicalize(self._asymmetric().tolist()))
+
+        femur_l = np.linalg.norm(out[KNEE_L] - out[HIP_L])
+        femur_r = np.linalg.norm(out[KNEE_R] - out[HIP_R])
+        tibia_l = np.linalg.norm(out[ANKLE_L] - out[KNEE_L])
+        tibia_r = np.linalg.norm(out[ANKLE_R] - out[KNEE_R])
+
+        assert femur_l == pytest.approx(femur_r, abs=1e-6)
+        assert tibia_l == pytest.approx(tibia_r, abs=1e-6)
+
+    def test_canonicalize_is_stable_under_reapplication(self):
+        """Not bit-exact: the pelvis reconciliation nudges the hips, which
+        moves the lateral axis slightly on a second pass. Bounded under a
+        centimetre and converging, not drifting."""
+        corrector = KeypointCorrector()
+        once = corrector.canonicalize(self._asymmetric().tolist())
+        twice = corrector.canonicalize(once)
+        np.testing.assert_allclose(np.array(twice), np.array(once), atol=1e-2)
+
+    def test_corrected_pose_is_still_symmetric(self):
+        corrector = KeypointCorrector()
+        canonical = corrector.canonicalize(self._asymmetric().tolist())
+        diagnosis = _make_diagnosis(["narrow_stance", "knee_track_cue"])
+        result = corrector.correct(canonical, diagnosis)
+
+        assert result is not None
+        out = np.array(result)
+        assert out[HIP_L][1] == pytest.approx(out[HIP_R][1], abs=1e-4)

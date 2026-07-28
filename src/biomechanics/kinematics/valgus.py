@@ -32,9 +32,11 @@ _MIN_SEGMENT_M = 0.05
 # Minimum horizontal ankle separation (px) for a stable 2D ratio.
 _MIN_ANKLE_SEP_PX = 1.0
 # Minimum hip-to-ankle vertical span (px) for a stable FPPA. A near-zero span
-# means a mistracked keypoint (ankle at hip height), and it sits in the
-# arctan2 denominator — small values turn pixel noise into ~90 degree spikes.
+# means a mistracked keypoint (ankle at hip height).
 _MIN_LEG_SPAN_PX = 10.0
+# Minimum pelvis width (px) for a stable FPPA. It sits in the arctan2
+# denominator, so small values turn pixel noise into ~90 degree spikes.
+_MIN_PELVIS_WIDTH_PX = 10.0
 # Minimum 3D ankle separation (m) for a stable ratio.
 _MIN_ANKLE_SEP_M = 0.02
 # Facing squareness (horizontal hip separation / torso length) at or above which
@@ -94,9 +96,19 @@ class SingleCameraValgusEstimator:
 
     Works entirely in the image plane (x, y), never touching the monocular depth
     axis — the least reliable coordinate in a single-camera pose. Valgus is the
-    horizontal deviation of the knee from the hip-ankle line, normalized by leg
-    vertical extent (so it is robust to squat depth), signed positive when the
-    knee moves medially (toward the midline between the feet).
+    knee's horizontal deviation from the hip-ankle line, normalized by pelvis
+    width, signed positive when the knee moves medially (toward the midline
+    between the feet).
+
+    Pelvis width is the denominator because it is the only stable reference
+    available every frame. The deviation itself is horizontal and does not
+    foreshorten, but every vertical or diagonal reference does: the previous
+    denominator was the live hip-to-ankle span, which collapses on descent and
+    inflated identical knee cave by ~1.4x at parallel and ~1.8x at the bottom
+    (the angle at the knee is worse still, ~2.4x, because both limb segments
+    foreshorten). Pelvis width is frontal, so it holds across depth — and
+    since both terms are in pixels, the ratio is also invariant to how far the
+    athlete stands from the camera.
     """
 
     def estimate(
@@ -118,8 +130,14 @@ class SingleCameraValgusEstimator:
             return _NEUTRAL_RESULT
         midline_x = (l_ankle[0] + r_ankle[0]) / 2.0
 
-        valgus_l = self._fppa(l_hip, l_knee, l_ankle, midline_x)
-        valgus_r = self._fppa(r_hip, r_knee, r_ankle, midline_x)
+        pelvis_width = (
+            abs(l_hip[0] - r_hip[0])
+            if l_hip is not None and r_hip is not None
+            else 0.0
+        )
+
+        valgus_l = self._fppa(l_hip, l_knee, l_ankle, midline_x, pelvis_width)
+        valgus_r = self._fppa(r_hip, r_knee, r_ankle, midline_x, pelvis_width)
 
         facing = self._facing_confidence(skeleton_2d, l_hip, r_hip)
         conf_l = min(c_lh, c_lk, c_la) * facing
@@ -135,12 +153,14 @@ class SingleCameraValgusEstimator:
         knee: np.ndarray | None,
         ankle: np.ndarray | None,
         midline_x: float,
+        pelvis_width: float,
     ) -> float:
         if hip is None or knee is None or ankle is None:
             return 0.0
 
-        vertical_span = abs(ankle[1] - hip[1])
-        if vertical_span < _MIN_LEG_SPAN_PX:
+        if abs(ankle[1] - hip[1]) < _MIN_LEG_SPAN_PX:
+            return 0.0
+        if pelvis_width < _MIN_PELVIS_WIDTH_PX:
             return 0.0
 
         # Expected knee x if it tracked the hip-ankle line at the knee's height.
@@ -155,7 +175,7 @@ class SingleCameraValgusEstimator:
         medial_dir = 1.0 if midline_x >= ankle[0] else -1.0
         signed_deviation = deviation_x * medial_dir
 
-        return float(np.degrees(np.arctan2(signed_deviation, vertical_span)))
+        return float(np.degrees(np.arctan2(signed_deviation, pelvis_width)))
 
     @staticmethod
     def _kasr_2d(

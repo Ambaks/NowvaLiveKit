@@ -15,7 +15,7 @@ from biomechanics.diagnosis.graph.parameter_deltas import (
 from biomechanics.diagnosis.types import RepKinematicSummary
 
 ANTHRO = {"femur_torso_ratio": 0.93, "shoulder_width": 0.40, "hip_width": 0.30}
-ROM = {"dorsiflexion_drop": 35.0, "avg_depth": 120.0}
+ROM = {"peak_dorsiflexion": 35.0, "avg_depth": 120.0}
 
 DELTA_TOLERANCE = 1e-6
 
@@ -65,8 +65,19 @@ class TestSharedTargets:
             target_angle - avg_current, abs=DELTA_TOLERANCE
         )
 
-    def test_stance_target_never_narrows(self):
-        wide_current = 2.4
-        target = stance_target_ratio(wide_current, ANTHRO, ROM)
-        assert target >= wide_current
-        assert target <= 2.5
+    def test_stance_target_is_independent_of_current_stance(self):
+        """The target used to be max(dorsi_target, current + 0.15), which
+        recommended widening by >=0.15 shoulder-widths regardless of
+        measurement — including for athletes already wider than their own
+        target, where the evidence test that justified the cue returns zero."""
+        narrow = stance_target_ratio(0.9, ANTHRO, ROM)
+        wide = stance_target_ratio(2.4, ANTHRO, ROM)
+        assert narrow == pytest.approx(wide)
+
+    def test_already_wide_stance_gets_no_widening(self):
+        rep = _make_rep(stance_width_ratio=2.4)
+        delta = delta_widen_stance(rep, ANTHRO, ROM)
+        assert delta["__foot_target_delta"] == [0.0] * 6
+
+    def test_stance_target_is_capped(self):
+        assert stance_target_ratio(0.9, ANTHRO, ROM) <= 2.5

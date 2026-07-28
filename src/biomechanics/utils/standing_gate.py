@@ -20,6 +20,12 @@ from biomechanics.utils.geometry import angle_between_vectors, joint_angle_3_poi
 
 logger = logging.getLogger(__name__)
 
+# Frontal knee flexion beyond this is anatomically impossible for someone
+# trying to stand — it means the 3D landmarks are corrupted (e.g. the
+# folded-leg hallucination puts hip and ankle on the same side of the knee,
+# reading 135-180°), not that the user's knees are bent.
+TRACKING_LOST_KNEE_FLEXION_DEG = 60.0
+
 # Keypoints that MUST be visible for a valid standing pose.
 REQUIRED_KEYPOINTS = [
     CK.LEFT_SHOULDER, CK.RIGHT_SHOULDER,
@@ -130,8 +136,12 @@ class StandingPoseGate:
             self._log_failure("visibility", confidences)
             return False
         if not self._check_knee_extension(points):
-            self.last_failure = "knee_extension"
-            self._log_failure("knee_extension", points)
+            left_flexion, right_flexion = _frontal_knee_flexion(points)
+            if max(left_flexion, right_flexion) > TRACKING_LOST_KNEE_FLEXION_DEG:
+                self.last_failure = "tracking_lost"
+            else:
+                self.last_failure = "knee_extension"
+            self._log_failure(self.last_failure, points)
             return False
         if not self._check_torso_upright(points):
             self.last_failure = "torso_upright"
@@ -170,11 +180,11 @@ class StandingPoseGate:
                 "[GATE DIAG] FAIL visibility — low confidence keypoints: %s (threshold=%.2f)",
                 low, self.min_confidence,
             )
-        elif check_name == "knee_extension":
+        elif check_name in ("knee_extension", "tracking_lost"):
             l_flexion, r_flexion = _frontal_knee_flexion(data)
             logger.warning(
-                "[GATE DIAG] FAIL knee — frontal L flexion=%.1f° R flexion=%.1f° (max=%.1f°)",
-                l_flexion, r_flexion, self.max_knee_flexion_deg,
+                "[GATE DIAG] FAIL %s — frontal L flexion=%.1f° R flexion=%.1f° (max=%.1f°)",
+                check_name, l_flexion, r_flexion, self.max_knee_flexion_deg,
             )
         elif check_name == "leg_extension":
             pts = data

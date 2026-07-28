@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
-const IntroScene = dynamic(() => import("./IntroScene"), { ssr: false });
+const IntroScene = dynamic(
+  () => import("@/components/three/scenes").then((m) => m.IntroScene),
+  { ssr: false },
+);
 
 /* Grace period after the splash wipe before giving up on the 3D chunk. */
 const SCENE_GRACE_MS = 1500;
@@ -14,7 +17,7 @@ const FADE_OUT_MS = 450;
 const TAKEOVER_MARGIN_MS = 150;
 
 type Phase = "idle" | "loading" | "playing" | "leaving";
-type SceneModule = typeof import("./IntroScene");
+type SceneModule = typeof import("@/components/three/scenes");
 
 /* The CSS pipeline may normalize time units (1600ms → 1.6s). */
 const cssMs = (name: string): number => {
@@ -148,8 +151,9 @@ export function IntroStage() {
     const holdReached = new Promise<void>((resolve) => {
       later(resolve, holdEnd - performance.now());
     });
-    const chunkLoaded = import("./IntroScene").then((module) => {
+    const chunkLoaded = import("@/components/three/scenes").then((module) => {
       sceneModule = module;
+      module.preloadIntroAssets();
     });
     Promise.all([chunkLoaded, holdReached])
       .then(() => {
