@@ -174,6 +174,11 @@ class BiomechanicsPipeline:
         self._last_valid_skeleton: Optional[Skeleton3D] = None
         self._dropout_decay_frames: int = 0
 
+        self._inspecting: bool = False
+        self._inspect_raw_kpts: np.ndarray | None = None
+        self._inspect_intermediates: dict[str, np.ndarray] | None = None
+        self._inspect_raw_angles: JointAngles | None = None
+
         if self._preik_enabled:
             self._confidence_blender = ConfidenceBlender(
                 min_confidence=self.config.confidence_blend.min_confidence,
@@ -393,6 +398,26 @@ class BiomechanicsPipeline:
         self._standing_captured = False
         return kpts
 
+    def enable_inspect(self) -> None:
+        self._inspecting = True
+
+    def _apply_preik_filters_inspected(self, skeleton_3d: Skeleton3D) -> Skeleton3D:
+        intermediates: dict[str, np.ndarray] = {}
+        skeleton_3d = self._confidence_blender.blend(skeleton_3d)
+        intermediates["confidence_blend"] = skeleton_3d.to_numpy().copy()
+        skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
+        intermediates["velocity_clamp"] = skeleton_3d.to_numpy().copy()
+        skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+        intermediates["bone_constraints_1"] = skeleton_3d.to_numpy().copy()
+        skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
+        intermediates["ground_clamp"] = skeleton_3d.to_numpy().copy()
+        skeleton_3d = self._position_smoother.smooth(skeleton_3d)
+        intermediates["position_smoother"] = skeleton_3d.to_numpy().copy()
+        skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+        intermediates["bone_constraints_2"] = skeleton_3d.to_numpy().copy()
+        self._inspect_intermediates = intermediates
+        return skeleton_3d
+
     def _capture_loop(self) -> None:
         """Continuously read frames from the camera in a background thread."""
         while self._capture_running:
@@ -505,6 +530,9 @@ class BiomechanicsPipeline:
             self._dropout_decay_frames = 0
             self._last_valid_skeleton = skeleton_3d
 
+        if self._inspecting:
+            self._inspect_raw_kpts = skeleton_3d.to_numpy().copy()
+
         # --- BiLSTM rep counting (runs on raw skeleton, before IK) ---
         bilstm_rep_data = None
         bilstm_shallow_class = None
@@ -539,16 +567,23 @@ class BiomechanicsPipeline:
             )
 
         # --- Pre-IK filtering layers (optional) ---
+        if self._inspecting:
+            self._inspect_intermediates = None
+            self._inspect_raw_angles = None
+
         if self._preik_enabled:
             t0 = time.perf_counter()
-            skeleton_3d = apply_preik_filters(
-                skeleton_3d,
-                confidence_blender=self._confidence_blender,
-                velocity_clamp=self._velocity_clamp,
-                bone_constraints=self._bone_constraints,
-                ground_clamp=self._ground_clamp,
-                position_smoother=self._position_smoother,
-            )
+            if self._inspecting:
+                skeleton_3d = self._apply_preik_filters_inspected(skeleton_3d)
+            else:
+                skeleton_3d = apply_preik_filters(
+                    skeleton_3d,
+                    confidence_blender=self._confidence_blender,
+                    velocity_clamp=self._velocity_clamp,
+                    bone_constraints=self._bone_constraints,
+                    ground_clamp=self._ground_clamp,
+                    position_smoother=self._position_smoother,
+                )
             latency_ms["pre_ik_filters"] = (time.perf_counter() - t0) * 1000.0
 
             # Apply body-proportion scaling once after bone calibration
@@ -575,6 +610,9 @@ class BiomechanicsPipeline:
         raw_angles.knee_ankle_sep_ratio = vr.kasr
         raw_angles.hip_rotation_l = vr.hip_rotation_l
         raw_angles.hip_rotation_r = vr.hip_rotation_r
+
+        if self._inspecting:
+            self._inspect_raw_angles = raw_angles
 
         # Update phase-aware smoothing BEFORE filtering so the current
         # frame uses the correct parameters (not the previous frame's).

@@ -14,11 +14,14 @@ import numpy as np
 from .types import RepKinematicSummary, SetFeatures
 
 
-def _mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
+def mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
     """Transform MediaPipe world coords → visualizer coords.
 
     MediaPipe: X=subject's left, Y=down, Z=toward camera.
     Visualizer: vis_x=mp_z, vis_y=-mp_y, vis_z=-mp_x.
+
+    compute_foot_direction_angle measures against forward=[-1,0] in this
+    frame, so any caller of it must transform first.
     """
     return [[pt[2], -pt[1], -pt[0]] for pt in kpts]
 
@@ -46,7 +49,7 @@ def build_frame_from_live_pipeline(
     standing_kpts: list[list[float]] | None = None,
 ) -> dict:
     """Convert live pipeline data to the frame dict build_rep_kinematic_summary expects."""
-    kpts_vis = _ground_and_center(_mediapipe_to_viewer_coords(bottom_kpts))
+    kpts_vis = _ground_and_center(mediapipe_to_viewer_coords(bottom_kpts))
 
     angles = {
         "trunk_flexion": bottom_angles["trunk_flexion"],
@@ -63,7 +66,7 @@ def build_frame_from_live_pipeline(
     result: dict = {"angles": angles, "kpts": kpts_vis}
     if standing_kpts is not None:
         result["standing_kpts"] = _ground_and_center(
-            _mediapipe_to_viewer_coords(standing_kpts)
+            mediapipe_to_viewer_coords(standing_kpts)
         )
     return result
 

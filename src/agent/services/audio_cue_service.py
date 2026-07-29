@@ -75,6 +75,10 @@ class AudioCueService:
         # Separate audio track for rep sounds (plays independently of agent speech)
         self._rep_audio_source: Optional[rtc.AudioSource] = None
         self._rep_track_ready: bool = False
+        # The rep sound's own format — it is a real recording, not TTS output,
+        # so it does not necessarily match the 24kHz mono the cues use.
+        self._rep_sample_rate: int = SAMPLE_RATE
+        self._rep_channels: int = NUM_CHANNELS
 
         # Eagerly load and pre-read all WAV cues into memory
         self._load_rep_sound()
@@ -101,22 +105,45 @@ class AudioCueService:
             logger.warning(f"[AUDIO CUE] Rep sound not found: {REP_SOUND_PATH}")
             return
         try:
-            bytes_per_sample = 2  # int16
-            chunk_bytes = SAMPLES_PER_CHUNK * NUM_CHANNELS * bytes_per_sample
             with wave.open(str(REP_SOUND_PATH), "rb") as wf:
+                sample_rate = wf.getframerate()
+                channels = wf.getnchannels()
+                sample_width = wf.getsampwidth()
                 pcm_data = wf.readframes(wf.getnframes())
+
+            if sample_width != 2:
+                logger.error(
+                    f"[AUDIO CUE] Rep sound must be 16-bit PCM, got "
+                    f"{sample_width * 8}-bit — rep sounds disabled"
+                )
+                return
+
+            # Describe the frames with the file's real format. Declaring a
+            # 44.1kHz stereo recording as 24kHz mono makes LiveKit read
+            # interleaved channel bytes as consecutive samples: the beep
+            # comes out as noise at the wrong speed, or not at all.
+            self._rep_sample_rate = sample_rate
+            self._rep_channels = channels
+
+            chunk_bytes = SAMPLES_PER_CHUNK * channels * sample_width
             frames = []
             for offset in range(0, len(pcm_data), chunk_bytes):
                 chunk = pcm_data[offset:offset + chunk_bytes]
-                samples = len(chunk) // (NUM_CHANNELS * bytes_per_sample)
+                samples = len(chunk) // (channels * sample_width)
+                if samples == 0:
+                    continue
                 frames.append(rtc.AudioFrame(
                     data=chunk,
-                    sample_rate=SAMPLE_RATE,
-                    num_channels=NUM_CHANNELS,
+                    sample_rate=sample_rate,
+                    num_channels=channels,
                     samples_per_channel=samples,
                 ))
             self._rep_sound_frames = frames
-            logger.info(f"[AUDIO CUE] Loaded rep sound from {REP_SOUND_PATH} ({len(frames)} chunks)")
+            duration = len(pcm_data) / (sample_rate * channels * sample_width)
+            logger.info(
+                f"[AUDIO CUE] Loaded rep sound from {REP_SOUND_PATH} "
+                f"({len(frames)} chunks, {sample_rate}Hz x{channels}, {duration:.2f}s)"
+            )
         except Exception as e:
             logger.error(f"[AUDIO CUE] Failed to load rep sound: {e}")
 
@@ -129,9 +156,10 @@ class AudioCueService:
         if self._rep_track_ready or self._rep_sound_frames is None:
             return
         try:
+            # Must match the frames being captured, not the TTS cue format.
             self._rep_audio_source = rtc.AudioSource(
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
+                sample_rate=self._rep_sample_rate,
+                num_channels=self._rep_channels,
             )
             track = rtc.LocalAudioTrack.create_audio_track(
                 "rep_sound", self._rep_audio_source,
@@ -353,6 +381,44 @@ class AudioCueService:
             return
 
         logger.warning(f"[AUDIO CUE] No audio available for cue: {cue_key}")
+
+    async def generate_tts(self, text: str) -> List[rtc.AudioFrame]:
+        """Generate TTS audio for arbitrary text and return as AudioFrame list."""
+        client = self._get_client()
+        response = await client.audio.speech.create(
+            model=TTS_MODEL,
+            voice=TTS_VOICE,
+            input=text,
+            instructions=TTS_INSTRUCTIONS,
+            response_format=TTS_FORMAT,
+            speed=TTS_SPEED,
+        )
+        pcm_bytes = response.read()
+        bytes_per_sample = 2
+        chunk_bytes = SAMPLES_PER_CHUNK * NUM_CHANNELS * bytes_per_sample
+        frames: List[rtc.AudioFrame] = []
+        for offset in range(0, len(pcm_bytes), chunk_bytes):
+            chunk = pcm_bytes[offset:offset + chunk_bytes]
+            samples = len(chunk) // (NUM_CHANNELS * bytes_per_sample)
+            frames.append(rtc.AudioFrame(
+                data=chunk,
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+                samples_per_channel=samples,
+            ))
+        return frames
+
+    async def play_frames(self, frames: List[rtc.AudioFrame]) -> None:
+        """Play raw AudioFrame list through session.say()."""
+        if not frames:
+            return
+        handle = self._session.say(
+            "",
+            audio=self._frames_to_async_gen(frames),
+            allow_interruptions=False,
+            add_to_chat_ctx=False,
+        )
+        await handle.wait_for_playout()
 
     @staticmethod
     async def _frames_to_async_gen(

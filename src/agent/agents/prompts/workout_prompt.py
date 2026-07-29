@@ -90,6 +90,31 @@ Examples:
 - "Where am I in the workout?" -> get_workout_progress
 - "How much more?" -> get_workout_progress
 
+## check_my_form
+Call when the user asks about their current form, positioning, or whether they're doing something correctly. This queries real-time biomechanics data and gives specific feedback based on their current body position. If a correction was recently given, the feedback will be specific to that correction.
+
+Examples:
+- "Like this?" -> check_my_form
+- "Is this right?" -> check_my_form
+- "How's my form?" -> check_my_form
+- "Am I doing it right?" -> check_my_form
+- "Is this good?" -> check_my_form
+- "How does this look?" -> check_my_form
+
+## show_me
+Call when the user wants to SEE a visual demonstration on screen. This launches the 3D skeleton viewer showing either a correction animation or their last rep.
+
+Examples:
+- "Show me that" -> show_me(what="correction")
+- "Show me what you mean" -> show_me(what="correction")
+- "What should it look like?" -> show_me(what="correction")
+- "Can I see that?" -> show_me(what="correction")
+- "Show me my last rep" -> show_me(what="last_rep")
+- "What did that look like?" -> show_me(what="last_rep")
+- "Replay that" -> show_me(what="last_rep")
+
+Do NOT use show_me when the user just asks about their form verbally (use check_my_form instead).
+
 # Disambiguation — Critical Examples
 
 "I'm done"

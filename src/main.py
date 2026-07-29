@@ -370,6 +370,52 @@ class NowvaApp:
             print(f"Error creating user: {e}")
             return None, None
 
+    def _load_athlete_calibration(self, exercise_name: str) -> dict:
+        """Body proportions + ROM baseline for a returning user, if stored.
+
+        Returns {} when unavailable — the pipeline degrades to no diagnosis
+        rather than failing, and logs which case it hit.
+        """
+        try:
+            from agent.agents.shared.helpers import normalize_exercise_name
+            from biomechanics.calibration import get_movement_pattern
+            from db.database import SessionLocal
+            from db.calibration_utils import get_user_calibration_full
+
+            user_id = self.state.get("user.id")
+            # Same normalization check_calibration uses to find this row —
+            # get_movement_pattern only knows canonical names, so a stored
+            # "squat" resolves to None unless it is normalized first.
+            canonical = normalize_exercise_name(exercise_name) or exercise_name
+            pattern = get_movement_pattern(canonical)
+            if not user_id or not pattern:
+                print(
+                    f"[CALIBRATION] No athlete params lookup: "
+                    f"user_id={'set' if user_id else 'MISSING'} "
+                    f"exercise={exercise_name!r} pattern={pattern!r}"
+                )
+                return {}
+
+            db = SessionLocal()
+            try:
+                full = get_user_calibration_full(db, user_id, pattern)
+            finally:
+                db.close()
+
+            if not full or not full.get("athlete_params"):
+                print(
+                    "[CALIBRATION] Stored calibration has no athlete_params — "
+                    "diagnosis and stance coaching will be unavailable this session"
+                )
+                return {}
+            return {
+                "athlete_params": full["athlete_params"],
+                "baseline": full.get("baseline") or {},
+            }
+        except Exception as e:
+            print(f"[CALIBRATION] Could not load athlete params: {e}")
+            return {}
+
     def start_pose_estimation(self, cam0_id: int = 0, cam1_id: int = 1,
                               exercise_name: str = DEFAULT_EXERCISE_NAME,
                               calibration_file: str = None,
@@ -434,7 +480,8 @@ class NowvaApp:
             """Handle messages FROM voice agent (reverse direction)."""
             msg_type = message.get("type")
             if msg_type not in ("rest_start", "workout_complete", "demo_start",
-                                "demo_cue", "demo_end", "assessment_mode"):
+                                "demo_cue", "demo_end", "assessment_mode",
+                                "request_last_rep", "request_demo"):
                 return
             if msg_type == "rest_start":
                 rest_sec = message.get("rest_seconds", 30)
@@ -811,7 +858,7 @@ class NowvaApp:
                             # Forward coaching-relevant messages to voice agent.
                             # Snapshot the reference — this runs on the pose IPC
                             # thread while the main loop can nil self.coaching_ipc
-                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep', 'demo_abort'):
+                            if msg_type in ('cache_cues', 'fault', 'rep_complete', 'rest_complete', 'frame_data', 'calibration_rep', 'calibration_complete', 'diagnosis_complete', 'assessment_result', 'assessment_rep', 'demo_abort', 'demo_started', 'last_rep_snapshot', 'demo_data_ready'):
                                 coaching = self.coaching_ipc
                                 if coaching and coaching.client_socket:
                                     try:
@@ -855,10 +902,21 @@ class NowvaApp:
                         if cal_profile and not cal_mode:
                             import json, tempfile
                             cal_file = os.path.join(tempfile.gettempdir(), f"nowva_cal_{id(self)}.json")
+                            # Returning users skip the assessment/calibration
+                            # phase, which is where body proportions are
+                            # normally derived. Without them the pipeline has
+                            # no shoulder width, so stance metrics and the
+                            # whole diagnosis engine stay dark for the session.
+                            payload = {"thresholds": cal_profile}
+                            payload.update(self._load_athlete_calibration(exercise_name))
                             with open(cal_file, "w") as f:
-                                json.dump(cal_profile, f)
+                                json.dump(payload, f)
                             self._cal_file = cal_file
-                            print(f"[CALIBRATION] Wrote calibration profile to {cal_file}")
+                            have_params = "athlete_params" in payload
+                            print(
+                                f"[CALIBRATION] Wrote calibration profile to {cal_file} "
+                                f"(athlete_params={'yes' if have_params else 'MISSING'})"
+                            )
 
                         self.start_pose_estimation(
                             exercise_name=exercise_name,
@@ -1033,6 +1091,9 @@ async def main():
     parser.add_argument("--valgus", action="store_true",
                         help="Record a knee-valgus debug session (preview video, per-frame "
                              "knee metrics, faults, IPC traffic) and write an HTML report")
+    parser.add_argument("--inspect", action="store_true",
+                        help="Record all pipeline stages (raw vs filtered skeletons, "
+                             "joint angles) and generate a scrubbable HTML debug viewer")
     args = parser.parse_args()
 
     if args.profile:
@@ -1041,6 +1102,8 @@ async def main():
         os.environ["NOWVA_TEST_ASSESS"] = "1"
     if args.valgus:
         os.environ["NOWVA_VALGUS_DEBUG"] = "1"
+    if args.inspect:
+        os.environ["NOWVA_PIPELINE_INSPECT"] = "1"
 
     app = NowvaApp()
     app.simulate_mode = args.simulate

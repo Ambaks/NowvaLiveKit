@@ -106,7 +106,7 @@ class KneeValgusRule(FaultRule):
                 self.fallback_severe_threshold,
             )
 
-        max_valgus = max(abs(valgus_l), abs(valgus_r))
+        max_valgus = max(valgus_l, valgus_r)
 
         if max_valgus < mild:
             return None
@@ -121,9 +121,9 @@ class KneeValgusRule(FaultRule):
 
         self._last_fault_frame = angles.frame_index
 
-        # Determine which side has worse valgus
-        affected_side = "left" if abs(valgus_l) > abs(valgus_r) else "right"
-        if abs(abs(valgus_l) - abs(valgus_r)) < 2.0:
+        # Determine which side has worse valgus (higher positive = more cave)
+        affected_side = "left" if valgus_l > valgus_r else "right"
+        if abs(valgus_l - valgus_r) < 2.0:
             affected_side = "both"
 
         message_key = severity.value

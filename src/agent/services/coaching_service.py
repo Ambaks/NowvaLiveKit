@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 from agent.services.assessment_logger import AssessmentLogger
-from agent.services.coaching_constants import COACHING_PERSONA
+from agent.services.coaching_constants import (
+    ADJUSTMENT_CUES,
+    ADJUSTMENT_ON_TARGET_CUE,
+    ADJUSTMENT_PARAM_LABELS,
+    ADJUSTMENT_SYSTEM_PROMPT,
+    COACHING_PERSONA,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +85,9 @@ class CoachingService:
         # Last-session baseline for progress comparisons (fetched async at workout start)
         self._progress_baseline: dict | None = None
         self._baseline_task: Optional[asyncio.Task] = None
+
+        # Pending on-demand demo response (request_last_rep / request_demo)
+        self._pending_demo_response: dict | None = None
 
     @property
     def _workout_active(self) -> bool:
@@ -237,6 +246,93 @@ class CoachingService:
         if self._coaching_orchestrator:
             return self._coaching_orchestrator.resting
         return False
+
+    def get_last_cue_cause_id(self) -> str | None:
+        orch = self._coaching_orchestrator
+        if orch and orch.last_cue_context:
+            return orch.last_cue_context.get("fault_type")
+        return None
+
+    # ------------------------------------------------------------------
+    # Real-time form queries
+    # ------------------------------------------------------------------
+
+    def get_current_form_snapshot(self) -> dict | None:
+        """Return a snapshot of the user's current biomechanics state.
+
+        Used by the check_my_form tool to answer "like this?" queries.
+        Returns None if no orchestrator is active or no data is available.
+        """
+        orch = self._coaching_orchestrator
+        if not orch or not orch.latest_angles:
+            return None
+
+        import time as _time
+        data_age_ms = (_time.time() - orch.latest_angles_time) * 1000
+
+        snapshot: dict = {
+            "angles": orch.latest_angles,
+            "data_age_ms": round(data_age_ms, 0),
+            "last_cue": orch.last_cue_context,
+        }
+
+        if orch._pending_diagnosis:
+            snapshot["diagnosis"] = orch._pending_diagnosis
+
+        return snapshot
+
+    # ------------------------------------------------------------------
+    # On-demand demo / last-rep replay
+    # ------------------------------------------------------------------
+
+    async def _request_from_pipeline(
+        self, message: dict, timeout: float,
+    ) -> dict | None:
+        """Send a request and await its matching reply.
+
+        Only one demo request is in flight at a time — a second concurrent
+        "show me" would otherwise overwrite the first one's slot and leave
+        it waiting forever.
+        """
+        import uuid
+
+        if self._pending_demo_response is not None:
+            logger.info("[COACHING SERVICE] Demo request already in flight — ignoring")
+            return None
+
+        request_id = str(uuid.uuid4())
+        pending = {"event": asyncio.Event(), "request_id": request_id, "data": None}
+        self._pending_demo_response = pending
+        self._send_to_pipeline({**message, "request_id": request_id})
+        try:
+            await asyncio.wait_for(pending["event"].wait(), timeout=timeout)
+            return pending["data"]
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[COACHING SERVICE] {message.get('type')} timed out after {timeout}s"
+            )
+            return None
+        finally:
+            if self._pending_demo_response is pending:
+                self._pending_demo_response = None
+
+    async def request_last_rep_replay(self) -> dict | None:
+        return await self._request_from_pipeline({"type": "request_last_rep"}, timeout=5.0)
+
+    async def request_on_demand_demo(self, cause_id: str | None = None) -> dict | None:
+        data = await self._request_from_pipeline(
+            {"type": "request_demo", "cause_id": cause_id}, timeout=5.0,
+        )
+        if data and data.get("status") == "available" and data.get("cues"):
+            asyncio.create_task(self._run_on_demand_demo(data["cues"]))
+        return data
+
+    async def _run_on_demand_demo(self, cues: list) -> None:
+        """Launch the choreographed demo task for an on-demand "show me" request."""
+        try:
+            await self._run_assessment_demo(cues)
+        except Exception:
+            logger.exception("[COACHING SERVICE] On-demand demo task failed")
 
     # ------------------------------------------------------------------
     # IPC Listener
@@ -399,9 +495,18 @@ class CoachingService:
                     self._biomech_recorder.record_rep_diagnosis(message)
             elif msg_type == "frame_data":
                 if self._workout_active and self._coaching_orchestrator:
-                    self._coaching_orchestrator.record_angle_sample(
-                        message.get("joint_angles", {})
-                    )
+                    angles_data = message.get("joint_angles", {})
+                    for extra_key in (
+                        "rep_phase",
+                        "stance_width_ratio",
+                        "foot_direction_angle_l",
+                        "foot_direction_angle_r",
+                        "target_stance_ratio",
+                        "target_toe_out_deg",
+                    ):
+                        if extra_key in message:
+                            angles_data[extra_key] = message[extra_key]
+                    self._coaching_orchestrator.record_angle_sample(angles_data)
             elif msg_type == "diagnosis_complete":
                 diagnosis = message.get("diagnosis", {})
                 scoring = message.get("scoring", {})
@@ -486,6 +591,11 @@ class CoachingService:
             elif msg_type == "calibration_complete":
                 logger.info("[COACHING SERVICE] CALIBRATION COMPLETE — saving to DB")
                 await self._on_calibration_complete(message)
+            elif msg_type in ("last_rep_snapshot", "demo_data_ready"):
+                pending = self._pending_demo_response
+                if pending and message.get("request_id") == pending["request_id"]:
+                    pending["data"] = message
+                    pending["event"].set()
             elif msg_type == "play_cue":
                 logger.debug("[COACHING SERVICE] play_cue ignored (orchestrator handles dispatch)")
             else:
@@ -493,21 +603,37 @@ class CoachingService:
         except Exception as e:
             logger.error(f"[COACHING SERVICE] Error handling {msg_type}: {e}", exc_info=True)
 
+    async def ensure_rep_track(self) -> bool:
+        """Publish the dedicated rep-sound track if it isn't up yet.
+
+        The rep beep must land on every counted rep regardless of what the
+        coach is saying, which means its own LiveKit track — on the shared
+        speech track it queues behind cues and recaps. Safe to call repeatedly.
+        """
+        service = self._audio_cue_service
+        if service is None or not self._room:
+            return False
+        if service.rep_track_ready:
+            return True
+        await service.setup_rep_track(self._room)
+        if not service.rep_track_ready:
+            logger.warning(
+                "[COACHING SERVICE] Rep sound track unavailable — rep beeps will "
+                "share the speech track and may be delayed behind coaching audio"
+            )
+        return service.rep_track_ready
+
     async def _on_cache_cues(self, message: dict):
         """Pre-generate TTS audio for all cues in the message."""
         from agent.services.audio_cue_service import AudioCueService
 
         if self._audio_cue_service is None:
             self._audio_cue_service = AudioCueService(session=self._session)
-            if self._room:
-                await self._audio_cue_service.setup_rep_track(self._room)
-        else:
-            # Prewarmed service — attach live session and rep track on first use
-            if self._audio_cue_service.session is None:
-                self._audio_cue_service.attach_session(self._session)
-                logger.info("[COACHING SERVICE] Attached session to prewarmed AudioCueService")
-            if self._room and not self._audio_cue_service.rep_track_ready:
-                await self._audio_cue_service.setup_rep_track(self._room)
+        elif self._audio_cue_service.session is None:
+            # Prewarmed service — attach the live session on first use
+            self._audio_cue_service.attach_session(self._session)
+            logger.info("[COACHING SERVICE] Attached session to prewarmed AudioCueService")
+        await self.ensure_rep_track()
 
         cues = message.get("cues", {})
         exercise = message.get("exercise_name", "unknown")
@@ -806,6 +932,9 @@ class CoachingService:
             on_workout_complete_fn=self._on_workout_complete,
             prune_context_fn=self._prune_conversation_context,
         )
+        self._coaching_orchestrator._generate_tts_fn = self._generate_tts_audio
+        self._coaching_orchestrator._play_raw_frames_fn = self._play_raw_audio
+        self._coaching_orchestrator._speak_adjustment_fn = self._speak_adjustment_feedback
 
         target_reps = self._get_current_target_reps()
         total_sets = self._get_total_sets()
@@ -982,6 +1111,95 @@ class CoachingService:
         if self._audio_cue_service:
             return self._audio_cue_service.has_cue(cue_key)
         return False
+
+    async def _generate_tts_audio(self, text: str) -> list | None:
+        """Generate TTS audio frames for arbitrary text (preemptive speech)."""
+        if not self._audio_cue_service:
+            return None
+        return await self._audio_cue_service.generate_tts(text)
+
+    async def _play_raw_audio(self, frames: list) -> None:
+        """Play raw AudioFrame list through the audio cue service."""
+        if self._audio_cue_service:
+            await self._audio_cue_service.play_frames(frames)
+
+    # ------------------------------------------------------------------
+    # Adjustment feedback (Feature 2: after-cue coaching loop)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _adjustment_cue_key(param: str, delta: float, hit_target: bool) -> str | None:
+        if hit_target:
+            return ADJUSTMENT_ON_TARGET_CUE
+        directions = ADJUSTMENT_CUES.get(param)
+        if not directions:
+            return None
+        # delta = target - current, so positive means "give me more".
+        return directions["more"] if delta > 0 else directions["less"]
+
+    async def _speak_adjustment_feedback(self, param: str, delta: float, hit_target: bool) -> None:
+        # Pre-cached audio first — this fires every 1.5s between reps, and an
+        # LLM round-trip lands after the lifter has already moved.
+        cue_key = self._adjustment_cue_key(param, delta, hit_target)
+        if cue_key and self._get_cached_audio(cue_key):
+            self.is_coaching_speaking = True
+            try:
+                await self._play_cached_cue_audio(cue_key)
+            except Exception as e:
+                logger.error(f"[COACHING SERVICE] Adjustment cue failed: {e}", exc_info=True)
+            finally:
+                self.is_coaching_speaking = False
+            return
+
+        param_label = ADJUSTMENT_PARAM_LABELS.get(param, param)
+        self.is_coaching_speaking = True
+        try:
+            if hit_target:
+                user_input = f"{param_label} is right on target"
+            elif param == "stance_width":
+                if delta > 0:
+                    user_input = f"Stance is too narrow, go wider"
+                else:
+                    user_input = f"Stance is too wide, bring it in"
+            elif param == "toe_out":
+                if delta > 0:
+                    user_input = f"Toes need about {abs(delta):.0f} degrees more turn-out"
+                else:
+                    user_input = f"Toes are turned out too far by about {abs(delta):.0f} degrees"
+            else:
+                user_input = f"Adjust your {param_label}"
+
+            # These fire every 1.5s, so they are stripped from the chat
+            # context afterwards rather than left to bloat TTFT.
+            # generate_reply has no add_to_chat_ctx parameter — that belongs
+            # to session.say() — so the removal is manual. It is done by item
+            # id, not by truncating to a saved length: a set recap or
+            # motivation reply can finish mid-playout here, and a positional
+            # trim would either strand this turn or delete theirs.
+            from livekit.agents import llm
+
+            agent = self._session.current_agent
+            user_message = llm.ChatMessage(role="user", content=[user_input])
+
+            handle = self._session.generate_reply(
+                instructions=ADJUSTMENT_SYSTEM_PROMPT,
+                user_input=user_message,
+                tool_choice="none",
+                allow_interruptions=False,
+            )
+            await handle.wait_for_playout()
+
+            if agent:
+                ephemeral = {user_message.id} | {item.id for item in handle.chat_items}
+                new_ctx = llm.ChatContext.empty()
+                for item in agent.chat_ctx.items:
+                    if item.id not in ephemeral:
+                        new_ctx.items.append(item)
+                await agent.update_chat_ctx(new_ctx)
+        except Exception as e:
+            logger.error(f"[COACHING SERVICE] Adjustment feedback failed: {e}", exc_info=True)
+        finally:
+            self.is_coaching_speaking = False
 
     # ------------------------------------------------------------------
     # LLM & Audio Ducking

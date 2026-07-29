@@ -27,6 +27,7 @@ YOYO_HOLD_SECONDS = 0.25
 SETTLE_SECONDS = 0.4
 FINAL_HOLD_SECONDS = 1.0
 
+# Keyed by diagnosis cause_id — used by the choreographed correction demo.
 HIGHLIGHT_JOINTS: dict[str, tuple[int, ...]] = {
     "narrow_stance": (13, 14, 15, 16, 17, 18),
     "narrow_foot_angle": (15, 16, 17, 18),
@@ -35,8 +36,20 @@ HIGHLIGHT_JOINTS: dict[str, tuple[int, ...]] = {
     "depth_cue_unfamiliar": (11, 12, 13, 14),
 }
 
+# Keyed by FaultType value — used by the last-rep replay, which has fault
+# events rather than diagnosis causes. The two vocabularies do not overlap.
+FAULT_HIGHLIGHT_JOINTS: dict[str, tuple[int, ...]] = {
+    "knee_valgus": (13, 14),
+    "forward_lean": (5, 6, 11, 12),
+    "back_rounding": (5, 6, 11, 12),
+    "depth": (11, 12, 13, 14),
+    "range_of_motion": (11, 12, 13, 14),
+    "bilateral_asymmetry": (11, 12, 13, 14, 15, 16),
+    "trunk_stability": (5, 6, 11, 12),
+}
 
-def _mediapipe_to_viewer_coords(points: np.ndarray) -> np.ndarray:
+
+def mediapipe_to_viewer_coords(points: np.ndarray) -> np.ndarray:
     """Transform MediaPipe world coords → viewer coords.
 
     MediaPipe: X=subject's left, Y=down, Z=toward camera.
@@ -100,12 +113,14 @@ class DemoWSBridge:
         self._init_payload: str | None = None
         self._event_backlog: list[str] = []
         self._latest_live_payload: str | None = None
+        self._joint_count: int = 0
 
     def start(self) -> None:
         self._done_event.clear()
         self._started_event.clear()
         self._event_backlog.clear()
         self._latest_live_payload = None
+        self._joint_count = 0
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -169,6 +184,29 @@ class DemoWSBridge:
     def send_init(self, demo_data: DemoData) -> None:
         payload = json.dumps(_serialize_demo_data(demo_data))
         self._init_payload = payload
+        self._joint_count = int(demo_data.pose_stack.shape[1])
+        self._broadcast(payload)
+
+    def send_replay_init(
+        self,
+        points: np.ndarray,
+        highlight_joints: list[int],
+        rep_number: int,
+        rep_score: float | None,
+        faults: list[dict] | None = None,
+    ) -> None:
+        """Send a static replay pose — no choreography, just show the skeleton."""
+        grounded = _ground_and_center_stack(points[np.newaxis])
+        payload = json.dumps({
+            "type": "replay_init",
+            "points": grounded[0].tolist(),
+            "highlight_joints": highlight_joints,
+            "rep_number": rep_number,
+            "rep_score": round(rep_score, 1) if rep_score is not None else None,
+            "faults": faults or [],
+        })
+        self._init_payload = payload
+        self._joint_count = int(points.shape[0])
         self._broadcast(payload)
 
     def send_event(self, event: dict[str, Any]) -> None:
@@ -177,11 +215,17 @@ class DemoWSBridge:
         self._broadcast(payload)
 
     def send_live_pose(self, points: np.ndarray) -> None:
-        """Stream one live skeleton frame; kept out of the event backlog."""
-        if points.shape[0] < LIVE_POSE_JOINT_COUNT:
+        """Stream one live skeleton frame; kept out of the event backlog.
+
+        Truncated to the joint count the viewer was initialized with — a
+        live pose with fewer joints than the demo stack leaves the extra
+        ones unset and the morph produces NaN coordinates.
+        """
+        joint_count = self._joint_count or LIVE_POSE_JOINT_COUNT
+        if points.shape[0] < joint_count:
             return
-        viewer_points = _mediapipe_to_viewer_coords(
-            points[:LIVE_POSE_JOINT_COUNT].astype(np.float64)
+        viewer_points = mediapipe_to_viewer_coords(
+            points[:joint_count].astype(np.float64)
         )
         grounded = _ground_and_center_stack(viewer_points[np.newaxis])
         payload = json.dumps({"type": "live_pose", "points": grounded[0].tolist()})

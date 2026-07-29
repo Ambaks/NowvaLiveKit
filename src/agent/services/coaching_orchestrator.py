@@ -15,13 +15,30 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from agent.services.coaching_constants import CUE_DISPLAY_LABELS
+from agent.services.coaching_constants import (
+    ADJUSTMENT_EXPLAIN_CUES,
+    CUE_DISPLAY_LABELS,
+)
+from biomechanics.coaching.cue_cache import (
+    DEFAULT_FAULT_CUE_PRIORITY,
+    PREEMPT_GAP_RATIO_ORCHESTRATOR,
+    can_cue_fault,
+    fault_cue_priority,
+)
 from agent.services.progress_context import (
     build_progress_comparison_lines,
     build_session_comparison_line,
 )
 
 logger = logging.getLogger(__name__)
+
+# Intra-set stance/toe-out adjustment monitoring (Feature 2).
+# Stance is in shoulder-width multiples; toe-out in degrees of external rotation.
+STANCE_TOLERANCE = 0.1
+TOE_OUT_TOLERANCE_DEG = 3.0
+# Cap the coaching loop so a lifter who cannot reach the target (or whose
+# feet are mistracked) is not corrected on a loop for the whole set.
+MAX_ADJUSTMENT_UTTERANCES = 4
 
 
 # =============================================================================
@@ -57,6 +74,17 @@ class CueLogEntry:
     wall_time: float       # time.time() for X-axis plotting
     label: str             # Human-readable ("Knees out!", "Rep 3", "Good rep!")
     category: str          # "fault" | "rep" | "positive" | "motivation"
+
+
+@dataclass
+class PendingCueOutcome:
+    """Pre-generated audio for the next rep after a fault cue fires."""
+    fault_type: str
+    cue_key: str
+    fired_at_rep: int
+    positive_audio: list | None = None
+    negative_audio: list | None = None
+    generation_task: Optional[asyncio.Task] = None
 
 
 # =============================================================================
@@ -107,6 +135,7 @@ class CoachingOrchestrator:
 
         # Fault cue rate limiting (orchestrator-level, per cue key)
         self._last_fault_cue_time: float = 0.0
+        self._last_fault_cue_priority: int = DEFAULT_FAULT_CUE_PRIORITY
         self._min_fault_cue_gap: float = 8.0  # seconds between fault cues
 
         # Rest state — suppress rep/fault processing during rest
@@ -130,6 +159,29 @@ class CoachingOrchestrator:
         # Diagnosis data — populated by set_diagnosis_data(), consumed by recaps
         self._pending_diagnosis: Optional[Dict[str, Any]] = None
         self._pending_scoring: Optional[Dict[str, Any]] = None
+
+        # Latest frame data snapshot — for real-time form queries (Feature 3)
+        self._latest_angles: Dict[str, Any] = {}
+        self._latest_angles_time: float = 0.0
+
+        # Last fault cue context — what correction was last given (Feature 3)
+        self._last_cue_context: Optional[Dict[str, Any]] = None
+
+        # After-cue adjustment monitoring (Feature 2)
+        self._adjustment_active: bool = False
+        self._adjustment_param: str = ""
+        self._adjustment_target: float = 0.0
+        self._adjustment_tolerance: float = 0.05
+        self._last_feedback_time: float = 0.0
+        self._feedback_interval: float = 1.5
+        self._adjustment_speaking: bool = False
+        self._adjustment_utterances: int = 0
+        self._speak_adjustment_fn: Optional[Callable] = None
+
+        # Preemptive speech generation (Feature 4)
+        self._pending_outcome: Optional[PendingCueOutcome] = None
+        self._generate_tts_fn: Optional[Callable] = None
+        self._play_raw_frames_fn: Optional[Callable] = None
 
         # Last-session baseline — set by CoachingService once loaded from DB
         self.progress_baseline: Optional[Dict[str, Any]] = None
@@ -181,7 +233,14 @@ class CoachingOrchestrator:
         self._last_motivation_rep = 0
         self._positive_cue_keys = list(positive_cue_keys or [])
         self._last_fault_cue_time = 0.0
+        self._last_fault_cue_priority = DEFAULT_FAULT_CUE_PRIORITY
         self._resting = False
+        self._adjustment_active = False
+        self._adjustment_utterances = 0
+        self._pending_outcome = None
+        # Stale across sets this would keep framing every later form query
+        # around a cue the lifter has long since moved past.
+        self._last_cue_context = None
         # Reset report data
         self._set_cue_log = []
         self._set_angle_samples = []
@@ -201,6 +260,18 @@ class CoachingOrchestrator:
     def resting(self) -> bool:
         """Whether rep/fault processing is suppressed during rest."""
         return self._resting
+
+    @property
+    def latest_angles(self) -> Dict[str, Any]:
+        return self._latest_angles
+
+    @property
+    def latest_angles_time(self) -> float:
+        return self._latest_angles_time
+
+    @property
+    def last_cue_context(self) -> Optional[Dict[str, Any]]:
+        return self._last_cue_context
 
     @resting.setter
     def resting(self, value: bool) -> None:
@@ -252,12 +323,89 @@ class CoachingOrchestrator:
         return diagnosis, scoring
 
     # ------------------------------------------------------------------
+    # Adjustment monitoring (Feature 2: after-cue coaching loop)
+    # ------------------------------------------------------------------
+
+    def _maybe_start_adjustment_from_fault(self) -> Optional[str]:
+        """Check stance width and toe-out against targets after a forward lean fault.
+
+        Called intra-set when the chest_up cue fires for a forward_lean fault.
+        Excessive forward lean is often caused by a too-narrow stance or
+        insufficient toe-out — guide the user to fix the root cause between reps.
+
+        Returns the cue key explaining what was armed, so the caller can play
+        it — otherwise the lifter hears "chest up" then, with no stated
+        reason, "a little wider".
+        """
+        if self._adjustment_utterances >= MAX_ADJUSTMENT_UTTERANCES:
+            return None
+
+        angles = self._latest_angles
+        if not angles or "stance_width_ratio" not in angles:
+            return None
+
+        target_stance = angles.get("target_stance_ratio", 0.0)
+        target_toe = angles.get("target_toe_out_deg", 0.0)
+        if target_stance <= 0 and target_toe <= 0:
+            return None
+
+        current_stance = angles["stance_width_ratio"]
+        current_toe = (
+            angles.get("foot_direction_angle_l", 0.0)
+            + angles.get("foot_direction_angle_r", 0.0)
+        ) / 2.0
+
+        stance_off = target_stance > 0 and (target_stance - current_stance) > STANCE_TOLERANCE
+        toe_off = target_toe > 0 and (target_toe - current_toe) > TOE_OUT_TOLERANCE_DEG
+
+        if stance_off:
+            self.start_adjustment_monitor(
+                "stance_width", target_stance, tolerance=STANCE_TOLERANCE
+            )
+            logger.info(
+                f"[ORCHESTRATOR] Adjustment monitor: stance_width "
+                f"current={current_stance:.2f} target={target_stance:.2f}"
+            )
+            return ADJUSTMENT_EXPLAIN_CUES["stance_width"]
+        if toe_off:
+            self.start_adjustment_monitor(
+                "toe_out", target_toe, tolerance=TOE_OUT_TOLERANCE_DEG
+            )
+            logger.info(
+                f"[ORCHESTRATOR] Adjustment monitor: toe_out "
+                f"current={current_toe:.1f}° target={target_toe:.1f}°"
+            )
+            return ADJUSTMENT_EXPLAIN_CUES["toe_out"]
+        return None
+
+    def start_adjustment_monitor(self, param: str, target: float, tolerance: float = 0.05) -> None:
+        self._adjustment_active = True
+        self._adjustment_param = param
+        self._adjustment_target = target
+        self._adjustment_tolerance = tolerance
+        # Deliberately not resetting _adjustment_utterances: the budget is
+        # per set, so a repeat cue re-aiming the monitor cannot refill it.
+        # Start the clock now so the first correction does not talk over the
+        # fault cue that triggered it.
+        self._last_feedback_time = time.monotonic()
+
+    def stop_adjustment_monitor(self) -> None:
+        self._adjustment_active = False
+        self._adjustment_param = ""
+
+    # ------------------------------------------------------------------
     # Angle sample recording (called from voice agent on frame_data)
     # ------------------------------------------------------------------
 
     def record_angle_sample(self, angles_dict: Dict[str, Any]) -> None:
-        """Record a joint angle snapshot for set report timeseries."""
-        if self._resting or not angles_dict:
+        """Record a joint angle snapshot for set report timeseries and real-time queries."""
+        if not angles_dict:
+            return
+
+        self._latest_angles = dict(angles_dict)
+        self._latest_angles_time = time.time()
+
+        if self._resting:
             return
         knee_l = angles_dict.get("knee_flexion_l", 0.0)
         knee_r = angles_dict.get("knee_flexion_r", 0.0)
@@ -266,6 +414,55 @@ class CoachingOrchestrator:
             "avg_knee": (knee_l + knee_r) / 2.0,
             "trunk_flexion": angles_dict.get("trunk_flexion", 0.0),
         })
+
+        # After-cue adjustment monitoring — only while standing between reps
+        if self._adjustment_active and angles_dict.get("rep_phase") == "idle":
+            self._maybe_speak_adjustment(angles_dict)
+
+    def _maybe_speak_adjustment(self, angles_dict: Dict[str, Any]) -> None:
+        """Compare the tracked parameter to its target and cue the correction."""
+        if self._adjustment_speaking or self._speak_adjustment_fn is None:
+            return
+        now = time.monotonic()
+        if now - self._last_feedback_time < self._feedback_interval:
+            return
+
+        if self._adjustment_param == "stance_width":
+            current = angles_dict.get("stance_width_ratio")
+        elif self._adjustment_param == "toe_out":
+            angle_l = angles_dict.get("foot_direction_angle_l")
+            angle_r = angles_dict.get("foot_direction_angle_r")
+            current = None if angle_l is None or angle_r is None else (angle_l + angle_r) / 2.0
+        else:
+            current = None
+
+        # A frame without stance metrics (no 3D skeleton, uncalibrated
+        # shoulder width) must not read as "you are at zero" — that would
+        # cue a correction the lifter does not need.
+        if current is None:
+            return
+
+        param = self._adjustment_param
+        delta = self._adjustment_target - current
+        hit_target = abs(delta) <= self._adjustment_tolerance
+        self._last_feedback_time = now
+        self._adjustment_utterances += 1
+
+        # Read param first: stopping clears it, and the confirmation still
+        # needs to name what the lifter just got right.
+        if hit_target or self._adjustment_utterances >= MAX_ADJUSTMENT_UTTERANCES:
+            self.stop_adjustment_monitor()
+
+        self._adjustment_speaking = True
+        asyncio.create_task(self._run_adjustment_speech(param, delta, hit_target))
+
+    async def _run_adjustment_speech(self, param: str, delta: float, hit_target: bool) -> None:
+        try:
+            await self._speak_adjustment_fn(param, delta, hit_target)
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] Adjustment feedback failed: {e}")
+        finally:
+            self._adjustment_speaking = False
 
     # ------------------------------------------------------------------
     # Event enqueueing (called from IPC handler)
@@ -285,15 +482,27 @@ class CoachingOrchestrator:
         if len(self._recent_faults) > 10:
             self._recent_faults = self._recent_faults[-10:]
 
-        # Rate limit fault cues to avoid overwhelming the lifter
+        # Rate limit fault cues to avoid overwhelming the lifter. A
+        # higher-priority fault may jump the gap — otherwise forward lean,
+        # which fires least often, never gets cued at all.
         now = time.monotonic()
-        if now - self._last_fault_cue_time < self._min_fault_cue_gap:
+        priority = fault_cue_priority(fault_type)
+        if not can_cue_fault(
+            now - self._last_fault_cue_time,
+            self._min_fault_cue_gap,
+            priority,
+            self._last_fault_cue_priority,
+            preempt_floor_ratio=PREEMPT_GAP_RATIO_ORCHESTRATOR,
+        ):
             return
 
         if cue_key and self._get_cue_audio(cue_key):
             self._last_fault_cue_time = now
+            self._last_fault_cue_priority = priority
             await self._queue.put(CoachingEvent(
-                priority=CuePriority.FAULT_CUE,
+                # Offset by fault rank so that when several are already
+                # queued, the most important one dispatches first.
+                priority=CuePriority.FAULT_CUE + priority,
                 timestamp=time.monotonic(),
                 event_type="cached_cue",
                 cue_key=cue_key,
@@ -370,6 +579,8 @@ class CoachingOrchestrator:
         else:
             self._clean_streak = 0
 
+        self._resolve_pending_outcome(faults)
+
         # Rep count cue — fire-and-forget on separate audio track
         # (bypasses queue since rep sounds play on a dedicated track)
         rep_cue_key = f"rep_{self._set_rep_count}"
@@ -383,7 +594,11 @@ class CoachingOrchestrator:
             ))
             logger.info(f"[ORCHESTRATOR] → Fire-and-forget REP COUNT cue: {rep_cue_key}")
         else:
-            logger.info(f"[ORCHESTRATOR] No cached audio for rep cue: {rep_cue_key}")
+            # Every counted rep is supposed to beep; silence here means the
+            # validation sound never loaded, not a missing per-rep variant.
+            logger.warning(
+                f"[ORCHESTRATOR] No audio for rep cue {rep_cue_key} — rep went unheard"
+            )
 
         logger.info(
             f"[ORCHESTRATOR] Rep {self._set_rep_count}/{self._set_target_reps or '?'} complete — "
@@ -667,18 +882,119 @@ class CoachingOrchestrator:
 
         try:
             logger.info(f"[ORCHESTRATOR] → Playing cached cue: {event.cue_key}")
+            set_token = (self._set_number, self._set_start_wall_time)
             await self._play_cached(event.cue_key)
             # Log successfully played cue for set report
             self._log_dispatched_cue(event)
             fault_type = (event.data or {}).get("fault_type")
+            if fault_type:
+                self._last_cue_context = {
+                    "cue_key": event.cue_key,
+                    "fault_type": fault_type,
+                    "severity": (event.data or {}).get("severity"),
+                    "timestamp": time.time(),
+                }
             if fault_type and self.on_fault_cue_delivered:
                 try:
                     self.on_fault_cue_delivered(fault_type, event.cue_key)
                 except Exception:
                     logger.exception("[ORCHESTRATOR] cue-delivered callback failed")
+            # Playback above is awaited, so the set may have ended while this
+            # cue was still speaking. Arming anything now would leak follow-up
+            # coaching into the next set with stale targets. Compare the set
+            # identity rather than _resting: the final set and a verbally
+            # force-ended set both land here with _resting already cleared.
+            if self._resting or (self._set_number, self._set_start_wall_time) != set_token:
+                logger.info("[ORCHESTRATOR] Set ended during cue — no follow-up armed")
+                return
+            # After a forward lean cue, check if stance/toe-out needs fixing
+            if fault_type == "forward_lean":
+                explain_key = self._maybe_start_adjustment_from_fault()
+                if explain_key and self._get_cue_audio(explain_key):
+                    await self._play_cached(explain_key)
+            # Pre-generate positive/negative audio for next-rep outcome
+            from agent.services.coaching_constants import PREEMPTIVE_TEXT
+            if fault_type and self._generate_tts_fn and event.cue_key in PREEMPTIVE_TEXT:
+                positive_text, negative_text = PREEMPTIVE_TEXT[event.cue_key]
+                self._pending_outcome = PendingCueOutcome(
+                    fault_type=fault_type,
+                    cue_key=event.cue_key,
+                    # The rep being performed as the cue is heard —
+                    # _set_rep_count counts completed reps, so the one in
+                    # progress is the next number up.
+                    fired_at_rep=self._set_rep_count + 1,
+                )
+                self._pending_outcome.generation_task = asyncio.create_task(
+                    self._generate_preemptive_audio(
+                        self._pending_outcome, positive_text, negative_text,
+                    )
+                )
             logger.info(f"[ORCHESTRATOR] ✓ Cached cue played: {event.cue_key}")
         except Exception as e:
             logger.error(f"[ORCHESTRATOR] Cached cue playback failed ({event.cue_key}): {e}")
+
+    def _resolve_pending_outcome(self, faults: List[str]) -> None:
+        """Judge a fired cue against the first rep the lifter could act on.
+
+        The cue plays during a rep that is already underway, so that rep's
+        faults were determined before the lifter heard anything — judging
+        against it would call a correction failed that was never attempted.
+        """
+        outcome = self._pending_outcome
+        if not outcome or not outcome.generation_task:
+            return
+        if self._set_rep_count <= outcome.fired_at_rep:
+            return
+
+        self._pending_outcome = None
+        fault_fixed = outcome.fault_type not in faults
+        logger.info(
+            f"[ORCHESTRATOR] Preemptive outcome: {outcome.cue_key} "
+            f"{'fixed' if fault_fixed else 'persists'} (rep {self._set_rep_count})"
+        )
+        # Fire-and-forget: awaiting playout here would hold up the rep count
+        # cue and the set-completion check for the length of the sentence.
+        asyncio.create_task(self._play_preemptive_outcome(outcome, fault_fixed))
+
+    async def _play_preemptive_outcome(
+        self, outcome: PendingCueOutcome, fault_fixed: bool,
+    ) -> None:
+        try:
+            if not outcome.generation_task.done():
+                await asyncio.wait_for(asyncio.shield(outcome.generation_task), timeout=0.5)
+            audio = outcome.positive_audio if fault_fixed else outcome.negative_audio
+            if audio and self._play_raw_frames_fn:
+                await self._play_raw_frames_fn(audio)
+        except asyncio.TimeoutError:
+            logger.info("[ORCHESTRATOR] Preemptive TTS not ready — skipping")
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] Preemptive audio playback failed: {e}")
+
+    async def _generate_preemptive_audio(
+        self, outcome: PendingCueOutcome, positive_text: str, negative_text: str,
+    ) -> None:
+        """Generate TTS audio for both outcomes in parallel.
+
+        The outcome is passed in rather than read from self: this body does
+        not start until the first suspension point, by which time a completed
+        rep may already have detached it.
+        """
+        if not self._generate_tts_fn:
+            return
+        try:
+            pos_task = asyncio.create_task(self._generate_tts_fn(positive_text))
+            neg_task = asyncio.create_task(self._generate_tts_fn(negative_text))
+            pos_audio, neg_audio = await asyncio.gather(pos_task, neg_task, return_exceptions=True)
+            # Store on the captured outcome, not conditionally on it still
+            # being the pending one: by the time TTS returns the rep may have
+            # completed and detached it, and that is exactly the case
+            # _play_preemptive_outcome's grace window waits for.
+            if not isinstance(pos_audio, Exception):
+                outcome.positive_audio = pos_audio
+            if not isinstance(neg_audio, Exception):
+                outcome.negative_audio = neg_audio
+        except Exception as e:
+            logger.error(f"[ORCHESTRATOR] Preemptive TTS generation failed: {e}")
 
     def _flush_queue(self):
         """Drop all pending events — called at set boundaries to clear stale cues."""

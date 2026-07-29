@@ -15,6 +15,8 @@ def get_user_calibration(db: Session, user_id, movement_pattern: str) -> Optiona
     """Load calibration thresholds from DB.
 
     Returns the thresholds dict if calibration exists, None otherwise.
+    Body proportions live on the same row but are NOT returned here — use
+    get_user_calibration_full when the diagnosis engine needs them.
     """
     row = (
         db.query(UserCalibration)

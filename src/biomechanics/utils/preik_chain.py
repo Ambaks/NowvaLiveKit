@@ -41,7 +41,8 @@ def apply_preik_filters(
     """
     skeleton = confidence_blender.blend(skeleton)
     skeleton = velocity_clamp.clamp(skeleton)
-    skeleton = bone_constraints.enforce(skeleton)
-    skeleton = ground_clamp.clamp(skeleton)
-    skeleton = position_smoother.smooth(skeleton)
-    return bone_constraints.enforce(skeleton)
+    # skeleton = bone_constraints.enforce(skeleton)
+    # skeleton = ground_clamp.clamp(skeleton)
+    # skeleton = position_smoother.smooth(skeleton)
+    # return bone_constraints.enforce(skeleton)
+    return skeleton

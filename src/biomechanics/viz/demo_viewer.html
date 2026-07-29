@@ -297,6 +297,24 @@ body {
     z-index: 10;
 }
 
+.score-overlay {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    font-family: var(--font-mono);
+    font-size: 3rem;
+    font-weight: 700;
+    color: var(--cyan);
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    text-shadow: 0 0 20px rgba(0, 229, 255, 0.4);
+    z-index: 20;
+    pointer-events: none;
+}
+.score-overlay.visible {
+    opacity: 1;
+}
+
 /* Vignette overlay */
 #scene-container::after {
     content: '';
@@ -320,6 +338,7 @@ body {
     <div id="status">connecting</div>
     <div id="camera-info"></div>
     <div id="brand">Nowva</div>
+    <div id="score-overlay" class="score-overlay"></div>
 </div>
 <script type="module">
 import * as THREE from 'three';
@@ -655,6 +674,7 @@ const captionEl = document.getElementById('caption');
 const statusEl = document.getElementById('status');
 const cameraInfoEl = document.getElementById('camera-info');
 const cueDotsEl = document.getElementById('cue-dots');
+const scoreOverlay = document.getElementById('score-overlay');
 
 function setCaption(text) {
     if (text) {
@@ -795,6 +815,7 @@ const choreo = createChoreographer({
 
 // ======== WEBSOCKET ========
 let ws = null;
+let replayDoneTimer = null;
 
 function sendMsg(type) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -814,10 +835,22 @@ function connect() {
         statusEl.textContent = 'waiting for demo';
     };
 
+    // The viewer reconnects to a fixed port, so a tab opened for one replay
+    // can be handed a different demo later. Drop the previous replay's score
+    // and its pending done-timer before rendering anything new.
+    const clearReplayState = () => {
+        if (replayDoneTimer !== null) {
+            clearTimeout(replayDoneTimer);
+            replayDoneTimer = null;
+        }
+        scoreOverlay.classList.remove('visible');
+    };
+
     ws.onmessage = (evt) => {
         const msg = JSON.parse(evt.data);
 
         if (msg.type === 'init') {
+            clearReplayState();
             choreo.init(msg);
             buildCueDots((msg.cues || []).length);
             statusEl.textContent = `${choreo.cueCount} cue(s) loaded`;
@@ -840,6 +873,27 @@ function connect() {
         } else if (msg.type === 'demo_end') {
             choreo.finish(nowSeconds());
             clearCueDots();
+        } else if (msg.type === 'replay_init') {
+            clearReplayState();
+            const pts = msg.points;
+            const flat = new Float64Array(pts.length * 3);
+            for (let j = 0; j < pts.length; j++) {
+                flat[j * 3 + 0] = pts[j][0];
+                flat[j * 3 + 1] = pts[j][1];
+                flat[j * 3 + 2] = pts[j][2];
+            }
+            updateSkeletonFromPoints(flat, msg.highlight_joints);
+            setSkeletonOpacity(1);
+            lerpCameraTo({ pos: new THREE.Vector3(2.0, 1.0, 2.0), target: new THREE.Vector3(0, 0.7, 0) });
+            if (msg.rep_score === null || msg.rep_score === undefined) {
+                statusEl.textContent = `rep ${msg.rep_number}`;
+            } else {
+                statusEl.textContent = `rep ${msg.rep_number} · score ${msg.rep_score}`;
+                scoreOverlay.textContent = msg.rep_score;
+                scoreOverlay.classList.add('visible');
+            }
+            sendMsg('started');
+            replayDoneTimer = setTimeout(() => sendMsg('done'), 8000);
         }
     };
 
