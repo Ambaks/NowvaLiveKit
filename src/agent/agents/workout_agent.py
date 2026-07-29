@@ -15,6 +15,67 @@ from db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+# Trunk flexion uses the 180-convention: 180 = upright, lower = more lean.
+UPRIGHT_TRUNK_DEG = 180.0
+# ForwardLeanRule's mild threshold, expressed as lean from vertical.
+NOTABLE_LEAN_DEG = 35.0
+
+
+def _assess_standing_setup(angles: dict) -> list[str]:
+    """Judge the setup the lifter can actually change while standing."""
+    from agent.services.coaching_orchestrator import (
+        STANCE_TOLERANCE,
+        TOE_OUT_TOLERANCE_DEG,
+    )
+
+    findings: list[str] = []
+
+    stance = angles.get("stance_width_ratio")
+    target_stance = angles.get("target_stance_ratio", 0.0)
+    if stance is not None and target_stance > 0:
+        delta = target_stance - stance
+        if abs(delta) <= STANCE_TOLERANCE:
+            findings.append("their stance width is right where you want it")
+        elif delta > 0:
+            findings.append("their stance is still narrower than their target")
+        else:
+            findings.append("their stance is wider than their target")
+
+    toe_l = angles.get("foot_direction_angle_l")
+    toe_r = angles.get("foot_direction_angle_r")
+    target_toe = angles.get("target_toe_out_deg", 0.0)
+    if toe_l is not None and toe_r is not None and target_toe > 0:
+        delta = target_toe - (toe_l + toe_r) / 2.0
+        if abs(delta) <= TOE_OUT_TOLERANCE_DEG:
+            findings.append("their toe angle is on target")
+        elif delta > 0:
+            findings.append("their toes need to turn out a bit more")
+        else:
+            findings.append("their toes are turned out further than needed")
+
+    return findings
+
+
+def _assess_in_rep(angles: dict) -> list[str]:
+    """Judge what is visible mid-rep, in plain lean-from-vertical terms."""
+    findings: list[str] = []
+
+    trunk = angles.get("trunk_flexion")
+    if trunk is not None:
+        lean = UPRIGHT_TRUNK_DEG - trunk
+        if lean > NOTABLE_LEAN_DEG:
+            findings.append("their chest is dropping forward more than it should")
+        else:
+            findings.append("their torso angle looks good")
+
+    knee_l = angles.get("knee_flexion_l")
+    knee_r = angles.get("knee_flexion_r")
+    if knee_l is not None and knee_r is not None:
+        if abs(knee_l - knee_r) > 10.0:
+            findings.append("one side is bending more than the other")
+
+    return findings
+
 
 class WorkoutAgent(BaseNovaAgent):
     """Handles active workout sessions with wake word detection and coaching integration."""
@@ -573,3 +634,114 @@ class WorkoutAgent(BaseNovaAgent):
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to get progress")
             return None, "Tell the user: 'Keep pushing! You're doing great.' Keep it simple and encouraging."
+
+    @function_tool
+    async def check_my_form(self, context: RunContext = None):
+        """
+        Call this when the user asks about their current form or positioning.
+        User might say: "like this?", "is this right?", "how's my form?",
+        "am I doing it right?", "is this good?", "how does this look?"
+        """
+        logger.info("[WORKOUT] User asking about current form")
+
+        coaching = self.userdata.coaching_service
+        if not coaching:
+            return None, (
+                "Tell the user you can't check their form right now. "
+                "Keep it brief."
+            )
+
+        snapshot = coaching.get_current_form_snapshot()
+        if not snapshot:
+            return None, (
+                "Tell the user: 'Hold your position for a second so I can "
+                "get a read on you.' Keep it natural."
+            )
+
+        if snapshot["data_age_ms"] > 3000:
+            return None, (
+                "Tell the user: 'Hold that position for me — I need a "
+                "fresh look.' Keep it brief and encouraging."
+            )
+
+        angles = snapshot["angles"]
+        last_cue = snapshot.get("last_cue") or {}
+        standing = angles.get("rep_phase") == "idle"
+
+        # Judge here rather than handing the LLM raw angles: the codebase's
+        # trunk convention is inverted (180 = upright) and valgus has no
+        # fixed scale, so a model reading bare numbers guesses backwards.
+        findings = _assess_standing_setup(angles) if standing else _assess_in_rep(angles)
+
+        # No findings means the metrics were absent, not that everything is
+        # correct — an uncalibrated athlete gets no targets at all, and
+        # claiming their setup looks fine would be a verdict with no evidence.
+        if not findings:
+            return None, (
+                "Tell the user you can't get a clean read from where they "
+                "are — ask them to face the camera and run a rep so you can "
+                "watch the movement. One short sentence, no verdict on their "
+                "form."
+            )
+
+        cue_context = ""
+        if last_cue.get("cue_key"):
+            cue_context = (
+                f" They are asking because your last cue was "
+                f"'{last_cue['cue_key']}'."
+            )
+
+        return None, (
+            f"The user asked how their form looks.{cue_context} "
+            f"Here is what you can see right now: {'; '.join(findings)}. "
+            f"Relay this in 1-2 short sentences as a coach — natural "
+            f"language, no numbers, no jargon. Lead with whatever is "
+            f"already correct, then the one thing to change."
+        )
+
+    @function_tool
+    async def show_me(self, what: str = "correction", context: RunContext = None):
+        """
+        Call this when the user wants to see a visual demonstration of a correction
+        or their last rep. User might say: "show me that", "show me what you mean",
+        "show me my last rep", "what should it look like?", "can I see that?"
+
+        Args:
+            what: Either "correction" to show the recommended fix, or "last_rep" to replay the last rep
+        """
+        logger.info(f"[WORKOUT] User requested visual demo: {what}")
+
+        coaching = self.userdata.coaching_service
+        if not coaching:
+            return None, "Tell the user you can't show visuals right now. Keep it brief."
+
+        if what == "last_rep":
+            result = await coaching.request_last_rep_replay()
+            if not result or result.get("error"):
+                return None, (
+                    "Tell the user: 'I don't have your last rep saved yet — "
+                    "do a few reps first and then ask me again.' Keep it encouraging."
+                )
+            rep_data = result.get("rep_data", {})
+            faults = rep_data.get("faults", [])
+            fault_desc = ", ".join(f["fault_type"] for f in faults) if faults else "clean form"
+            return None, (
+                f"Tell the user: 'Here's your last rep — take a look at the screen.' "
+                f"The rep had: {fault_desc}. Briefly describe what you see based on "
+                f"the fault data. Keep it to 1-2 sentences."
+            )
+
+        cause_id = coaching.get_last_cue_cause_id()
+
+        result = await coaching.request_on_demand_demo(cause_id=cause_id)
+        if not result or result.get("error") or result.get("status") == "unavailable":
+            return None, (
+                "Tell the user: 'I don't have enough data to show you a "
+                "visual demo yet. Let me see a few more reps first.' "
+                "Keep it encouraging."
+            )
+        return None, (
+            "Tell the user: 'Check out the screen — I'm going to show you "
+            "what the correction looks like.' Keep it brief and let the "
+            "visual demo do the talking."
+        )

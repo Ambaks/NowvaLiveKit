@@ -14,6 +14,7 @@ import select
 import signal
 import sys
 import os
+import threading
 import time
 import webbrowser
 from pathlib import Path
@@ -43,9 +44,15 @@ from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
 from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
-from biomechanics.viz.demo_ws_bridge import DemoWSBridge, DEMO_WS_PORT
+from biomechanics.viz.demo_ws_bridge import (
+    DemoWSBridge,
+    DEMO_WS_PORT,
+    FAULT_HIGHLIGHT_JOINTS,
+    mediapipe_to_viewer_coords,
+)
 from biomechanics.viz.set_plots import plot_hip_position, plot_hip_velocity, make_output_dir
 from biomechanics.viz.valgus_debug import build_recorder
+from biomechanics.viz.pipeline_inspector import build_inspector
 from biomechanics.analysis.set_finalizer import SetDataCollector, finalize_set
 from biomechanics.viz.html_dashboard import generate_session_dashboard
 
@@ -294,6 +301,28 @@ def _skeleton_pixels(skeleton_2d) -> np.ndarray | None:
     return np.array([[kp.x, kp.y] for kp in keypoints[:17]], dtype=np.float32)
 
 
+def _restart_demo_bridge(existing: DemoWSBridge | None) -> DemoWSBridge:
+    """Replace any live viewer bridge with a fresh one and open the browser.
+
+    Stopping first matters: the bridge binds a fixed port, so starting a
+    second one on top of a live one leaves the new server thread dead.
+    The browser launch runs off-thread — it is slow enough to stall the
+    frame loop, and the bridge replays its init payload to whichever
+    client connects, so nothing is lost by opening late.
+    """
+    if existing is not None:
+        existing.stop()
+    bridge = DemoWSBridge()
+    bridge.start()
+
+    def _open_viewer() -> None:
+        time.sleep(0.3)  # let the server finish binding
+        webbrowser.open(f"http://localhost:{DEMO_WS_PORT}")
+
+    threading.Thread(target=_open_viewer, daemon=True).start()
+    return bridge
+
+
 def _wait_for_start_capture(ipc_client: IPCClient) -> bool:
     """Block until a start_capture message arrives over IPC. Returns False on disconnect."""
     sock = ipc_client.client_socket
@@ -415,13 +444,38 @@ def run_biomechanics_pipeline(
         ipc_client = valgus_recorder.tap(ipc_client)
         bridge.ipc_client = ipc_client
 
+    pipeline_inspector = build_inspector(out_dir, config.target_fps, pipeline._multi_camera)
+    if pipeline_inspector is not None:
+        pipeline.enable_inspect()
+
     # --- Apply existing calibration if provided ---
     if calibration_file and os.path.exists(calibration_file):
         try:
             with open(calibration_file, "r") as f:
-                cal_profile = json.load(f)
+                stored = json.load(f)
+            # Newer files nest thresholds alongside the athlete's body
+            # proportions; older flat files are just the thresholds.
+            cal_profile = stored.get("thresholds", stored)
             apply_calibration_to_rule_engine(pipeline._rule_engine, cal_profile)
             print(f"[CALIBRATION] Loaded calibration from {calibration_file}")
+
+            # This is the only place a returning user's proportions get
+            # wired — they skip the phase that would otherwise derive them.
+            stored_params = stored.get("athlete_params")
+            if stored_params:
+                stored_baseline = stored.get("baseline") or {}
+                session_tracker.set_athlete_params(stored_params, stored_baseline)
+                bridge.set_athlete_params(stored_params, stored_baseline)
+                print(
+                    f"  [DIAGNOSIS] Athlete params restored: "
+                    f"shoulder={stored_params.get('shoulder_width_m', 0):.3f}m "
+                    f"femur={stored_params.get('femur_avg_m', 0):.3f}m"
+                )
+            elif not calibration_mode:
+                print(
+                    "  [DIAGNOSIS] No stored athlete params — diagnosis and "
+                    "stance coaching unavailable this session"
+                )
         except Exception as e:
             print(f"[CALIBRATION] Failed to load calibration file: {e}")
 
@@ -494,6 +548,7 @@ def run_biomechanics_pipeline(
         if athlete_params is not None:
             baseline_stub = {"peakDorsi": 35.0, "peakKneeFlex": 120.0}
             session_tracker.set_athlete_params(athlete_params, baseline_stub)
+            bridge.set_athlete_params(athlete_params, baseline_stub)
             print(
                 f"  [ASSESSMENT] Athlete params set: "
                 f"shoulder={athlete_params['shoulder_width_m']:.3f}m "
@@ -605,7 +660,7 @@ def run_biomechanics_pipeline(
                     result = pipeline.process_frame()
 
                     if pipeline.is_ready and result.skeleton_3d is not None:
-                        bridge.send_frame_data(result)
+                        bridge.send_frame_data(result, rep_phase=pipeline.rep_counter.phase)
                         for fault in result.faults:
                             bridge.send_fault(fault)
 
@@ -902,6 +957,7 @@ def run_biomechanics_pipeline(
             # Wire athlete params for diagnosis engine
             if cal_athlete_params is not None:
                 session_tracker.set_athlete_params(cal_athlete_params, cal_baseline)
+                bridge.set_athlete_params(cal_athlete_params, cal_baseline)
                 print(
                     f"  [DIAGNOSIS] Athlete params set: "
                     f"shoulder={cal_athlete_params['shoulder_width_m']:.3f}m "
@@ -1017,6 +1073,11 @@ def run_biomechanics_pipeline(
     set_plot_data = []
     completed_sets = 0
 
+    # --- On-demand demo bridge (active during "show me" flow) ---
+    on_demand_bridge: DemoWSBridge | None = None
+    on_demand_started_ack_sent = False
+    on_demand_replay = False
+
     try:
         while True:
             # Check for incoming messages (rest_start, etc.)
@@ -1051,7 +1112,93 @@ def run_biomechanics_pipeline(
                 elif incoming.get("type") == "assessment_mode":
                     session_tracker.set_assessment_mode(incoming.get("enabled", False))
                     print(f"[PIPELINE] Assessment mode {'enabled' if incoming.get('enabled') else 'disabled'}")
+                elif incoming.get("type") == "request_last_rep":
+                    snapshot = session_tracker.get_last_rep_snapshot()
+                    request_id = incoming.get("request_id", "")
+                    if snapshot:
+                        bottom_kpts = snapshot.get("bottom_kpts")
+                        rep_data = snapshot.get("rep_data", {})
+                        if hasattr(rep_data, "model_dump"):
+                            rep_data = rep_data.model_dump()
+
+                        faults = rep_data.get("faults", [])
+                        highlight = set()
+                        for fault in faults:
+                            ft = fault.get("fault_type", "") if isinstance(fault, dict) else ""
+                            joints = FAULT_HIGHLIGHT_JOINTS.get(ft)
+                            if joints:
+                                highlight.update(joints)
+
+                        # None when the rep could not be scored — the viewer
+                        # hides the badge rather than showing a real-looking 0.
+                        rep_score = snapshot.get("rep_score")
+
+                        if bottom_kpts is not None:
+                            kpts_arr = np.array(bottom_kpts, dtype=np.float64)
+                            viewer_kpts = mediapipe_to_viewer_coords(kpts_arr)
+
+                            on_demand_bridge = _restart_demo_bridge(on_demand_bridge)
+                            on_demand_replay = True
+                            on_demand_started_ack_sent = True
+                            on_demand_bridge.send_replay_init(
+                                viewer_kpts,
+                                highlight_joints=sorted(highlight),
+                                rep_number=rep_data.get("rep_number", 0),
+                                rep_score=rep_score,
+                                faults=faults,
+                            )
+
+                        resp: dict = {"type": "last_rep_snapshot", "request_id": request_id}
+                        for key in ("bottom_kpts", "standing_kpts"):
+                            kpts = snapshot.get(key)
+                            if kpts is not None:
+                                resp[key] = kpts.tolist() if isinstance(kpts, np.ndarray) else kpts
+                        if snapshot.get("kinematic_summary"):
+                            resp["kinematic_summary"] = snapshot["kinematic_summary"]
+                        resp["rep_data"] = rep_data
+                        ipc_client.send_message(resp)
+                    else:
+                        ipc_client.send_message({
+                            "type": "last_rep_snapshot",
+                            "request_id": request_id,
+                            "error": "no_data",
+                        })
+                elif incoming.get("type") == "request_demo":
+                    request_id = incoming.get("request_id", "")
+                    demo_data = session_tracker.build_on_demand_demo()
+                    if demo_data is not None:
+                        on_demand_bridge = _restart_demo_bridge(on_demand_bridge)
+                        on_demand_replay = False
+                        on_demand_started_ack_sent = False
+                        on_demand_bridge.send_init(demo_data)
+                        ipc_client.send_message({
+                            "type": "demo_data_ready",
+                            "request_id": request_id,
+                            "status": "available",
+                            "cues": [cue.model_dump() for cue in demo_data.cues],
+                        })
+                        print(f"  [ON-DEMAND DEMO] Started with {len(demo_data.cues)} cue(s)")
+                    else:
+                        ipc_client.send_message({
+                            "type": "demo_data_ready",
+                            "request_id": request_id,
+                            "status": "unavailable",
+                            "error": "no_diagnosis_or_rep_data",
+                        })
+                elif incoming.get("type") == "demo_start" and on_demand_bridge is not None:
+                    on_demand_bridge.send_event({"type": "demo_start"})
+                elif incoming.get("type") == "demo_cue" and on_demand_bridge is not None:
+                    on_demand_bridge.send_event({
+                        "type": "demo_cue",
+                        "cue_index": int(incoming.get("cue_index", 0)),
+                    })
+                elif incoming.get("type") == "demo_end" and on_demand_bridge is not None:
+                    on_demand_bridge.send_event({"type": "demo_end"})
                 elif incoming.get("type") == "workout_complete":
+                    if on_demand_bridge is not None:
+                        on_demand_bridge.stop()
+                        on_demand_bridge = None
+                        on_demand_replay = False
                     workout_finished = True
                     pipeline.presence_only = True
                     print("[PIPELINE] Workout complete — stopping rep counting")
@@ -1078,6 +1225,20 @@ def run_biomechanics_pipeline(
                         )
 
             result = pipeline.process_frame()
+
+            if on_demand_bridge is not None:
+                # Replay shows a frozen past rep — streaming the live pose
+                # would repaint over it every frame.
+                if not on_demand_replay and result.skeleton_3d is not None:
+                    on_demand_bridge.send_live_pose(result.skeleton_3d.to_numpy())
+                if not on_demand_started_ack_sent and on_demand_bridge.wait_started(timeout=0):
+                    ipc_client.send_message({"type": "demo_started"})
+                    on_demand_started_ack_sent = True
+                if on_demand_bridge.wait_done(timeout=0):
+                    on_demand_bridge.stop()
+                    on_demand_bridge = None
+                    on_demand_replay = False
+                    print("  [ON-DEMAND DEMO] Viewer closed")
 
             # Collect data for post-session plots (not during rest — the
             # gate pre-arm window produces angles in the last few seconds)
@@ -1106,7 +1267,7 @@ def run_biomechanics_pipeline(
 
             if not resting and not workout_finished:
                 # Normal mode: send biomechanics data
-                bridge.send_frame_data(result)
+                bridge.send_frame_data(result, rep_phase=pipeline.rep_counter.phase)
 
                 for fault in result.faults:
                     # Shallow-rep depth faults are delivered by the
@@ -1208,6 +1369,8 @@ def run_biomechanics_pipeline(
 
                 if valgus_recorder is not None:
                     valgus_recorder.record_frame(result, display, pipeline, resting)
+                if pipeline_inspector is not None:
+                    pipeline_inspector.record_frame(result, display, pipeline, resting)
 
                 if not _window_animated:
                     animate_window_fullscreen(window_name)
@@ -1294,6 +1457,14 @@ def run_biomechanics_pipeline(
             except Exception as e:
                 print(f"[VALGUS] Report generation failed: {e}")
 
+        if pipeline_inspector is not None:
+            try:
+                report_path = pipeline_inspector.finalize(exercise_name)
+                if report_path is not None:
+                    webbrowser.open(f"file://{report_path}")
+            except Exception as e:
+                print(f"[INSPECT] Report generation failed: {e}")
+
         # Remove the workout dir if this run never produced any output
         # (e.g. workout started then abandoned before any reps)
         try:
@@ -1329,6 +1500,9 @@ if __name__ == "__main__":
             i += 1
         elif sys.argv[i] == "--valgus":
             os.environ["NOWVA_VALGUS_DEBUG"] = "1"
+            i += 1
+        elif sys.argv[i] == "--inspect":
+            os.environ["NOWVA_PIPELINE_INSPECT"] = "1"
             i += 1
         else:
             i += 1

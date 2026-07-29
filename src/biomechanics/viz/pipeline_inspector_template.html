@@ -1,0 +1,654 @@
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #0a0a12;
+  --bg2: #12121e;
+  --bg3: #1a1a2a;
+  --border: #2a2a3a;
+  --text: #e0e0ec;
+  --text2: #8888a0;
+  --cyan: #00e5ff;
+  --violet: #8b5cf6;
+  --accent: #00e5ff;
+  --raw: #ef4444;
+  --cb: #f59e0b;
+  --vc: #eab308;
+  --b1: #10b981;
+  --gc: #3b82f6;
+  --ps: #a855f7;
+  --b2: #ec4899;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg:#f4f4f8; --bg2:#fff; --bg3:#eee; --border:#ccc;
+          --text:#1a1a2a; --text2:#666; }
+}
+:root[data-theme="light"] {
+  --bg:#f4f4f8; --bg2:#fff; --bg3:#eee; --border:#ccc;
+  --text:#1a1a2a; --text2:#666;
+}
+:root[data-theme="dark"] {
+  --bg:#0a0a12; --bg2:#12121e; --bg3:#1a1a2a; --border:#2a2a3a;
+  --text:#e0e0ec; --text2:#8888a0;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:'SF Mono',Menlo,monospace; font-size:13px; }
+header { padding:12px 20px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+header h1 { font-size:15px; font-weight:600; letter-spacing:1px; }
+header .meta { color:var(--text2); font-size:12px; }
+
+.transport { display:flex; align-items:center; gap:8px; padding:10px 20px; border-bottom:1px solid var(--border); background:var(--bg2); }
+.transport button { background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:4px; cursor:pointer; font-family:inherit; font-size:13px; }
+.transport button:hover { border-color:var(--accent); }
+.transport button.active { background:var(--accent); color:#000; }
+.transport input[type=range] { flex:1; accent-color:var(--accent); }
+.transport .label { color:var(--text2); white-space:nowrap; font-size:12px; min-width:90px; }
+.transport .speed { background:var(--bg3); border:1px solid var(--border); color:var(--accent); padding:2px 8px; border-radius:3px; font-family:inherit; font-size:11px; cursor:pointer; }
+
+.main-panels { display:flex; border-bottom:1px solid var(--border); }
+.video-panel { flex:0 0 auto; border-right:1px solid var(--border); display:flex; flex-direction:column; }
+.video-panel video { display:block; background:#000; max-width:50vw; }
+.frame-info { padding:8px 12px; font-size:11px; color:var(--text2); background:var(--bg2); line-height:1.6; }
+.frame-info .tag { display:inline-block; padding:1px 6px; border-radius:3px; margin:0 2px; font-size:10px; }
+.frame-info .tag-phase { background:rgba(0,229,255,0.15); color:var(--cyan); }
+.frame-info .tag-rep { background:rgba(139,92,246,0.15); color:var(--violet); }
+.frame-info .tag-fault { background:rgba(239,68,68,0.15); color:var(--raw); }
+.frame-info .tag-gate { background:rgba(16,185,129,0.15); color:var(--b1); }
+
+.skeleton-panel { flex:1; display:flex; flex-direction:column; min-width:0; }
+.views { display:flex; flex:1; }
+.view-container { flex:1; display:flex; flex-direction:column; position:relative; }
+.view-container + .view-container { border-left:1px solid var(--border); }
+.view-label { position:absolute; top:6px; left:10px; font-size:10px; color:var(--text2); letter-spacing:2px; z-index:1; }
+.view-container canvas { width:100%; height:100%; display:block; }
+
+.stage-toggles { display:flex; flex-wrap:wrap; gap:6px; padding:10px 14px; border-top:1px solid var(--border); background:var(--bg2); }
+.stage-btn { display:flex; align-items:center; gap:5px; padding:4px 10px; border:1px solid var(--border); border-radius:4px; cursor:pointer; font-family:inherit; font-size:11px; color:var(--text2); background:var(--bg3); transition:all 0.15s; }
+.stage-btn.on { border-color:currentColor; }
+.stage-btn .dot { width:8px; height:8px; border-radius:50%; }
+
+.angle-panel { padding:10px 20px 14px; }
+.angle-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.angle-header span { font-size:11px; color:var(--text2); letter-spacing:1px; }
+.angle-group-btn { font-family:inherit; font-size:11px; padding:2px 8px; border:1px solid var(--border); border-radius:3px; background:var(--bg3); color:var(--text2); cursor:pointer; }
+.angle-group-btn.on { border-color:var(--accent); color:var(--accent); }
+.angle-chart-wrap { position:relative; overflow-x:auto; }
+.angle-chart-wrap canvas { display:block; }
+
+.legend { display:flex; flex-wrap:wrap; gap:10px; padding:6px 0; font-size:10px; color:var(--text2); }
+.legend-item { display:flex; align-items:center; gap:4px; }
+.legend-item .swatch { width:16px; height:2px; border-radius:1px; }
+.legend-item .swatch.dashed { background:repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 8px); height:2px; }
+
+.kb-hint { position:fixed; bottom:8px; right:16px; font-size:10px; color:var(--text2); opacity:0.5; }
+</style>
+
+<header>
+  <h1 id="title">Pipeline Inspector</h1>
+  <div class="meta" id="headerMeta"></div>
+</header>
+
+<div class="transport">
+  <button id="playBtn" title="Space">&#9654;</button>
+  <button id="prevBtn" title="Left arrow">&#9664;</button>
+  <button id="nextBtn" title="Right arrow">&#9654;</button>
+  <input type="range" id="scrubber" min="0" max="0" value="0">
+  <div class="label" id="frameLabel">F:0/0</div>
+  <div class="label" id="timeLabel">0:00.0</div>
+  <button class="speed" id="speedBtn" title="Playback speed">1x</button>
+</div>
+
+<div class="main-panels" id="mainPanels">
+  <div class="video-panel">
+    <video id="video" muted playsinline></video>
+    <div class="frame-info" id="frameInfo"></div>
+  </div>
+  <div class="skeleton-panel">
+    <div class="views">
+      <div class="view-container">
+        <div class="view-label">FRONT</div>
+        <canvas id="frontView"></canvas>
+      </div>
+      <div class="view-container">
+        <div class="view-label">SIDE</div>
+        <canvas id="sideView"></canvas>
+      </div>
+    </div>
+    <div class="stage-toggles" id="stageToggles"></div>
+  </div>
+</div>
+
+<div class="angle-panel">
+  <div class="angle-header">
+    <span>ANGLES</span>
+    <div id="angleGroups"></div>
+  </div>
+  <div class="legend" id="angleLegend"></div>
+  <div class="angle-chart-wrap">
+    <canvas id="angleChart"></canvas>
+  </div>
+</div>
+
+<div class="kb-hint">Space: play/pause &middot; &larr;&rarr;: frame step &middot; Shift+&larr;&rarr;: 10 frames</div>
+
+<script>
+const D = __DATA_JSON__;
+const VIDEO_B64 = "__VIDEO_B64__";
+const N = D.n_frames;
+
+const STAGE_COLORS = {
+  raw:'#ef4444', confidence_blend:'#f59e0b', velocity_clamp:'#eab308',
+  bone_constraints_1:'#10b981', ground_clamp:'#3b82f6',
+  position_smoother:'#a855f7', bone_constraints_2:'#ec4899'
+};
+const BONES = [
+  [0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],
+  [5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],
+  [15,17],[17,19],[16,18],[18,20]
+];
+const ANGLE_GROUPS = {
+  Knee:['knee_flexion_l','knee_flexion_r'],
+  Hip:['hip_flexion_l','hip_flexion_r'],
+  Trunk:['trunk_flexion'],
+  Ankle:['ankle_dorsiflexion_l','ankle_dorsiflexion_r'],
+  Valgus:['knee_valgus_l','knee_valgus_r'],
+  Adduction:['hip_adduction_l','hip_adduction_r'],
+  Rotation:['hip_rotation_l','hip_rotation_r','pelvis_tilt'],
+};
+const ANGLE_COLORS = [
+  '#ef4444','#3b82f6','#10b981','#f59e0b','#a855f7','#ec4899',
+  '#06b6d4','#84cc16','#f97316','#8b5cf6','#14b8a6','#e11d48',
+  '#6366f1','#facc15'
+];
+
+let curFrame = 0;
+let playing = false;
+let playTimer = null;
+let playSpeed = 1;
+const speeds = [0.25, 0.5, 1, 2, 4];
+let speedIdx = 2;
+
+const stageOn = {};
+D.stage_names.forEach((s,i) => { stageOn[s] = (i===0 || i===D.stage_names.length-1); });
+
+let activeAngleGroup = 'Knee';
+
+const video = document.getElementById('video');
+const scrubber = document.getElementById('scrubber');
+const playBtn = document.getElementById('playBtn');
+const frameLabel = document.getElementById('frameLabel');
+const timeLabel = document.getElementById('timeLabel');
+const frameInfo = document.getElementById('frameInfo');
+const frontCanvas = document.getElementById('frontView');
+const sideCanvas = document.getElementById('sideView');
+const angleChart = document.getElementById('angleChart');
+const speedBtn = document.getElementById('speedBtn');
+
+// ----- Init -----
+function init() {
+  document.getElementById('title').textContent = '__TITLE__';
+  document.getElementById('headerMeta').textContent =
+    D.exercise + ' | ' + N + ' frames | ' + D.duration_s + 's | ' +
+    D.measured_fps + ' fps' + (D.multi_camera ? ' | multi-cam' : '');
+
+  scrubber.max = N - 1;
+
+  if (VIDEO_B64) {
+    video.src = 'data:video/mp4;base64,' + VIDEO_B64;
+    video.load();
+  }
+
+  buildStageToggles();
+  buildAngleGroups();
+  resizeCanvases();
+  renderFrame(0);
+
+  window.addEventListener('resize', () => { resizeCanvases(); renderFrame(curFrame); });
+  scrubber.addEventListener('input', () => { pause(); seekFrame(+scrubber.value); });
+  playBtn.addEventListener('click', togglePlay);
+  document.getElementById('prevBtn').addEventListener('click', () => { pause(); stepFrame(-1); });
+  document.getElementById('nextBtn').addEventListener('click', () => { pause(); stepFrame(1); });
+  speedBtn.addEventListener('click', cycleSpeed);
+
+  document.addEventListener('keydown', onKey);
+
+  angleChart.addEventListener('click', onAngleChartClick);
+}
+
+function resizeCanvases() {
+  const dpr = window.devicePixelRatio || 1;
+  [frontCanvas, sideCanvas].forEach(c => {
+    const rect = c.parentElement.getBoundingClientRect();
+    c.width = rect.width * dpr;
+    c.height = rect.height * dpr;
+    c.style.width = rect.width + 'px';
+    c.style.height = rect.height + 'px';
+    c.getContext('2d').scale(dpr, dpr);
+  });
+  const aw = angleChart.parentElement.getBoundingClientRect().width;
+  angleChart.width = aw * dpr;
+  angleChart.height = 200 * dpr;
+  angleChart.style.width = aw + 'px';
+  angleChart.style.height = '200px';
+  angleChart.getContext('2d').scale(dpr, dpr);
+}
+
+// ----- Stage toggles -----
+function buildStageToggles() {
+  const container = document.getElementById('stageToggles');
+  D.stage_names.forEach((name, i) => {
+    const btn = document.createElement('div');
+    btn.className = 'stage-btn' + (stageOn[name] ? ' on' : '');
+    btn.style.color = stageOn[name] ? STAGE_COLORS[name] : '';
+    btn.innerHTML = '<span class="dot" style="background:'+STAGE_COLORS[name]+'"></span>' + D.stage_labels[i];
+    btn.addEventListener('click', () => {
+      stageOn[name] = !stageOn[name];
+      btn.className = 'stage-btn' + (stageOn[name] ? ' on' : '');
+      btn.style.color = stageOn[name] ? STAGE_COLORS[name] : '';
+      renderSkeletons(curFrame);
+    });
+    container.appendChild(btn);
+  });
+}
+
+// ----- Angle group buttons -----
+function buildAngleGroups() {
+  const container = document.getElementById('angleGroups');
+  Object.keys(ANGLE_GROUPS).forEach(group => {
+    const btn = document.createElement('button');
+    btn.className = 'angle-group-btn' + (group === activeAngleGroup ? ' on' : '');
+    btn.textContent = group;
+    btn.addEventListener('click', () => {
+      activeAngleGroup = group;
+      container.querySelectorAll('.angle-group-btn').forEach(b => b.className = 'angle-group-btn');
+      btn.className = 'angle-group-btn on';
+      buildAngleLegend();
+      renderAngleChart(curFrame);
+    });
+    container.appendChild(btn);
+  });
+  buildAngleLegend();
+}
+
+function buildAngleLegend() {
+  const container = document.getElementById('angleLegend');
+  container.innerHTML = '';
+  const keys = ANGLE_GROUPS[activeAngleGroup] || [];
+  keys.forEach((key, i) => {
+    const color = ANGLE_COLORS[D.angle_keys.indexOf(key) % ANGLE_COLORS.length];
+    const item = document.createElement('span');
+    item.className = 'legend-item';
+    const shortName = key.replace(/_/g, ' ');
+    item.innerHTML =
+      '<span class="swatch" style="background:'+color+'"></span>' + shortName + ' (filt)' +
+      '&nbsp;&nbsp;<span class="swatch dashed" style="color:'+color+'"></span>' + shortName + ' (raw)';
+    container.appendChild(item);
+  });
+}
+
+// ----- Playback -----
+function togglePlay() {
+  playing ? pause() : play();
+}
+
+function play() {
+  if (curFrame >= N-1) seekFrame(0);
+  playing = true;
+  playBtn.innerHTML = '&#9646;&#9646;';
+  playBtn.classList.add('active');
+  video.playbackRate = playSpeed;
+  video.play().catch(()=>{});
+  scheduleNext();
+}
+
+function pause() {
+  playing = false;
+  playBtn.innerHTML = '&#9654;';
+  playBtn.classList.remove('active');
+  video.pause();
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+}
+
+function scheduleNext() {
+  if (!playing) return;
+  const interval = (1000 / D.video_fps) / playSpeed;
+  playTimer = setTimeout(() => {
+    if (!playing) return;
+    if (curFrame < N-1) {
+      seekFrame(curFrame + 1);
+      scheduleNext();
+    } else {
+      pause();
+    }
+  }, interval);
+}
+
+function cycleSpeed() {
+  speedIdx = (speedIdx + 1) % speeds.length;
+  playSpeed = speeds[speedIdx];
+  speedBtn.textContent = playSpeed + 'x';
+  if (playing) { video.playbackRate = playSpeed; }
+}
+
+function seekFrame(idx) {
+  idx = Math.max(0, Math.min(N-1, idx));
+  renderFrame(idx);
+}
+
+function stepFrame(delta) {
+  seekFrame(curFrame + delta);
+}
+
+function onKey(e) {
+  if (e.target.tagName === 'INPUT') return;
+  switch (e.key) {
+    case ' ': e.preventDefault(); togglePlay(); break;
+    case 'ArrowLeft': e.preventDefault(); pause(); stepFrame(e.shiftKey ? -10 : -1); break;
+    case 'ArrowRight': e.preventDefault(); pause(); stepFrame(e.shiftKey ? 10 : 1); break;
+  }
+}
+
+// ----- Render -----
+function renderFrame(idx) {
+  curFrame = idx;
+  scrubber.value = idx;
+
+  const t = D.series.t[idx] || 0;
+  const m = Math.floor(t / 60);
+  const s = (t % 60).toFixed(1);
+  frameLabel.textContent = 'F:' + idx + '/' + N;
+  timeLabel.textContent = m + ':' + (s < 10 ? '0' : '') + s;
+
+  syncVideo(idx);
+  renderSkeletons(idx);
+  renderAngleChart(idx);
+  updateFrameInfo(idx);
+}
+
+function syncVideo(idx) {
+  if (!video.duration || !D.video_fps) return;
+  const targetTime = idx / D.video_fps;
+  if (Math.abs(video.currentTime - targetTime) > 0.1) {
+    video.currentTime = targetTime;
+  }
+}
+
+// ----- Frame info -----
+function updateFrameInfo(idx) {
+  const phase = D.series.phase[idx] || '-';
+  const rep = D.series.rep[idx] || 0;
+  const ready = D.series.ready[idx];
+  const resting = D.series.resting[idx];
+  const gate = D.series.standing_gate[idx];
+
+  let html = '<span class="tag tag-phase">' + phase + '</span>';
+  html += '<span class="tag tag-rep">rep ' + rep + '</span>';
+  if (ready) html += '<span class="tag tag-gate">READY</span>';
+  else html += '<span class="tag" style="background:rgba(239,68,68,0.1);color:#ef4444">NOT READY</span>';
+  if (resting) html += '<span class="tag" style="background:rgba(248,113,113,0.1);color:#f87171">RESTING</span>';
+  if (gate) html += '<span class="tag tag-gate">GATE OK</span>';
+
+  const frameFaults = D.faults.filter(f => f.i === idx);
+  frameFaults.forEach(f => {
+    html += ' <span class="tag tag-fault">' + f.type + ' (' + f.severity + ')</span>';
+  });
+
+  frameInfo.innerHTML = html;
+}
+
+// ----- Skeleton rendering -----
+function renderSkeletons(idx) {
+  const active = {};
+  let hasAny = false;
+  D.stage_names.forEach(name => {
+    if (stageOn[name] && D.skeletons[name][idx] != null) {
+      active[name] = D.skeletons[name][idx];
+      hasAny = true;
+    }
+  });
+
+  drawView(frontCanvas, active, 'x', 'y', hasAny);
+  drawView(sideCanvas, active, 'z', 'y', hasAny);
+}
+
+function drawView(canvas, active, hAxis, vAxis, hasAny) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width / (window.devicePixelRatio || 1);
+  const H = canvas.height / (window.devicePixelRatio || 1);
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  const dpr = window.devicePixelRatio || 1;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  if (!hasAny) {
+    ctx.fillStyle = 'var(--text2, #666)';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No skeleton data', W/2, H/2);
+    ctx.restore();
+    return;
+  }
+
+  const pad = 30;
+  const hIdx = hAxis === 'x' ? 0 : 2;
+  const vIdx = 1;
+
+  let minH = Infinity, maxH = -Infinity;
+  let minV = Infinity, maxV = -Infinity;
+  for (const flat of Object.values(active)) {
+    for (let i = 0; i < flat.length; i += 3) {
+      const h = flat[i + hIdx], v = flat[i + vIdx];
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+  }
+
+  const hRange = (maxH - minH) || 0.01;
+  const vRange = (maxV - minV) || 0.01;
+  const margin = 0.1;
+  const eMinH = minH - hRange * margin;
+  const eMaxH = maxH + hRange * margin;
+  const eMinV = minV - vRange * margin;
+  const eMaxV = maxV + vRange * margin;
+  const adjH = eMaxH - eMinH;
+  const adjV = eMaxV - eMinV;
+
+  const drawW = W - 2 * pad;
+  const drawH = H - 2 * pad;
+  const scale = Math.min(drawW / adjH, drawH / adjV);
+  const cH = (eMinH + eMaxH) / 2;
+  const cV = (eMinV + eMaxV) / 2;
+
+  function toScreen(flat, kIdx) {
+    const i3 = kIdx * 3;
+    const h = flat[i3 + hIdx];
+    const v = flat[i3 + vIdx];
+    return {
+      sx: pad + drawW / 2 + (h - cH) * scale,
+      sy: pad + drawH / 2 + (v - cV) * scale
+    };
+  }
+
+  // Draw grid
+  ctx.strokeStyle = 'rgba(128,128,160,0.08)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad + (drawH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(W - pad, y); ctx.stroke();
+    const x = pad + (drawW / 4) * i;
+    ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, H - pad); ctx.stroke();
+  }
+
+  const stageList = Object.keys(active);
+  stageList.forEach(name => {
+    const flat = active[name];
+    const color = STAGE_COLORS[name];
+    const nKpts = Math.floor(flat.length / 3);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = stageList.length > 2 ? 0.6 : 0.85;
+    BONES.forEach(([a,b]) => {
+      if (a >= nKpts || b >= nKpts) return;
+      const pA = toScreen(flat, a);
+      const pB = toScreen(flat, b);
+      ctx.beginPath();
+      ctx.moveTo(pA.sx, pA.sy);
+      ctx.lineTo(pB.sx, pB.sy);
+      ctx.stroke();
+    });
+
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < nKpts; i++) {
+      const p = toScreen(flat, i);
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, stageList.length > 3 ? 2 : 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ----- Angle chart -----
+function onAngleChartClick(e) {
+  const rect = angleChart.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const chartW = rect.width;
+  const pad = 50;
+  if (x < pad || x > chartW - 10) return;
+  const frac = (x - pad) / (chartW - pad - 10);
+  const frame = Math.round(frac * (N - 1));
+  pause();
+  seekFrame(frame);
+}
+
+function renderAngleChart(idx) {
+  const ctx = angleChart.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = angleChart.width / dpr;
+  const H = angleChart.height / dpr;
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const keys = ANGLE_GROUPS[activeAngleGroup] || [];
+  if (!keys.length) { ctx.restore(); return; }
+
+  const padL = 50, padR = 10, padT = 10, padB = 24;
+  const cW = W - padL - padR;
+  const cH = H - padT - padB;
+
+  // Find Y range across all visible angles
+  let yMin = Infinity, yMax = -Infinity;
+  keys.forEach(key => {
+    const raw = D.angles_raw[key];
+    const filt = D.angles_filtered[key];
+    for (let i = 0; i < N; i++) {
+      if (raw[i] != null) { yMin = Math.min(yMin, raw[i]); yMax = Math.max(yMax, raw[i]); }
+      if (filt[i] != null) { yMin = Math.min(yMin, filt[i]); yMax = Math.max(yMax, filt[i]); }
+    }
+  });
+  if (!isFinite(yMin)) { yMin = 0; yMax = 100; }
+  const yPad = (yMax - yMin) * 0.08 || 5;
+  yMin -= yPad; yMax += yPad;
+
+  function toX(i) { return padL + (i / (N-1)) * cW; }
+  function toY(v) { return padT + cH - ((v - yMin) / (yMax - yMin)) * cH; }
+
+  // Grid
+  ctx.strokeStyle = 'rgba(128,128,160,0.1)';
+  ctx.lineWidth = 1;
+  const ySteps = 5;
+  ctx.fillStyle = 'rgba(128,128,160,0.4)';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= ySteps; i++) {
+    const v = yMin + (yMax - yMin) * i / ySteps;
+    const y = toY(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillText(v.toFixed(0) + '°', padL - 4, y + 3);
+  }
+
+  // Rep markers
+  ctx.fillStyle = 'rgba(139,92,246,0.3)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  D.reps.forEach(r => {
+    const x = toX(r.i);
+    ctx.beginPath();
+    ctx.moveTo(x, padT); ctx.lineTo(x, padT + cH);
+    ctx.strokeStyle = 'rgba(139,92,246,0.2)'; ctx.stroke();
+    ctx.fillText('R' + r.rep, x, H - 4);
+  });
+
+  // Draw traces
+  keys.forEach((key, ki) => {
+    const color = ANGLE_COLORS[D.angle_keys.indexOf(key) % ANGLE_COLORS.length];
+    const raw = D.angles_raw[key];
+    const filt = D.angles_filtered[key];
+
+    // Raw (dashed)
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.4;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    drawTrace(ctx, raw, toX, toY);
+
+    // Filtered (solid)
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    drawTrace(ctx, filt, toX, toY);
+  });
+
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+
+  // Cursor
+  const cx = toX(idx);
+  ctx.strokeStyle = 'rgba(0,229,255,0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, padT + cH); ctx.stroke();
+
+  // Readout at cursor
+  ctx.fillStyle = 'rgba(0,229,255,0.9)';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'left';
+  let ry = padT + 12;
+  keys.forEach((key, ki) => {
+    const filt = D.angles_filtered[key];
+    const raw = D.angles_raw[key];
+    const fv = filt[idx], rv = raw[idx];
+    if (fv == null && rv == null) return;
+    const label = key.replace(/_/g, ' ');
+    const txt = label + ': ' + (fv != null ? fv.toFixed(1) : '-') +
+      (rv != null ? ' (raw ' + rv.toFixed(1) + ')' : '');
+    ctx.fillText(txt, cx + 6, ry);
+    ry += 12;
+  });
+
+  ctx.restore();
+}
+
+function drawTrace(ctx, values, toX, toY) {
+  let started = false;
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    if (values[i] == null) { started = false; continue; }
+    const x = toX(i), y = toY(values[i]);
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+// ----- Start -----
+document.addEventListener('DOMContentLoaded', init);
+if (document.readyState !== 'loading') init();
+</script>

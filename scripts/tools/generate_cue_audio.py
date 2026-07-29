@@ -86,6 +86,56 @@ CUE_PROMPTS["brace"] = (
     "properly and his midsection is collapsing under the load."
 )
 
+# ── Intra-set stance / toe-out coaching ──
+# The two _explain cues run long on purpose: they are spoken once, right
+# after "chest up", to tell the lifter WHY they are about to be asked to
+# move their feet. The rest are polling cues fired every 1.5s.
+CUE_PROMPTS["stance_explain"] = (
+    "Your athlete keeps pitching forward in the squat, and you can see the "
+    "cause is their stance being too narrow. Tell them in ONE short sentence "
+    "that the lean is coming from their stance and that they should step "
+    "their feet out wider."
+)
+CUE_PROMPTS["stance_wider"] = (
+    "Your athlete is standing between reps adjusting their stance, and their "
+    "feet are still a bit too close together. Nudge them to widen slightly."
+)
+CUE_PROMPTS["stance_narrower"] = (
+    "Your athlete is standing between reps adjusting their stance and has "
+    "overshot — their feet are now too wide. Nudge them to bring it in a bit."
+)
+CUE_PROMPTS["toe_out_explain"] = (
+    "Your athlete keeps pitching forward in the squat, and you can see the "
+    "cause is their toes pointing too straight ahead. Tell them in ONE short "
+    "sentence that the lean is coming from their foot angle and that they "
+    "should turn their toes out more."
+)
+CUE_PROMPTS["toe_out_more"] = (
+    "Your athlete is standing between reps adjusting their feet, and their "
+    "toes still need to point out a bit further. Nudge them to turn out more."
+)
+CUE_PROMPTS["toe_out_less"] = (
+    "Your athlete is standing between reps adjusting their feet and has "
+    "overshot — their toes are turned out too far. Nudge them to ease back."
+)
+CUE_PROMPTS["adjust_good"] = (
+    "Your athlete has just moved their feet into exactly the position you "
+    "asked for. Confirm it and tell them to hold that."
+)
+
+# Cues whose response needs different length rules than the 1-3 word default.
+# Passed per-response, which overrides the session instructions.
+EXPLAIN_INSTRUCTIONS = (
+    "You are a coach standing next to your athlete on the gym floor. Say ONE "
+    "natural sentence of 10 to 16 words that names the cause of their problem "
+    "and the fix. Warm and direct, no filler, no lists."
+)
+
+CUE_INSTRUCTION_OVERRIDES = {
+    "stance_explain": EXPLAIN_INSTRUCTIONS,
+    "toe_out_explain": EXPLAIN_INSTRUCTIONS,
+}
+
 # ── Deadlift corrections ──
 CUE_PROMPTS["hips_through"] = (
     "You are giving your athlete "
@@ -229,12 +279,15 @@ async def generate_all_cues(voice: str, model: str, variants: int, output_dir: P
                     }
                 }))
 
-                # Request response
+                # Request response. A per-response instruction override lets
+                # the longer explanation cues escape the 1-3 word session rule.
+                response_config = {"modalities": ["audio", "text"]}
+                override = CUE_INSTRUCTION_OVERRIDES.get(cue_key)
+                if override:
+                    response_config["instructions"] = override
                 await ws.send(json.dumps({
                     "type": "response.create",
-                    "response": {
-                        "modalities": ["audio", "text"],
-                    }
+                    "response": response_config,
                 }))
 
                 # Collect audio deltas until response.done

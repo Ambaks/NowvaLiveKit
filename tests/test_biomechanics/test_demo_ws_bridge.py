@@ -118,3 +118,32 @@ class TestStartedAck:
     def test_not_started_before_any_message(self):
         bridge = DemoWSBridge()
         assert not bridge.wait_started(timeout=0)
+
+
+class TestLivePoseJointCount:
+    """The viewer morphs live poses against the init stack — a live pose
+    with fewer joints leaves the extras unset and the morph goes NaN."""
+
+    def test_live_pose_matches_a_21_joint_replay_init(self):
+        bridge = DemoWSBridge()
+        bridge.send_replay_init(
+            np.zeros((21, 3)), highlight_joints=[], rep_number=1, rep_score=80.0,
+        )
+        bridge.send_live_pose(np.ones((21, 3)))
+        payload = json.loads(bridge._latest_live_payload)
+        assert len(payload["points"]) == 21
+
+    def test_live_pose_matches_a_19_joint_demo_stack(self):
+        bridge = DemoWSBridge()
+        bridge.send_init(_make_demo_data())
+        bridge.send_live_pose(np.ones((21, 3)))
+        payload = json.loads(bridge._latest_live_payload)
+        assert len(payload["points"]) == 19
+
+    def test_live_pose_dropped_when_skeleton_is_too_small(self):
+        bridge = DemoWSBridge()
+        bridge.send_replay_init(
+            np.zeros((21, 3)), highlight_joints=[], rep_number=1, rep_score=80.0,
+        )
+        bridge.send_live_pose(np.ones((19, 3)))
+        assert bridge._latest_live_payload is None

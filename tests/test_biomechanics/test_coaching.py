@@ -145,13 +145,20 @@ class TestCueCache:
         assert cue_cache.get_cue_for_fault("knee_valgus", 10.0) == "knees_out"
 
     def test_get_cue_for_fault_rate_limited(self, cue_cache):
-        """Second call within min_cue_gap should return None."""
+        """A fault that doesn't outrank the last one waits out the gap."""
         cue_cache.prepare_for_exercise("squat")
         cue1 = cue_cache.get_cue_for_fault("knee_valgus", 10.0)
         assert cue1 == "knees_out"
-        # Only 1s later — needs 2s gap
-        cue2 = cue_cache.get_cue_for_fault("forward_lean", 11.0)
+        # Only 1s later, and asymmetry ranks below knee valgus.
+        cue2 = cue_cache.get_cue_for_fault("bilateral_asymmetry", 11.0)
         assert cue2 is None
+
+    def test_higher_priority_fault_preempts_the_gap(self, cue_cache):
+        """Forward lean is the root-cause fault and must not be starved by
+        the more frequent knee/asymmetry faults."""
+        cue_cache.prepare_for_exercise("squat")
+        assert cue_cache.get_cue_for_fault("knee_valgus", 10.0) == "knees_out"
+        assert cue_cache.get_cue_for_fault("forward_lean", 11.0) == "chest_up"
 
     def test_get_cue_for_fault_after_gap(self, cue_cache):
         """Cue should be returned after sufficient time gap."""

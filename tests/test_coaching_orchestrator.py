@@ -54,12 +54,12 @@ def orchestrator(mock_callbacks):
 class TestCuePriority:
     """Test that priority values are correctly ordered."""
 
-    def test_fault_highest_priority(self):
-        assert CuePriority.FAULT_CUE < CuePriority.REP_COUNT_CUE
-        assert CuePriority.FAULT_CUE < CuePriority.LLM_MOTIVATION
+    def test_llm_motivation_highest_priority(self):
+        assert CuePriority.LLM_MOTIVATION < CuePriority.POSITIVE_CUE
+        assert CuePriority.LLM_MOTIVATION < CuePriority.FAULT_CUE
 
-    def test_cached_cues_before_llm(self):
-        assert CuePriority.POSITIVE_CUE < CuePriority.LLM_MOTIVATION
+    def test_cached_cues_before_fault(self):
+        assert CuePriority.POSITIVE_CUE < CuePriority.FAULT_CUE
 
     def test_motivation_before_recap(self):
         assert CuePriority.LLM_MOTIVATION < CuePriority.LLM_SET_RECAP
@@ -70,13 +70,13 @@ class TestCuePriority:
             CoachingEvent(CuePriority.LLM_SET_RECAP, time.monotonic(), "llm_set_recap"),
             CoachingEvent(CuePriority.FAULT_CUE, time.monotonic(), "cached_cue", "knees_out"),
             CoachingEvent(CuePriority.LLM_MOTIVATION, time.monotonic(), "llm_motivation"),
-            CoachingEvent(CuePriority.REP_COUNT_CUE, time.monotonic(), "cached_cue", "rep_1"),
+            CoachingEvent(CuePriority.POSITIVE_CUE, time.monotonic(), "cached_cue", "good_depth"),
         ]
         sorted_events = sorted(events)
-        assert sorted_events[0].priority == CuePriority.FAULT_CUE
-        assert sorted_events[1].priority == CuePriority.REP_COUNT_CUE
-        assert sorted_events[2].priority == CuePriority.LLM_MOTIVATION
-        assert sorted_events[3].priority == CuePriority.LLM_SET_RECAP
+        assert sorted_events[0].priority == CuePriority.LLM_MOTIVATION
+        assert sorted_events[1].priority == CuePriority.LLM_SET_RECAP
+        assert sorted_events[2].priority == CuePriority.POSITIVE_CUE
+        assert sorted_events[3].priority == CuePriority.FAULT_CUE
 
 
 # =============================================================================
@@ -85,38 +85,31 @@ class TestCuePriority:
 
 
 class TestMotivationTriggers:
-    """Test deterministic motivation trigger logic."""
+    """Test midpoint-based motivation trigger logic."""
 
-    def test_no_trigger_on_first_rep(self, orchestrator):
+    def test_no_trigger_without_target(self, orchestrator):
+        orchestrator._set_target_reps = 0
+        assert orchestrator._should_trigger_motivation(3) is False
+
+    def test_no_trigger_short_set(self, orchestrator):
+        orchestrator._set_target_reps = 3
         assert orchestrator._should_trigger_motivation(1) is False
 
-    def test_trigger_every_n_reps(self, orchestrator):
+    def test_trigger_at_midpoint(self, orchestrator):
+        orchestrator._set_target_reps = 10
+        assert orchestrator._should_trigger_motivation(5) is True
+
+    def test_no_trigger_before_midpoint(self, orchestrator):
+        orchestrator._set_target_reps = 10
+        assert orchestrator._should_trigger_motivation(4) is False
+
+    def test_no_trigger_after_midpoint(self, orchestrator):
+        orchestrator._set_target_reps = 10
+        assert orchestrator._should_trigger_motivation(6) is False
+
+    def test_midpoint_odd_target(self, orchestrator):
+        orchestrator._set_target_reps = 7
         assert orchestrator._should_trigger_motivation(3) is True
-        assert orchestrator._should_trigger_motivation(6) is True
-        assert orchestrator._should_trigger_motivation(9) is True
-
-    def test_no_trigger_between_intervals(self, orchestrator):
-        assert orchestrator._should_trigger_motivation(2) is False
-        assert orchestrator._should_trigger_motivation(4) is False
-        assert orchestrator._should_trigger_motivation(5) is False
-
-    def test_trigger_last_2_reps(self, orchestrator):
-        orchestrator._set_target_reps = 8
-        assert orchestrator._should_trigger_motivation(6) is True
-        assert orchestrator._should_trigger_motivation(7) is True
-
-    def test_no_trigger_if_just_triggered(self, orchestrator):
-        orchestrator._last_motivation_rep = 3
-        assert orchestrator._should_trigger_motivation(4) is False
-        assert orchestrator._should_trigger_motivation(5) is False
-
-    def test_trigger_clean_streak(self, orchestrator):
-        orchestrator._clean_streak = 3
-        assert orchestrator._should_trigger_motivation(4) is True
-
-    def test_no_trigger_clean_streak_under_3(self, orchestrator):
-        orchestrator._clean_streak = 2
-        assert orchestrator._should_trigger_motivation(2) is False
 
     def test_build_motivation_context(self, orchestrator):
         orchestrator._set_target_reps = 10
@@ -142,7 +135,9 @@ class TestEventEnqueueing:
             await orchestrator.on_fault("knees_out", "knee_valgus", "moderate")
             assert not orchestrator._queue.empty()
             event = orchestrator._queue.get_nowait()
-            assert event.priority == CuePriority.FAULT_CUE
+            # Fault events sit at FAULT_CUE offset by their rank, so the
+            # more important fault dispatches first when several are queued.
+            assert event.priority >= CuePriority.FAULT_CUE
             assert event.cue_key == "knees_out"
         asyncio.run(_run())
 
@@ -161,8 +156,8 @@ class TestEventEnqueueing:
             await orchestrator.on_fault("knees_out", "knee_valgus", "moderate")
             assert not orchestrator._queue.empty()
             orchestrator._queue.get_nowait()  # drain first
-            # Second fault within gap should be skipped
-            await orchestrator.on_fault("chest_up", "forward_lean", "severe")
+            # Same-or-lower priority fault within gap should be skipped
+            await orchestrator.on_fault("knees_out", "knee_valgus", "moderate")
             assert orchestrator._queue.empty()
         asyncio.run(_run())
 
@@ -222,12 +217,11 @@ class TestEventEnqueueing:
             assert orchestrator._set_shallow_depths == []
         asyncio.run(_run())
 
-    def test_on_rep_complete_enqueues_rep_cue(self, orchestrator):
+    def test_on_rep_complete_fires_rep_cue(self, orchestrator, mock_callbacks):
         async def _run():
             await orchestrator.on_rep_complete(1, "parallel", True, [])
-            event = orchestrator._queue.get_nowait()
-            assert event.priority == CuePriority.REP_COUNT_CUE
-            assert event.cue_key == "rep_1"
+            await asyncio.sleep(0)  # let fire-and-forget task run
+            mock_callbacks["play_cached_audio_fn"].assert_awaited_once_with("rep_1")
         asyncio.run(_run())
 
     def test_on_rep_complete_clean_enqueues_positive(self, orchestrator, monkeypatch):
@@ -636,8 +630,8 @@ class TestRelativeRepCounting:
         async def _run():
             # Pipeline sends absolute rep 8, but it's the 1st rep of this set
             await orch.on_rep_complete(8, "parallel", True, [])
-            event = orch._queue.get_nowait()
-            assert event.cue_key == "rep_1"  # Not "rep_8"
+            await asyncio.sleep(0)  # let fire-and-forget task run
+            cbs["play_cached_audio_fn"].assert_awaited_once_with("rep_1")
 
         asyncio.run(_run())
 
@@ -684,16 +678,14 @@ class TestRelativeRepCounting:
         orch.reset_set(target_reps=10)
 
         async def _run():
-            # Simulate reps 6, 7, 8 from pipeline (relative reps 1, 2, 3)
-            await orch.on_rep_complete(6, "parallel", False, [])  # relative 1
-            await orch.on_rep_complete(7, "parallel", False, [])  # relative 2
-            await orch.on_rep_complete(8, "parallel", False, [])  # relative 3
+            # Simulate reps through the midpoint (relative rep 5 = 10 // 2)
+            for i in range(5):
+                await orch.on_rep_complete(i + 10, "parallel", False, [])
 
             events = []
             while not orch._queue.empty():
                 events.append(orch._queue.get_nowait())
             motivation = [e for e in events if e.event_type == "llm_motivation"]
-            # Motivation fires at relative rep 3 (3 % 3 == 0)
             assert len(motivation) == 1
 
         asyncio.run(_run())
@@ -756,30 +748,21 @@ class TestDiagnosisData:
         orchestrator.set_diagnosis_data(diagnosis, scoring)
         assert orchestrator._pending_diagnosis is diagnosis
         assert orchestrator._pending_scoring is scoring
-        assert orchestrator._diagnosis_event.is_set()
 
     def test_consume_diagnosis_returns_and_clears(self, orchestrator):
         diagnosis = _mock_diagnosis()
         scoring = _mock_scoring()
         orchestrator.set_diagnosis_data(diagnosis, scoring)
+        got_diag, got_score = orchestrator._consume_diagnosis()
+        assert got_diag is diagnosis
+        assert got_score is scoring
+        assert orchestrator._pending_diagnosis is None
+        assert orchestrator._pending_scoring is None
 
-        async def _run():
-            got_diag, got_score = await orchestrator._consume_diagnosis()
-            assert got_diag is diagnosis
-            assert got_score is scoring
-            assert orchestrator._pending_diagnosis is None
-            assert orchestrator._pending_scoring is None
-            assert not orchestrator._diagnosis_event.is_set()
-
-        asyncio.run(_run())
-
-    def test_consume_diagnosis_times_out_gracefully(self, orchestrator):
-        async def _run():
-            got_diag, got_score = await orchestrator._consume_diagnosis()
-            assert got_diag is None
-            assert got_score is None
-
-        asyncio.run(_run())
+    def test_consume_diagnosis_returns_none_when_empty(self, orchestrator):
+        got_diag, got_score = orchestrator._consume_diagnosis()
+        assert got_diag is None
+        assert got_score is None
 
     def test_set_recap_with_diagnosis_enriches_prompt(self):
         """Set recap should include diagnosis data in the LLM prompt."""

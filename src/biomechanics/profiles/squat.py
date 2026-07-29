@@ -143,9 +143,7 @@ class SquatProfile(ExerciseProfile):
         foot_conf = min(angles.foot_confidence_l, angles.foot_confidence_r)
         if foot_conf >= 0.3:
             state["toe_available"] = True
-            frame_valgus = max(
-                abs(angles.knee_valgus_l), abs(angles.knee_valgus_r)
-            )
+            frame_valgus = max(angles.knee_valgus_l, angles.knee_valgus_r)
             state["current_rep_peak_valgus"] = max(
                 state["current_rep_peak_valgus"], frame_valgus
             )

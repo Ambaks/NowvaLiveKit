@@ -17,10 +17,12 @@ from biomechanics.diagnosis.bridge import (
     build_frame_from_live_pipeline,
     build_rep_kinematic_summary,
     build_rom_dict,
+    mediapipe_to_viewer_coords,
 )
+from biomechanics.diagnosis.demo_builder import DemoData, build_demo_data
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_rep, score_set
-from biomechanics.diagnosis.types import RepKinematicSummary, SetFeatures
+from biomechanics.diagnosis.types import DiagnosisResult, RepKinematicSummary, SetFeatures
 from biomechanics.utils.types import RepData
 
 
@@ -67,6 +69,13 @@ class SessionTracker:
 
         # Assessment mode: per-rep rolling-window diagnosis
         self._assessment_mode: bool = False
+
+        # Last-rep snapshot for on-demand replay
+        self._last_rep_bottom_kpts: list | None = None
+        self._last_rep_standing_kpts: list | None = None
+        self._last_rep_kinematic_summary: RepKinematicSummary | None = None
+        self._last_rep_data: RepData | None = None
+        self._last_set_diagnosis: DiagnosisResult | None = None
 
     def set_athlete_params(self, athlete_params: dict, baseline: dict) -> None:
         self._athlete_params = athlete_params
@@ -127,6 +136,12 @@ class SessionTracker:
             rep_kinematic_summary=summary,
             set_number=self.current_set_number,
         )
+
+        # Store last-rep snapshot for on-demand replay
+        self._last_rep_bottom_kpts = bottom_kpts
+        self._last_rep_standing_kpts = standing_kpts
+        self._last_rep_kinematic_summary = summary
+        self._last_rep_data = rep
 
         if self._assessment_mode:
             self._run_assessment_diagnosis(rep.rep_number)
@@ -205,6 +220,9 @@ class SessionTracker:
             self.ipc_bridge.send_diagnosis_complete(
                 self.current_set_number, diagnosis_result, score_summary,
             )
+            # Outlives the buffer below: "show me that" almost always comes
+            # during rest, after the recap, when the buffer is already gone.
+            self._last_set_diagnosis = diagnosis_result
 
         self._rep_kinematic_buffer = []
         self._bottom_frame_buffer = []
@@ -212,9 +230,18 @@ class SessionTracker:
         self.set_active = False
 
     def reset_rep_buffers(self) -> None:
-        """Clear per-rep diagnosis buffers without ending the set."""
+        """Clear per-rep diagnosis buffers and the last-rep snapshot.
+
+        Called at phase boundaries (assessment rounds, assessment→calibration),
+        where the previous rep must stop counting as "your last rep" — otherwise
+        an assessment rep is replayed minutes later during the workout.
+        """
         self._rep_kinematic_buffer = []
         self._bottom_frame_buffer = []
+        self._last_rep_bottom_kpts = None
+        self._last_rep_standing_kpts = None
+        self._last_rep_kinematic_summary = None
+        self._last_rep_data = None
 
     def bottom_frame_for_rep(self, rep_number: int) -> list | None:
         """Viewer-coords bottom-frame kpts for a rep, or the latest buffered frame."""
@@ -224,6 +251,75 @@ class SessionTracker:
         if self._bottom_frame_buffer:
             return self._bottom_frame_buffer[-1][1]
         return None
+
+    def get_last_rep_snapshot(self) -> dict | None:
+        if self._last_rep_bottom_kpts is None:
+            return None
+        snapshot: dict = {
+            "bottom_kpts": self._last_rep_bottom_kpts,
+            "standing_kpts": self._last_rep_standing_kpts,
+        }
+        if self._last_rep_kinematic_summary is not None:
+            snapshot["kinematic_summary"] = (
+                self._last_rep_kinematic_summary.model_dump()
+                if hasattr(self._last_rep_kinematic_summary, "model_dump")
+                else self._last_rep_kinematic_summary
+            )
+            # RepKinematicSummary carries no score — the replay overlay needs
+            # one, so score the rep here rather than reading a key that
+            # never exists.
+            if self._athlete_params is not None:
+                anthro = build_anthro_dict(self._athlete_params)
+                rom = build_rom_dict(self._athlete_params, self._baseline or {})
+                score = score_rep(self._last_rep_kinematic_summary, anthro, rom)
+                snapshot["rep_score"] = round(score.composite_score * 100, 1)
+        if self._last_rep_data is not None:
+            snapshot["rep_data"] = (
+                self._last_rep_data.model_dump()
+                if hasattr(self._last_rep_data, "model_dump")
+                else self._last_rep_data
+            )
+        return snapshot
+
+    def build_on_demand_demo(self) -> DemoData | None:
+        """Build a choreographed demo from the current kinematic buffer.
+
+        Runs the diagnosis engine on accumulated rep data and builds
+        a corrected pose stack from the last rep's bottom keypoints.
+        Returns None if insufficient data.
+        """
+        if self._athlete_params is None or self._last_rep_bottom_kpts is None:
+            return None
+
+        anthro = build_anthro_dict(self._athlete_params)
+        rom = build_rom_dict(self._athlete_params, self._baseline or {})
+
+        if self._rep_kinematic_buffer:
+            set_features = SetFeatures(
+                user_id=0,
+                set_id="on_demand_demo",
+                rep_count=len(self._rep_kinematic_buffer),
+                per_rep_kinematics=list(self._rep_kinematic_buffer),
+                anthropometry=anthro,
+                rom=rom,
+            )
+            diagnosis = HypothesisEngine().diagnose(set_features)
+        else:
+            # Mid-rest: the buffer was cleared at set end, so reuse the
+            # diagnosis the athlete was just given feedback on.
+            diagnosis = self._last_set_diagnosis
+
+        if diagnosis is None or not diagnosis.immediate_causes:
+            return None
+
+        observed = self._last_rep_bottom_kpts
+        if hasattr(observed, "tolist"):
+            observed = observed.tolist()
+        # _last_rep_bottom_kpts is stored raw from the pipeline (MediaPipe
+        # world, Y-down). build_demo_data validates shank tilt against a Y-up
+        # frame, so an untransformed pose is rejected every time.
+        observed = mediapipe_to_viewer_coords(observed)
+        return build_demo_data(observed, diagnosis, anthro=anthro, rom=rom)
 
     def _compute_set_summary(
         self, set_number: int, reps: List[RepData]
@@ -290,3 +386,8 @@ class SessionTracker:
         self.all_reps = []
         self._rep_kinematic_buffer = []
         self._bottom_frame_buffer = []
+        self._last_rep_bottom_kpts = None
+        self._last_rep_standing_kpts = None
+        self._last_rep_kinematic_summary = None
+        self._last_rep_data = None
+        self._last_set_diagnosis = None

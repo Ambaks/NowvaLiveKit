@@ -6,6 +6,9 @@ deduplicated JSON messages sent over the existing IPC socket.
 Maintains backward compatibility with the legacy rep_count message format.
 """
 
+from __future__ import annotations
+
+import logging
 import statistics
 import time
 from collections import defaultdict
@@ -13,6 +16,14 @@ from typing import Any, Dict, List, Optional
 
 from biomechanics.coaching.cue_cache import CueCache
 from biomechanics.config import CoachingConfig, IPCConfig
+from biomechanics.diagnosis.bridge import (
+    build_anthro_dict,
+    build_rom_dict,
+    compute_foot_direction_angle,
+    compute_stance_width_ratio,
+    mediapipe_to_viewer_coords,
+)
+from biomechanics.diagnosis.graph.parameter_deltas import dorsi_driven_targets
 from biomechanics.diagnosis.types import DiagnosisResult, RepKinematicSummary, RepScore, SetScoreSummary
 from biomechanics.utils.types import (
     DEPTH_CLASS_NAMES,
@@ -21,6 +32,8 @@ from biomechanics.utils.types import (
     RepData,
     depth_category,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IPCBridge:
@@ -47,6 +60,22 @@ class IPCBridge:
         self.fault_cooldown: float = ipc_config.fault_cooldown_seconds
         self.frame_send_interval: int = ipc_config.frame_send_interval
         self.frame_counter: int = 0
+        self.shoulder_width_m: float = 0.0
+        self._target_stance_ratio: float = 0.0
+        self._target_toe_out_deg: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Athlete parameters
+    # ------------------------------------------------------------------
+
+    def set_athlete_params(self, params: dict, baseline: dict | None = None) -> None:
+        self.shoulder_width_m = params.get("shoulder_width_m", 0.0)
+        anthro = build_anthro_dict(params)
+        rom = build_rom_dict(params, baseline or {})
+        dorsi = rom.get("peak_dorsiflexion", 35.0)
+        self._target_stance_ratio, self._target_toe_out_deg = dorsi_driven_targets(
+            dorsi, anthro,
+        )
 
     # ------------------------------------------------------------------
     # Exercise preparation
@@ -66,7 +95,7 @@ class IPCBridge:
     # Frame data (throttled)
     # ------------------------------------------------------------------
 
-    def send_frame_data(self, frame: PipelineFrame) -> None:
+    def send_frame_data(self, frame: PipelineFrame, rep_phase: str = "") -> None:
         """Send frame data every N frames. Skips if no joint angles."""
         self.frame_counter += 1
         if self.frame_counter % self.frame_send_interval != 0:
@@ -77,12 +106,35 @@ class IPCBridge:
         total = frame.total_latency_ms
         fps = round(1000.0 / total, 1) if total > 0 else 0.0
 
-        self.ipc_client.send_message({
+        msg: dict[str, Any] = {
             "type": "frame_data",
             "joint_angles": frame.joint_angles.as_dict(),
             "fps": fps,
             "frame_index": frame.frame_index,
-        })
+            "rep_phase": rep_phase,
+        }
+
+        if frame.skeleton_3d is not None and self.shoulder_width_m > 0:
+            try:
+                # Same transform the diagnosis path applies before measuring:
+                # compute_foot_direction_angle's forward axis is viewer coords.
+                kpts = mediapipe_to_viewer_coords(frame.skeleton_3d.to_numpy())
+                msg["stance_width_ratio"] = compute_stance_width_ratio(
+                    kpts, self.shoulder_width_m,
+                )
+                msg["foot_direction_angle_l"] = compute_foot_direction_angle(
+                    kpts, ankle_idx=15, foot_idx=17,
+                )
+                msg["foot_direction_angle_r"] = compute_foot_direction_angle(
+                    kpts, ankle_idx=16, foot_idx=18,
+                )
+                if self._target_stance_ratio > 0:
+                    msg["target_stance_ratio"] = self._target_stance_ratio
+                    msg["target_toe_out_deg"] = self._target_toe_out_deg
+            except Exception:
+                logger.debug("Stance metric computation failed", exc_info=True)
+
+        self.ipc_client.send_message(msg)
 
     # ------------------------------------------------------------------
     # Fault events (deduplicated per fault type)
@@ -133,7 +185,11 @@ class IPCBridge:
             "rep_number": rep.rep_number,
             "max_depth_angle": round(rep.max_depth_angle, 1),
             "depth_category": self._depth_category(rep.max_depth_angle),
-            "faults_in_rep": [f.fault_type for f in rep.faults],
+            # Deduplicated: a fault can be detected on several frames of the
+            # same rep, and this list is used for membership tests and for
+            # fault counts in the recap, where repeats inflate the totals.
+            # faults_detailed below keeps every individual detection.
+            "faults_in_rep": list(dict.fromkeys(f.fault_type for f in rep.faults)),
             "rep_duration_ms": round(rep.duration * 1000),
             "is_clean": rep.is_clean,
             "descent_time_s": round(rep.descent_time, 3),

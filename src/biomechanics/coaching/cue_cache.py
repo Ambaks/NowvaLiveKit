@@ -33,6 +33,14 @@ SQUAT_CUES: Dict[str, str] = _build_cues(
     even_it_out="even_it_out",
     slow_down="slow_down",
     brace="brace",
+    # Intra-set stance / toe-out coaching
+    stance_explain="stance_explain",
+    stance_wider="stance_wider",
+    stance_narrower="stance_narrower",
+    toe_out_explain="toe_out_explain",
+    toe_out_more="toe_out_more",
+    toe_out_less="toe_out_less",
+    adjust_good="adjust_good",
     # Positive reinforcement
     good_rep="good_rep",
     great_depth="great_depth",
@@ -86,6 +94,43 @@ FAULT_TO_CUE_MAP: Dict[str, str] = {
 
 POSITIVE_CUE_KEYS = frozenset({"good_rep", "great_depth", "strong", "clean", "perfect"})
 
+# Which fault wins when several compete for the same cue slot — lower first.
+# Forward lean leads because it is the root-cause fault: it drives the
+# intra-set stance correction, and fixing it usually resolves the knee and
+# asymmetry faults downstream. Left flat, the more frequent knee/asymmetry
+# faults claim every slot and forward lean is never cued at all.
+FAULT_CUE_PRIORITY: Dict[str, int] = {
+    "forward_lean": 0,
+    "knee_valgus": 1,
+    "bilateral_asymmetry": 2,
+}
+DEFAULT_FAULT_CUE_PRIORITY = 3
+
+# A higher-priority fault may jump the cue gap, but must still wait out
+# a fraction of it to avoid back-to-back audio. The floor differs by
+# caller: the pipeline cue_cache only assigns cue keys (no audio), so
+# co-fired faults from the same detection frame should let the highest
+# priority win immediately (floor_ratio=0). The orchestrator actually
+# plays audio, so it keeps a small floor to space out speech.
+PREEMPT_GAP_RATIO_PIPELINE = 0.0
+PREEMPT_GAP_RATIO_ORCHESTRATOR = 0.0
+
+
+def fault_cue_priority(fault_type: str) -> int:
+    return FAULT_CUE_PRIORITY.get(fault_type, DEFAULT_FAULT_CUE_PRIORITY)
+
+
+def can_cue_fault(
+    elapsed: float, gap: float, priority: int, last_priority: int,
+    preempt_floor_ratio: float = PREEMPT_GAP_RATIO_PIPELINE,
+) -> bool:
+    """Whether a fault may claim the cue slot this soon after the last one."""
+    if elapsed >= gap:
+        return True
+    if priority >= last_priority:
+        return False
+    return elapsed >= gap * preempt_floor_ratio
+
 
 # =============================================================================
 # CUE CACHE
@@ -104,6 +149,7 @@ class CueCache:
         self.current_exercise: Optional[str] = None
         self.cues: Dict[str, str] = {}
         self.last_cue_time: float = 0.0
+        self.last_cue_priority: int = DEFAULT_FAULT_CUE_PRIORITY
         self.min_cue_gap: float = config.min_cue_gap_seconds
 
     def prepare_for_exercise(self, exercise_name: str) -> Dict[str, str]:
@@ -128,6 +174,7 @@ class CueCache:
                     break
         self.cues = dict(cues or DEFAULT_CUES)
         self.last_cue_time = 0.0
+        self.last_cue_priority = DEFAULT_FAULT_CUE_PRIORITY
         return dict(self.cues)
 
     def get_cue_for_fault(self, fault_type: str, timestamp: float) -> Optional[str]:
@@ -141,7 +188,13 @@ class CueCache:
         Returns:
             Cue key string if available and not rate-limited, else None
         """
-        if timestamp - self.last_cue_time < self.min_cue_gap:
+        priority = fault_cue_priority(fault_type)
+        if not can_cue_fault(
+            timestamp - self.last_cue_time,
+            self.min_cue_gap,
+            priority,
+            self.last_cue_priority,
+        ):
             return None
 
         cue_key = FAULT_TO_CUE_MAP.get(fault_type)
@@ -149,6 +202,7 @@ class CueCache:
             return None
 
         self.last_cue_time = timestamp
+        self.last_cue_priority = priority
         return cue_key
 
     def get_rep_cue(self, rep_number: int) -> Optional[str]:

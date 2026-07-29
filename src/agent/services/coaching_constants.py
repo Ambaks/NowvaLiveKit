@@ -37,6 +37,14 @@ CUE_TEXT_MAP: dict[str, str] = {
     "hips_through": "Hips through!",
     "flat_back": "Flat back!",
     "lockout": "Lock it out!",
+    # Intra-set stance / toe-out coaching
+    "stance_explain": "That lean's coming from your stance — step your feet out wider.",
+    "stance_wider": "A little wider.",
+    "stance_narrower": "Bring it in a touch.",
+    "toe_out_explain": "That lean's coming from your feet — turn your toes out more.",
+    "toe_out_more": "More toe-out.",
+    "toe_out_less": "Ease them back in.",
+    "adjust_good": "Right there — hold that.",
     # Positive reinforcement
     "good_rep": "Good rep!",
     "great_depth": "Great depth!",
@@ -59,9 +67,57 @@ CUE_DISPLAY_LABELS: dict[str, str] = {
     "hips_through": "Hips through!",
     "flat_back": "Flat back!",
     "lockout": "Lock it out!",
+    "stance_explain": "Stance is the cause",
+    "stance_wider": "Wider",
+    "stance_narrower": "Narrower",
+    "toe_out_explain": "Foot angle is the cause",
+    "toe_out_more": "More toe-out",
+    "toe_out_less": "Less toe-out",
+    "adjust_good": "On target",
     "good_rep": "Good rep!",
     "great_depth": "Great depth!",
     "strong": "Strong!",
     "clean": "Clean!",
     "perfect": "Perfect!",
+}
+
+# Preemptive outcome text: cue_key → (positive_text, negative_text)
+# Positive plays when the fault is fixed on the next rep; negative if it persists.
+PREEMPTIVE_TEXT: dict[str, tuple[str, str]] = {
+    "knees_out": ("Good, knees are tracking better!", "Still caving in, push those knees out!"),
+    "chest_up": ("Nice, chest is up!", "Still leaning forward, keep that chest up!"),
+    "deeper": ("Great depth that time!", "Still a bit shallow, try to get lower!"),
+    "heels_down": ("Heels are planted!", "Heels are still coming up!"),
+    "even_it_out": ("Looking more even!", "Still favoring one side!"),
+    "slow_down": ("Better tempo!", "Still rushing, slow it down!"),
+    "brace": ("Good brace!", "Don't forget to brace your core!"),
+}
+
+# Intra-set stance/toe-out coaching (Feature 2). These play from the cue
+# cache, not the LLM: the corrections fire every 1.5s between reps, and a
+# generate_reply round-trip lands after the lifter has already moved on.
+# Spoken once when the monitor arms — carries the why and the fix.
+ADJUSTMENT_EXPLAIN_CUES: dict[str, str] = {
+    "stance_width": "stance_explain",
+    "toe_out": "toe_out_explain",
+}
+
+# Spoken on each poll, keyed by which way the lifter needs to move.
+ADJUSTMENT_CUES: dict[str, dict[str, str]] = {
+    "stance_width": {"more": "stance_wider", "less": "stance_narrower"},
+    "toe_out": {"more": "toe_out_more", "less": "toe_out_less"},
+}
+
+ADJUSTMENT_ON_TARGET_CUE = "adjust_good"
+
+# Only used when a cue has no pre-generated audio on disk.
+ADJUSTMENT_SYSTEM_PROMPT = (
+    "You are Nova, a concise fitness coach. Give a 2-5 word stance "
+    "adjustment cue. No filler words. Examples: 'A little wider', "
+    "'Right there, perfect', 'Too wide, bring it in'."
+)
+
+ADJUSTMENT_PARAM_LABELS: dict[str, str] = {
+    "stance_width": "stance width",
+    "toe_out": "toe-out angle",
 }
