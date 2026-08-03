@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nowva</title>
+<style>
+  :root {
+    --bg: #09090e;
+    --accent: #a78bfa;
+    --listen: #22d3ee;
+    --ink: #f6f5f8;
+    --ink-dim: #928fa0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    color: var(--ink);
+    cursor: none;
+  }
+
+  /* ---------- ambient background ---------- */
+  .aurora {
+    position: fixed; border-radius: 50%; filter: blur(120px);
+    pointer-events: none; z-index: 0;
+  }
+  .aurora.a1 {
+    width: 60vw; height: 60vw; left: -15vw; top: -20vw;
+    background: radial-gradient(circle, rgba(109,40,217,.22), transparent 65%);
+    animation: drift1 26s ease-in-out infinite alternate;
+  }
+  .aurora.a2 {
+    width: 50vw; height: 50vw; right: -12vw; bottom: -18vw;
+    background: radial-gradient(circle, rgba(147,51,234,.16), transparent 65%);
+    animation: drift2 32s ease-in-out infinite alternate;
+  }
+  @keyframes drift1 { to { transform: translate(6vw, 4vw) scale(1.12); } }
+  @keyframes drift2 { to { transform: translate(-5vw, -5vw) scale(1.08); } }
+
+  /* ---------- pose stream ---------- */
+  #pose-wrap {
+    position: fixed; inset: 0; z-index: 1; display: none;
+    background: #000;
+  }
+  body.pose #pose-wrap { display: block; }
+  #pose { width: 100%; height: 100%; object-fit: contain; }
+
+  /* ---------- sphere canvases ---------- */
+  canvas.sphere { display: block; width: 100%; height: 100%; }
+
+  /* ---------- hero (idle, centered) ---------- */
+  #hero {
+    position: fixed; inset: 0; z-index: 2;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 30px;
+    transition: opacity .5s ease;
+  }
+  body.pose #hero, body.demo #hero { opacity: 0; pointer-events: none; }
+  #hero .sphere-box {
+    position: relative;
+    width: min(46vmin, 420px); height: min(46vmin, 420px);
+  }
+  #hero .logo {
+    position: absolute; inset: 0; margin: auto;
+    width: 34%; z-index: 5;
+    filter: drop-shadow(0 2px 14px rgba(0,0,0,.5));
+    pointer-events: none;
+  }
+  #hero .caption {
+    font-size: 13px; letter-spacing: .34em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 500;
+    transition: color .5s ease;
+  }
+  body[data-agent="speaking"] #hero .caption { color: var(--accent); }
+  body[data-agent="listening"] #hero .caption { color: var(--listen); }
+  body.booting #hero .caption { display: none; }
+
+  /* ---------- boot sequence ---------- */
+  #boot {
+    display: none; flex-direction: column; align-items: center; gap: 18px;
+    width: min(52vmin, 480px);
+  }
+  body.booting #boot { display: flex; }
+  #boot .step {
+    font-size: 12px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; text-align: center;
+    min-height: 15px; transition: opacity .2s ease;
+  }
+  #boot .step::after {
+    content: "▍"; margin-left: 6px; color: var(--listen);
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  #boot .bar {
+    position: relative; width: 100%; height: 3px;
+    background: rgba(167,139,250,.14); border-radius: 999px;
+  }
+  #boot .fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: linear-gradient(90deg, #6d28d9, #a78bfa, #22d3ee);
+    border-radius: 999px;
+    box-shadow: 0 0 14px rgba(167,139,250,.55);
+  }
+  #boot .bar::after {  /* scanner sweep along the track */
+    content: ""; position: absolute; top: -1px; bottom: -1px; width: 70px;
+    left: -70px; border-radius: 999px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+    animation: sweep 1.6s ease-in-out infinite;
+  }
+  @keyframes sweep { to { left: 100%; } }
+  #boot .pct {
+    font-size: 11px; letter-spacing: .24em;
+    color: var(--ink-dim); font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- corner widget (workout) ---------- */
+  #widget {
+    position: fixed; right: 28px; bottom: 28px; z-index: 3;
+    display: flex; align-items: center; gap: 14px;
+    opacity: 0; transform: translateY(14px) scale(.85);
+    pointer-events: none;
+    transition: opacity .35s ease, transform .35s cubic-bezier(.34,1.56,.64,1);
+  }
+  body.pose.widget-on #widget { opacity: 1; transform: translateY(0) scale(1); }
+  #widget .sphere-box { position: relative; width: 96px; height: 96px; }
+  #widget .label {
+    font-size: 12px; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600;
+    background: rgba(15,15,22,.72); border: 1px solid rgba(167,139,250,.18);
+    padding: 8px 14px; border-radius: 999px;
+    backdrop-filter: blur(8px);
+  }
+  body[data-wake="detected"] #widget .label,
+  body[data-agent="listening"] #widget .label { color: var(--listen); }
+  body[data-agent="speaking"] #widget .label { color: var(--accent); }
+
+  /* ---------- demo overlay ---------- */
+  #demo-frame {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    border: 0; z-index: 4; display: none; background: var(--bg);
+  }
+  body.demo #demo-frame { display: block; }
+
+  /* ---------- reveal from black ---------- */
+  #veil {
+    position: fixed; inset: 0; z-index: 10;
+    background: #000; opacity: 1; pointer-events: none;
+    transition: opacity 3.0s ease;
+  }
+  body.revealed #veil { opacity: 0; }
+  #hero {
+    opacity: 0; transform: scale(.94);
+    transition: opacity 2.8s ease .3s, transform 3.4s cubic-bezier(.22,.61,.36,1) .3s;
+  }
+  body.revealed #hero { opacity: 1; transform: scale(1); }
+  body.revealed.pose #hero, body.revealed.demo #hero { opacity: 0; }
+
+  /* ---------- connection hint ---------- */
+  #conn {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    z-index: 6; font-size: 11px; letter-spacing: .28em; text-transform: uppercase;
+    color: var(--ink-dim); opacity: 0; transition: opacity .8s ease;
+  }
+  body.disconnected #conn { opacity: .8; }
+</style>
+</head>
+<body data-agent="idle" data-wake="dormant">
+
+  <div class="aurora a1"></div>
+  <div class="aurora a2"></div>
+
+  <div id="pose-wrap"><img id="pose" alt=""></div>
+
+  <div id="hero">
+    <div class="sphere-box">
+      <canvas class="sphere" id="hero-sphere"></canvas>
+      <img class="logo" src="/logo.png" alt="Nowva">
+    </div>
+    <div class="caption" id="caption">nowva ai</div>
+    <div id="boot">
+      <div class="step" id="boot-step">initializing</div>
+      <div class="bar"><div class="fill" id="boot-fill"></div></div>
+      <div class="pct" id="boot-pct">0%</div>
+    </div>
+  </div>
+
+  <div id="widget">
+    <div class="label" id="widget-label">Listening</div>
+    <div class="sphere-box">
+      <canvas class="sphere" id="widget-sphere"></canvas>
+    </div>
+  </div>
+
+  <iframe id="demo-frame" title="Exercise demo"></iframe>
+
+  <div id="conn">reconnecting</div>
+  <div id="veil"></div>
+
+<script>
+(() => {
+  const body = document.body;
+  const poseImg = document.getElementById("pose");
+  const caption = document.getElementById("caption");
+  const widgetLabel = document.getElementById("widget-label");
+  const demoFrame = document.getElementById("demo-frame");
+
+  const POSE_TIMEOUT_MS = 2000;
+  const WAKE_FLASH_MS = 1800;
+  const WIDGET_LINGER_MS = 2500;
+
+  /* ================= animated sphere =================
+     Canvas-drawn Siri-style orb: internal plasma blobs on
+     Lissajous paths, spherical shading, specular highlight,
+     state-driven energy. No CSS filters — Safari-safe. */
+
+  const STATE_PARAMS = {
+    idle:      { speed: 0.35, amp: 0.015, glow: 0.35, cyan: 0.0, pulse: 0.0 },
+    listening: { speed: 0.85, amp: 0.035, glow: 0.65, cyan: 1.0, pulse: 0.25 },
+    thinking:  { speed: 2.0,  amp: 0.030, glow: 0.55, cyan: 0.3, pulse: 0.0 },
+    speaking:  { speed: 1.4,  amp: 0.050, glow: 0.95, cyan: 0.0, pulse: 1.0 },
+  };
+
+  class Sphere {
+    constructor(canvas) {
+      this.canvas = canvas;
+      this.ctx = canvas.getContext("2d");
+      this.t = Math.random() * 100;
+      this.p = { ...STATE_PARAMS.idle };
+      this.resize();
+      new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
+    }
+
+    resize() {
+      const box = this.canvas.parentElement.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      this.canvas.width = Math.max(1, box.width * dpr);
+      this.canvas.height = Math.max(1, box.height * dpr);
+      this.size = Math.min(this.canvas.width, this.canvas.height);
+    }
+
+    step(dt, target) {
+      // ease params toward the active state so transitions feel organic
+      const k = 1 - Math.exp(-dt * 3.5);
+      for (const key of Object.keys(this.p)) {
+        this.p[key] += (target[key] - this.p[key]) * k;
+      }
+      this.t += dt * (0.6 + this.p.speed);
+      this.draw();
+    }
+
+    draw() {
+      const { ctx, size, t, p } = this;
+      const w = this.canvas.width, h = this.canvas.height;
+      const cx = w / 2, cy = h / 2;
+
+      // voice-like pulsation: layered sines read as speech cadence
+      const voice = p.pulse * (
+        0.55 * Math.sin(t * 7.3) + 0.3 * Math.sin(t * 12.7 + 1.4)
+        + 0.15 * Math.sin(t * 23.1 + 0.6)
+      );
+      const breathe = Math.sin(t * 1.1) * p.amp;
+      const R = size * 0.335 * (1 + breathe + voice * 0.05);
+
+      ctx.clearRect(0, 0, w, h);
+
+      // --- outer glow (drawn before clipping) ---
+      const glowR = R * (1.55 + 0.1 * voice);
+      const glow = ctx.createRadialGradient(cx, cy, R * 0.8, cx, cy, glowR);
+      const glowA = 0.28 * p.glow + 0.12 * Math.abs(voice);
+      const glowColor = p.cyan > 0.5 ? "34,211,238" : "139,92,246";
+      glow.addColorStop(0, `rgba(${glowColor},${glowA.toFixed(3)})`);
+      glow.addColorStop(1, `rgba(${glowColor},0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // --- sphere body, clipped ---
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.clip();
+
+      // deep base
+      const base = ctx.createRadialGradient(
+        cx - R * 0.3, cy - R * 0.35, R * 0.1, cx, cy, R * 1.25);
+      base.addColorStop(0, "#2a1660");
+      base.addColorStop(0.6, "#1a0e3e");
+      base.addColorStop(1, "#0b0620");
+      ctx.fillStyle = base;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      // plasma blobs — additive, drifting on Lissajous paths
+      ctx.globalCompositeOperation = "lighter";
+      const blobs = [
+        { c: "109,40,217",  s: 0.85, fx: 1.00, fy: 1.30, ph: 0.0, a: 0.55 },
+        { c: "147,51,234",  s: 0.70, fx: 1.60, fy: 0.90, ph: 2.1, a: 0.50 },
+        { c: "76,29,149",   s: 0.95, fx: 0.70, fy: 1.10, ph: 4.2, a: 0.60 },
+        { c: "192,132,252", s: 0.45, fx: 2.10, fy: 1.70, ph: 1.1, a: 0.40 },
+        { c: "34,211,238",  s: 0.55, fx: 1.90, fy: 1.40, ph: 3.3, a: 0.65 * p.cyan },
+      ];
+      for (const b of blobs) {
+        if (b.a < 0.01) continue;
+        const wob = 1 + voice * 0.25;
+        const bx = cx + Math.sin(t * b.fx + b.ph) * R * 0.45 * wob;
+        const by = cy + Math.cos(t * b.fy + b.ph * 1.7) * R * 0.45 * wob;
+        const br = R * b.s * (1 + 0.12 * Math.sin(t * 2.3 + b.ph)) * wob;
+        const g = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+        g.addColorStop(0, `rgba(${b.c},${b.a})`);
+        g.addColorStop(1, `rgba(${b.c},0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = "source-over";
+
+      // spherical shading: darkened limb
+      const shade = ctx.createRadialGradient(
+        cx - R * 0.25, cy - R * 0.3, R * 0.2, cx, cy, R * 1.05);
+      shade.addColorStop(0, "rgba(0,0,0,0)");
+      shade.addColorStop(0.75, "rgba(5,3,15,0.05)");
+      shade.addColorStop(1, "rgba(5,3,15,0.55)");
+      ctx.fillStyle = shade;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      // specular highlight, upper left
+      const spec = ctx.createRadialGradient(
+        cx - R * 0.38, cy - R * 0.42, 0, cx - R * 0.38, cy - R * 0.42, R * 0.55);
+      spec.addColorStop(0, "rgba(255,255,255,0.22)");
+      spec.addColorStop(0.4, "rgba(255,255,255,0.06)");
+      spec.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = spec;
+      ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+      ctx.restore();
+
+      // thin luminous rim
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${glowColor},${(0.25 + 0.3 * p.glow).toFixed(3)})`;
+      ctx.lineWidth = Math.max(1, size * 0.004);
+      ctx.stroke();
+    }
+  }
+
+  const heroSphere = new Sphere(document.getElementById("hero-sphere"));
+  const widgetSphere = new Sphere(document.getElementById("widget-sphere"));
+
+  let lastTick = performance.now();
+  function tick(now) {
+    const dt = Math.min((now - lastTick) / 1000, 0.05);
+    lastTick = now;
+    const wakeBoost = body.dataset.wake === "detected" ? "listening" : null;
+    const target = STATE_PARAMS[wakeBoost || body.dataset.agent] || STATE_PARAMS.idle;
+    if (!body.classList.contains("pose") && !body.classList.contains("demo")) {
+      heroSphere.step(dt, target);
+    }
+    if (body.classList.contains("widget-on")) {
+      widgetSphere.step(dt, target);
+    }
+    stepBoot(dt);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  /* ================= boot sequence ================= */
+
+  const bootStep = document.getElementById("boot-step");
+  const bootFill = document.getElementById("boot-fill");
+  const bootPct = document.getElementById("boot-pct");
+
+  const BOOT_TRICKLE_PCT_PER_S = 0.6;  // installer-style creep between steps
+  const BOOT_TRICKLE_HEADROOM = 5;
+  const BOOT_FADE_MS = 1800;
+
+  let bootTarget = 0;   // percent reported by the pipeline
+  let bootShown = 0;    // percent currently displayed
+  let bootDone = false;
+
+  function stepBoot(dt) {
+    if (!body.classList.contains("booting")) return;
+    const ceiling = bootTarget >= 100
+      ? 100
+      : Math.min(bootTarget + BOOT_TRICKLE_HEADROOM, 99);
+    const eased = bootShown + (bootTarget - bootShown) * (1 - Math.exp(-dt * 2.5));
+    bootShown = Math.min(Math.max(eased, bootShown + BOOT_TRICKLE_PCT_PER_S * dt), ceiling);
+    bootFill.style.width = bootShown.toFixed(1) + "%";
+    bootPct.textContent = Math.round(bootShown) + "%";
+  }
+
+  function swapBootStep(text) {
+    if (bootStep.textContent === text) return;
+    bootStep.style.opacity = 0;
+    setTimeout(() => {
+      bootStep.textContent = text;
+      bootStep.style.opacity = 1;
+    }, 200);
+  }
+
+  function handleBoot(msg) {
+    if (bootDone) return;
+    const p = Math.max(0, Math.min(1, msg.progress || 0)) * 100;
+    if (p >= 100) { finishBoot(msg.label); return; }
+    body.classList.add("booting");
+    bootTarget = Math.max(bootTarget, p);
+    if (msg.label) swapBootStep(msg.label);
+  }
+
+  function finishBoot(label) {
+    bootDone = true;
+    if (!body.classList.contains("booting")) return;
+    bootTarget = 100;
+    swapBootStep(label || "all systems nominal — nova online");
+    setTimeout(() => body.classList.remove("booting"), BOOT_FADE_MS);
+  }
+
+  /* ================= state machine ================= */
+
+  let lastFrameAt = 0;
+  let lastPoseUrl = null;
+  let wakeFlashTimer = null;
+  let widgetHideTimer = null;
+
+  const CAPTIONS = {
+    idle: "nowva ai",
+    listening: "listening",
+    thinking: "thinking",
+    speaking: "nova is speaking",
+  };
+  const WIDGET_LABELS = {
+    detected: "Hey Nova",
+    listening: "Listening",
+    speaking: "Nova is speaking",
+    thinking: "Thinking",
+  };
+
+  function setAgentState(state) {
+    if (!bootDone) finishBoot();  // agent is live — whatever boot said, it's done
+    const known = ["idle", "listening", "thinking", "speaking"];
+    const s = known.includes(state) ? state : "idle";
+    body.dataset.agent = s;
+    caption.textContent = CAPTIONS[s];
+    refreshWidget();
+  }
+
+  function setWake(event) {
+    if (event === "detected") {
+      body.dataset.wake = "detected";
+      clearTimeout(wakeFlashTimer);
+      wakeFlashTimer = setTimeout(() => {
+        if (body.dataset.wake === "detected") body.dataset.wake = "listening";
+        refreshWidget();
+      }, WAKE_FLASH_MS);
+    } else {
+      body.dataset.wake = event; // "listening" | "dormant"
+    }
+    refreshWidget();
+  }
+
+  function refreshWidget() {
+    const agent = body.dataset.agent;
+    const wake = body.dataset.wake;
+    const active = wake === "detected" || wake === "listening"
+      || agent === "speaking" || agent === "thinking";
+
+    if (wake === "detected") widgetLabel.textContent = WIDGET_LABELS.detected;
+    else if (agent === "speaking") widgetLabel.textContent = WIDGET_LABELS.speaking;
+    else if (agent === "thinking") widgetLabel.textContent = WIDGET_LABELS.thinking;
+    else widgetLabel.textContent = WIDGET_LABELS.listening;
+
+    clearTimeout(widgetHideTimer);
+    if (active) {
+      body.classList.add("widget-on");
+    } else {
+      // linger briefly so the orb doesn't blink out mid-exchange
+      widgetHideTimer = setTimeout(
+        () => body.classList.remove("widget-on"), WIDGET_LINGER_MS);
+    }
+  }
+
+  function showFrame(data) {
+    lastFrameAt = performance.now();
+    const url = URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
+    poseImg.src = url;
+    if (lastPoseUrl) URL.revokeObjectURL(lastPoseUrl);
+    lastPoseUrl = url;
+    body.classList.add("pose");
+  }
+
+  function handleEvent(msg) {
+    switch (msg.type) {
+      case "agent_state":
+        setAgentState(msg.state);
+        break;
+      case "wake_word":
+        setWake(msg.event);
+        break;
+      case "boot":
+        handleBoot(msg);
+        break;
+      case "demo":
+        if (msg.action === "start") {
+          demoFrame.src = "http://" + location.hostname + ":8767/";
+          body.classList.add("demo");
+        } else {
+          body.classList.remove("demo");
+          demoFrame.src = "about:blank";
+        }
+        break;
+    }
+  }
+
+  // Drop back to the idle hero when frames stop flowing.
+  setInterval(() => {
+    if (body.classList.contains("pose")
+        && performance.now() - lastFrameAt > POSE_TIMEOUT_MS) {
+      body.classList.remove("pose");
+    }
+  }, 500);
+
+  // Reveal from black once the server link is live (synced with the boot
+  // sound, which the server fires on this same subscribe). Fallback reveal
+  // keeps the page usable if the server is gone.
+  function reveal() {
+    body.classList.add("revealed");
+  }
+  setTimeout(reveal, 4000);
+
+  function connect() {
+    const ws = new WebSocket("ws://" + location.host + "/ws");
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => {
+      body.classList.remove("disconnected");
+      reveal();
+    };
+    ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) showFrame(ev.data);
+      else {
+        try { handleEvent(JSON.parse(ev.data)); } catch (_) {}
+      }
+    };
+    ws.onclose = () => {
+      body.classList.add("disconnected");
+      setTimeout(connect, 1000);
+    };
+    ws.onerror = () => ws.close();
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

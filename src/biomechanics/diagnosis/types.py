@@ -3,6 +3,26 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class RepTrajectorySample(BaseModel):
+    """One frame of a rep, as measured. Positions in cm, angles in degrees.
+
+    These are the raw pipeline values — the scorer never re-grounds or
+    re-centres them, so every metric derived from them must be a within-frame
+    difference or an angle.
+    """
+    trunk_pitch: float
+    knee_valgus_l: float
+    knee_valgus_r: float
+    hip_y_l: float
+    hip_y_r: float
+    knee_y_l: float
+    knee_y_r: float
+
+
+class RepTrajectory(BaseModel):
+    samples: list[RepTrajectorySample]
+
+
 class RepKinematicSummary(BaseModel):
     rep_number: int
     trunk_pitch_at_bottom: float
@@ -22,6 +42,8 @@ class RepKinematicSummary(BaseModel):
     hip_y_r_at_top: float = 0.0
     knee_y_l_at_top: float = 0.0
     knee_y_r_at_top: float = 0.0
+    descent_time_s: float = 0.0
+    ascent_time_s: float = 0.0
 
 
 class SetFeatures(BaseModel):
@@ -56,6 +78,7 @@ class RepScore(BaseModel):
     trunk_control_score: float
     knee_tracking_score: float
     symmetry_score: float
+    tempo_score: float
     composite_score: float
 
 

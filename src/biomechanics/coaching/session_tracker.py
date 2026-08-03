@@ -16,13 +16,19 @@ from biomechanics.diagnosis.bridge import (
     build_anthro_dict,
     build_frame_from_live_pipeline,
     build_rep_kinematic_summary,
+    build_rep_trajectory,
     build_rom_dict,
     mediapipe_to_viewer_coords,
 )
 from biomechanics.diagnosis.demo_builder import DemoData, build_demo_data
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_rep, score_set
-from biomechanics.diagnosis.types import DiagnosisResult, RepKinematicSummary, SetFeatures
+from biomechanics.diagnosis.types import (
+    DiagnosisResult,
+    RepKinematicSummary,
+    RepTrajectory,
+    SetFeatures,
+)
 from biomechanics.utils.types import RepData
 
 
@@ -63,6 +69,7 @@ class SessionTracker:
 
         # Diagnosis integration (populated via set_athlete_params)
         self._rep_kinematic_buffer: list[RepKinematicSummary] = []
+        self._rep_trajectory_buffer: list[RepTrajectory | None] = []
         self._bottom_frame_buffer: list[tuple[int, list]] = []
         self._athlete_params: dict | None = None
         self._baseline: dict | None = None
@@ -74,6 +81,7 @@ class SessionTracker:
         self._last_rep_bottom_kpts: list | None = None
         self._last_rep_standing_kpts: list | None = None
         self._last_rep_kinematic_summary: RepKinematicSummary | None = None
+        self._last_rep_trajectory: RepTrajectory | None = None
         self._last_rep_data: RepData | None = None
         self._last_set_diagnosis: DiagnosisResult | None = None
 
@@ -94,6 +102,7 @@ class SessionTracker:
         bottom_kpts: Optional[List] = None,
         bottom_angles: Optional[Dict[str, float]] = None,
         standing_kpts: Optional[List] = None,
+        trajectory_samples: Optional[List[Dict[str, float]]] = None,
     ) -> None:
         """
         Process a completed rep. Detects set boundaries and forwards
@@ -116,16 +125,26 @@ class SessionTracker:
         # Compute kinematics before IPC send so the summary can be included.
         # Guarded: a degenerate bottom frame must not block the rep_complete send.
         summary: RepKinematicSummary | None = None
+        trajectory: RepTrajectory | None = None
         if self._athlete_params is not None and bottom_kpts is not None and bottom_angles is not None:
             try:
                 frame = build_frame_from_live_pipeline(
                     bottom_kpts, bottom_angles, standing_kpts=standing_kpts,
                 )
-                summary = build_rep_kinematic_summary(frame, self._athlete_params, rep.rep_number)
+                summary = build_rep_kinematic_summary(
+                    frame,
+                    self._athlete_params,
+                    rep.rep_number,
+                    descent_time_s=rep.descent_time,
+                    ascent_time_s=rep.ascent_time,
+                )
+                trajectory = build_rep_trajectory(trajectory_samples)
                 self._rep_kinematic_buffer.append(summary)
+                self._rep_trajectory_buffer.append(trajectory)
                 self._bottom_frame_buffer.append((rep.rep_number, frame["kpts"]))
             except Exception as e:
                 summary = None
+                trajectory = None
                 print(f"[SESSION TRACKER] Rep kinematics failed for rep {rep.rep_number}: {e}")
 
         self.ipc_bridge.send_rep_complete(
@@ -141,6 +160,7 @@ class SessionTracker:
         self._last_rep_bottom_kpts = bottom_kpts
         self._last_rep_standing_kpts = standing_kpts
         self._last_rep_kinematic_summary = summary
+        self._last_rep_trajectory = trajectory
         self._last_rep_data = rep
 
         if self._assessment_mode:
@@ -166,7 +186,7 @@ class SessionTracker:
         )
         diagnosis_result = HypothesisEngine().diagnose(set_features)
         latest_kin = self._rep_kinematic_buffer[-1]
-        rep_score = score_rep(latest_kin, anthro, rom)
+        rep_score = score_rep(latest_kin, anthro, rom, self._last_rep_trajectory)
         self.ipc_bridge.send_rep_diagnosis(rep_number, diagnosis_result, rep_score=rep_score)
 
     # ------------------------------------------------------------------
@@ -216,7 +236,9 @@ class SessionTracker:
                 rom=rom,
             )
             diagnosis_result = HypothesisEngine().diagnose(set_features)
-            score_summary = score_set(self._rep_kinematic_buffer, anthro, rom)
+            score_summary = score_set(
+                self._rep_kinematic_buffer, anthro, rom, self._rep_trajectory_buffer,
+            )
             self.ipc_bridge.send_diagnosis_complete(
                 self.current_set_number, diagnosis_result, score_summary,
             )
@@ -225,6 +247,7 @@ class SessionTracker:
             self._last_set_diagnosis = diagnosis_result
 
         self._rep_kinematic_buffer = []
+        self._rep_trajectory_buffer = []
         self._bottom_frame_buffer = []
         self.current_set_reps = []
         self.set_active = False
@@ -237,10 +260,12 @@ class SessionTracker:
         an assessment rep is replayed minutes later during the workout.
         """
         self._rep_kinematic_buffer = []
+        self._rep_trajectory_buffer = []
         self._bottom_frame_buffer = []
         self._last_rep_bottom_kpts = None
         self._last_rep_standing_kpts = None
         self._last_rep_kinematic_summary = None
+        self._last_rep_trajectory = None
         self._last_rep_data = None
 
     def bottom_frame_for_rep(self, rep_number: int) -> list | None:
@@ -271,7 +296,10 @@ class SessionTracker:
             if self._athlete_params is not None:
                 anthro = build_anthro_dict(self._athlete_params)
                 rom = build_rom_dict(self._athlete_params, self._baseline or {})
-                score = score_rep(self._last_rep_kinematic_summary, anthro, rom)
+                score = score_rep(
+                    self._last_rep_kinematic_summary, anthro, rom,
+                    self._last_rep_trajectory,
+                )
                 snapshot["rep_score"] = round(score.composite_score * 100, 1)
         if self._last_rep_data is not None:
             snapshot["rep_data"] = (
@@ -385,9 +413,11 @@ class SessionTracker:
         self.total_sets = 0
         self.all_reps = []
         self._rep_kinematic_buffer = []
+        self._rep_trajectory_buffer = []
         self._bottom_frame_buffer = []
         self._last_rep_bottom_kpts = None
         self._last_rep_standing_kpts = None
         self._last_rep_kinematic_summary = None
+        self._last_rep_trajectory = None
         self._last_rep_data = None
         self._last_set_diagnosis = None

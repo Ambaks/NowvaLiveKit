@@ -186,6 +186,10 @@ class CoachingOrchestrator:
         # Last-session baseline — set by CoachingService once loaded from DB
         self.progress_baseline: Optional[Dict[str, Any]] = None
 
+        # Multi-session fault trends — set by CoachingService once loaded from DB
+        self.fault_trends: Optional[Dict[str, Any]] = None
+        self._celebrated_faults: set = set()
+
         # Called with (fault_type, cue_key) after a fault cue actually plays —
         # lets the persistence layer distinguish delivered cues from detections
         self.on_fault_cue_delivered: Optional[Callable[[str, Optional[str]], None]] = None
@@ -783,6 +787,14 @@ class CoachingOrchestrator:
             ],
         }
 
+    def _aggregate_current_session_faults(self) -> dict[str, int]:
+        """Aggregate fault counts across all completed sets in this session."""
+        totals: dict[str, int] = {}
+        for summary in self._all_set_summaries:
+            for fault_type, stats in summary.get("fault_summary", {}).items():
+                totals[fault_type] = totals.get(fault_type, 0) + stats.get("count", 0)
+        return totals
+
     # ------------------------------------------------------------------
     # Motivation trigger logic
     # ------------------------------------------------------------------
@@ -1174,6 +1186,33 @@ class CoachingOrchestrator:
                 build_progress_comparison_lines(self.progress_baseline, scoring)
             )
 
+        # Multi-session trend context and chronic fault celebration
+        if self.fault_trends:
+            from agent.services.progress_context import (
+                build_trend_comparison_lines,
+                build_chronic_fault_celebration,
+            )
+            fault_counts = {
+                ft: stats.get("count", 0) for ft, stats in fault_summary.items()
+            }
+            parts.extend(
+                build_trend_comparison_lines(self.fault_trends, fault_counts)
+            )
+            completed_sets = len(self._all_set_summaries)
+            if completed_sets >= 2:
+                current_faults = self._aggregate_current_session_faults()
+                celebration = build_chronic_fault_celebration(
+                    self.fault_trends, current_faults, completed_sets
+                )
+                if celebration:
+                    new_celebrations = []
+                    for ft in self.fault_trends.get("chronic_faults", []):
+                        if ft not in self._celebrated_faults and current_faults.get(ft, 0) == 0:
+                            self._celebrated_faults.add(ft)
+                            new_celebrations.append(ft)
+                    if new_celebrations:
+                        parts.append(celebration)
+
         context_str = " ".join(parts)
 
         if diagnosis and scoring:
@@ -1383,6 +1422,33 @@ class CoachingOrchestrator:
             )
             if comparison:
                 parts.append(comparison)
+
+        # Multi-session trend context and chronic fault celebration
+        if self.fault_trends:
+            from agent.services.progress_context import (
+                build_trend_comparison_lines,
+                build_chronic_fault_celebration,
+            )
+            parts.extend(
+                build_trend_comparison_lines(self.fault_trends, all_faults)
+            )
+            completed_sets = len(all_summaries)
+            current_faults = {}
+            for s in all_summaries:
+                for ft, stats in s.get("fault_summary", {}).items():
+                    current_faults[ft] = current_faults.get(ft, 0) + stats.get("count", 0)
+            celebration = build_chronic_fault_celebration(
+                self.fault_trends, current_faults, completed_sets
+            )
+            if celebration:
+                uncelebrated = [
+                    ft for ft in self.fault_trends.get("chronic_faults", [])
+                    if ft not in self._celebrated_faults and current_faults.get(ft, 0) == 0
+                ]
+                if uncelebrated:
+                    for ft in uncelebrated:
+                        self._celebrated_faults.add(ft)
+                    parts.append(celebration)
 
         context_str = " ".join(parts)
 

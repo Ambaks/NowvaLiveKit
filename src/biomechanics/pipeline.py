@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import List, Optional
+from collections import deque
+from typing import Deque, List, Optional
 
 import cv2
 import numpy as np
@@ -47,6 +48,10 @@ from biomechanics.utils.standing_gate import StandingPoseGate
 
 
 _MAX_DROPOUT_HOLD_FRAMES = 5
+
+# Roughly 20 seconds at 30 fps — long enough for any real rep, short enough
+# that a rep the counter never closes cannot grow the buffer indefinitely.
+MAX_REP_TRAJECTORY_FRAMES = 600
 
 
 class BiomechanicsPipeline:
@@ -289,6 +294,11 @@ class BiomechanicsPipeline:
         self._standing_kpts: Optional[List[List[float]]] = None
         self._standing_captured: bool = False
 
+        # Per-rep trajectory buffer for whole-rep scoring. Holds a handful of
+        # scalars per frame rather than full skeletons — a stuck rep must not
+        # grow this without bound on an edge device.
+        self._rep_trajectory: Deque[dict] = deque(maxlen=MAX_REP_TRAJECTORY_FRAMES)
+
         # Store last raw frame for dashboard access
         self.last_frame: Optional[np.ndarray] = None
 
@@ -367,6 +377,7 @@ class BiomechanicsPipeline:
         self._bottom_angles = None
         self._standing_kpts = None
         self._standing_captured = False
+        self._rep_trajectory.clear()
 
         if self._preik_enabled:
             self._confidence_blender.reset()
@@ -398,6 +409,28 @@ class BiomechanicsPipeline:
         self._standing_captured = False
         return kpts
 
+    @staticmethod
+    def _build_trajectory_sample(
+        skeleton_3d: Skeleton3D, angles: JointAngles
+    ) -> dict:
+        """One frame of scoring input, taken as measured — no re-grounding."""
+        kpts = skeleton_3d.to_numpy()
+        return {
+            "trunk_pitch": 180.0 - angles.trunk_flexion,
+            "knee_valgus_l": angles.knee_valgus_l,
+            "knee_valgus_r": angles.knee_valgus_r,
+            "hip_y_l": float(kpts[CocoKeypoints.LEFT_HIP][1]) * 100.0,
+            "hip_y_r": float(kpts[CocoKeypoints.RIGHT_HIP][1]) * 100.0,
+            "knee_y_l": float(kpts[CocoKeypoints.LEFT_KNEE][1]) * 100.0,
+            "knee_y_r": float(kpts[CocoKeypoints.RIGHT_KNEE][1]) * 100.0,
+        }
+
+    def consume_rep_trajectory(self) -> List[dict]:
+        """Return and reset the per-frame samples buffered during the last rep."""
+        samples = list(self._rep_trajectory)
+        self._rep_trajectory.clear()
+        return samples
+
     def enable_inspect(self) -> None:
         self._inspecting = True
 
@@ -407,14 +440,15 @@ class BiomechanicsPipeline:
         intermediates["confidence_blend"] = skeleton_3d.to_numpy().copy()
         skeleton_3d = self._velocity_clamp.clamp(skeleton_3d)
         intermediates["velocity_clamp"] = skeleton_3d.to_numpy().copy()
-        skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
-        intermediates["bone_constraints_1"] = skeleton_3d.to_numpy().copy()
-        skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
-        intermediates["ground_clamp"] = skeleton_3d.to_numpy().copy()
-        skeleton_3d = self._position_smoother.smooth(skeleton_3d)
-        intermediates["position_smoother"] = skeleton_3d.to_numpy().copy()
-        skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
-        intermediates["bone_constraints_2"] = skeleton_3d.to_numpy().copy()
+        # Disabled stages mirrored from apply_preik_filters (preik_chain.py)
+        # skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+        # intermediates["bone_constraints_1"] = skeleton_3d.to_numpy().copy()
+        # skeleton_3d = self._ground_clamp.clamp(skeleton_3d)
+        # intermediates["ground_clamp"] = skeleton_3d.to_numpy().copy()
+        # skeleton_3d = self._position_smoother.smooth(skeleton_3d)
+        # intermediates["position_smoother"] = skeleton_3d.to_numpy().copy()
+        # skeleton_3d = self._bone_constraints.enforce(skeleton_3d)
+        # intermediates["bone_constraints_2"] = skeleton_3d.to_numpy().copy()
         self._inspect_intermediates = intermediates
         return skeleton_3d
 
@@ -643,6 +677,10 @@ class BiomechanicsPipeline:
                 self._bottom_max_knee_flex = knee_flex
                 self._bottom_kpts = skeleton_3d.to_numpy().tolist()
                 self._bottom_angles = angles.as_dict()
+
+            self._rep_trajectory.append(
+                self._build_trajectory_sample(skeleton_3d, angles)
+            )
 
         # --- Fault detection + rep counting ---
         t0 = time.perf_counter()

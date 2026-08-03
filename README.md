@@ -43,15 +43,15 @@
 
 ## Project Status
 
-**Current Focus:** Marketing site launch hardening — production-grade security, privacy compliance, mobile-first UX, and consent-based analytics.
+**Current Focus:** Voice agent coaching integration — wake word detection, boot progress UI, and session-aware context formatting.
 
-### Recent Changes (July 2026)
-- **Website Launch Hardening (this branch):** New `/privacy` and `/terms` pages with full legal transparency (Neon Postgres hosting, Resend email delivery, consent-gated analytics, SHA-256-hashed IP rate limiting). Mobile navigation (hamburger menu + animated dropdown below md) with full ARIA wiring, scroll lock, and Escape handling. Durable preorder rate limiting (2-layer: in-memory + Postgres with 24h pruning, 2s timeout, fail-open). Google Analytics moved to basic consent mode — gtag.js loads only after visitor grants consent. 3D intro (IntroLoader/IntroStage) scoped to homepage only to prevent replays on client-side nav. All changes ESLint clean and npm run build passing.
-- **Keypoint Corrector Refactor:** Canonical skeleton now preserves athlete asymmetry (no longer symmetrizes L/R bones) so diagnosis cues ("widen stance") reflect actual anatomy. Bone lengths equalized, dorsiflexion capped, but athlete's own shape retained for visual feedback.
-- **Anatomical Validation Layer:** New `pose_validation.py` checks that choreographer output obeys joint limits (knee flexion, hip ROM, dorsiflexion, varus/valgus) and ground constraints. Guards against impossible movement targets downstream.
-- **Pre-IK Filter Chain:** Reorganized as `preik_chain.py` to enforce correct order (confidence blend → velocity clamp → bone constraints → ground clamp → position smooth → bone constraints again). End-to-end tests ensure filter interactions don't corrupt output.
-- **IK Solver Improvements:** Analytical IK now uses explicit kinematic tree (KINEMATIC_BONES), better handles singular configurations, improved handling of leg asymmetry in squat depth computation.
-- **Test Expansion:** 73+ new tests covering pose validation, pre-IK chain, keypoint corrector asymmetry logic, and valgus knee tracking.
+### Recent Changes (August 2026)
+- **Wake Word Detection System:** Added ONNX-based local wake word detection (`livekit-wakeword`, `pvporcupine`) to voice agent for hands-free activation without cloud STT. 16kHz audio processing with 80ms stride, multi-frame confirmation scoring to reject false positives.
+- **Display Server & Boot Progress UI:** New persistent display server (browser at http://localhost:5000) that opens on startup, shows boot progress milestones (neural cores → voice activity sensors → coaching audio → wake word sentinel → speech engine → conversational reasoning), and publishes live coaching state + biomechanics frames during workouts.
+- **Progress Context Formatting:** Pure text formatters (`progress_context.py`) turn persisted session data into natural language (e.g., "last session 2 days ago, 45 reps, form score 82/100") for the coaching LLM to cite verbatim in greetings and post-set recaps. Trend analysis over 3-4 recent sets.
+- **Enhanced Rep Scoring:** Refactored scoring logic to track temporal consistency, depth variability, and rep quality metrics. Detailed evidence tracking for each rep (depth achieved, trunk control, asymmetry). New `SessionTracker` for multi-set aggregation with phase-aware state management.
+- **Coaching Orchestrator Overhaul:** Unified priority queue (fault cues > rep counts > progress > LLM) with audio ducking — LLM pauses while cached cues play. Centralized routing between biomechanics pipeline IPC and voice agent.
+- **Voice Agent Coaching Loop:** WorkoutAgent now manages active session state, integrates progress context into LLM prompts, and sequences intra-set cues (pre-cached TTS) with post-set LLM summaries. Setup assessment captures stance/toe angle before first rep.
 
 ### YC Application Readiness
 - Core demo loop: webcam → real-time 3D skeleton → fault detection → voice cue (all on-device, <50ms latency).

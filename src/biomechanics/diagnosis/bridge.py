@@ -11,7 +11,12 @@ import math
 
 import numpy as np
 
-from .types import RepKinematicSummary, SetFeatures
+from .types import (
+    RepKinematicSummary,
+    RepTrajectory,
+    RepTrajectorySample,
+    SetFeatures,
+)
 
 
 def mediapipe_to_viewer_coords(kpts: list[list[float]]) -> list[list[float]]:
@@ -137,10 +142,21 @@ def compute_stance_width_ratio(kpts: list[list[float]], shoulder_width: float) -
     return ankle_xz_dist / shoulder_width
 
 
+def build_rep_trajectory(samples: list[dict] | None) -> RepTrajectory | None:
+    """Wrap raw per-frame pipeline samples for the scorer, unmodified."""
+    if not samples:
+        return None
+    return RepTrajectory(
+        samples=[RepTrajectorySample(**sample) for sample in samples]
+    )
+
+
 def build_rep_kinematic_summary(
     frame: dict,
     athlete_params: dict,
     rep_number: int,
+    descent_time_s: float = 0.0,
+    ascent_time_s: float = 0.0,
 ) -> RepKinematicSummary:
     """Map a single bottom-of-rep frame + athlete params to engine input."""
     angles = frame["angles"]
@@ -182,6 +198,8 @@ def build_rep_kinematic_summary(
         foot_direction_angle_l=foot_angle_l,
         foot_direction_angle_r=foot_angle_r,
         depth_class_int=depth_class,
+        descent_time_s=descent_time_s,
+        ascent_time_s=ascent_time_s,
         **top_kwargs,
     )
 

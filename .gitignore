@@ -130,6 +130,8 @@ models/*.pt
 models/*.pth
 models/*.h5
 models/*.pkl
+models/*.onnx
+models/*.json
 checkpoints/
 *.ckpt
 src/biomechanics/pose/models/
@@ -172,9 +174,6 @@ benchmarks/results/
 
 # Live session profiler results
 profiler_results/
-
-# Graphify files
-graphify-out/*
 
 # Claude (local settings stay out of repo)
 .claude/settings.local.json

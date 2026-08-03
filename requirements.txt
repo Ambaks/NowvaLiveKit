@@ -14,6 +14,8 @@ livekit-plugins-elevenlabs>=1.5.1      # ElevenLabs TTS
 livekit-plugins-silero>=1.5.1          # Silero VAD (local)
 livekit-plugins-turn-detector>=1.5.1   # MultilingualModel end-of-turn detection
 livekit-plugins-noise-cancellation~=0.2 # Krisp BVC server-side noise cancellation
+livekit-wakeword>=0.2.0                 # ONNX wake word detection (local)
+pvporcupine>=3.0.0                      # Porcupine wake word engine (WAKE_WORD_ENGINE=porcupine)
 
 # =============================================================================
 # DATABASE & SESSION MANAGEMENT

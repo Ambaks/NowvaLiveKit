@@ -218,3 +218,159 @@ def build_progress_report(
             f"({top['count']} reps)."
         )
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
+# Multi-session trend formatters
+# ------------------------------------------------------------------
+
+MAX_GREETING_SETS = 5
+MAX_GREETING_FAULTS = 3
+
+
+def build_detailed_greeting_context(
+    baseline: dict | None, fault_trends: dict | None
+) -> str | None:
+    """Rich greeting context with per-set last-session detail and chronic fault trends."""
+    if not baseline and not fault_trends:
+        return None
+
+    parts: list[str] = []
+
+    if baseline:
+        header = (
+            f"LAST SESSION ({_days_ago_phrase(baseline.get('days_ago', 0))}): "
+            f"form score {round(baseline['mean_score'] * 100)}/100, "
+            f"{baseline.get('total_reps', 0)} reps across "
+            f"{baseline.get('total_sets', 0)} sets"
+            if baseline.get("mean_score") is not None
+            else f"LAST SESSION ({_days_ago_phrase(baseline.get('days_ago', 0))}): "
+            f"{baseline.get('total_reps', 0)} reps across "
+            f"{baseline.get('total_sets', 0)} sets"
+        )
+        parts.append(header)
+
+        per_set = baseline.get("per_set") or []
+        if per_set:
+            set_lines: list[str] = []
+            for s in per_set[:MAX_GREETING_SETS]:
+                faults = s.get("faults", {})
+                if faults:
+                    fault_parts = [
+                        f"{_fault_label(ft)} on {cnt}" for ft, cnt in faults.items()
+                    ]
+                    set_lines.append(
+                        f"Set {s['set_number']}: {s.get('rep_count', 0)} reps, "
+                        + ", ".join(fault_parts)
+                    )
+                else:
+                    set_lines.append(
+                        f"Set {s['set_number']}: {s.get('rep_count', 0)} reps, all clean"
+                    )
+            parts.append("PER-SET DETAIL: " + ". ".join(set_lines) + ".")
+
+    if fault_trends and fault_trends.get("sessions_analyzed", 0) >= 2:
+        profile = fault_trends.get("fault_profile", [])[:MAX_GREETING_FAULTS]
+        n_sessions = fault_trends["sessions_analyzed"]
+        if profile:
+            trend_lines: list[str] = []
+            for entry in profile:
+                label = _fault_label(entry["fault_type"])
+                trend_suffix = ""
+                if entry.get("trend") == "improving":
+                    trend_suffix = " (improving)"
+                elif entry.get("trend") == "worsening":
+                    trend_suffix = " (getting worse)"
+                trend_lines.append(
+                    f"{label} appeared in {entry['sessions_present']} of "
+                    f"{n_sessions} sessions ({entry['total_occurrences']} total reps)"
+                    f"{trend_suffix}"
+                )
+            parts.append("MULTI-SESSION TRENDS: " + ". ".join(trend_lines) + ".")
+
+        chronic = fault_trends.get("chronic_faults", [])
+        if chronic:
+            labels = [_fault_label(ft) for ft in chronic[:MAX_GREETING_FAULTS]]
+            parts.append(f"CHRONIC FAULTS TO WATCH: {', '.join(labels)}.")
+
+    if not parts:
+        return None
+
+    parts.append(
+        "Weave a brief reference to the chronic or most common fault into the "
+        "greeting as today's goal. If a fault is improving, acknowledge the progress."
+    )
+    return " ".join(parts)
+
+
+def build_chronic_fault_celebration(
+    fault_trends: dict | None,
+    current_session_faults: dict[str, int],
+    completed_sets: int,
+) -> str | None:
+    """Celebration directive when a chronic fault is absent in the current session."""
+    if not fault_trends or completed_sets < 2:
+        return None
+
+    chronic = fault_trends.get("chronic_faults", [])
+    if not chronic:
+        return None
+
+    n_sessions = fault_trends.get("sessions_analyzed", 0)
+    profile_lookup = {
+        e["fault_type"]: e for e in fault_trends.get("fault_profile", [])
+    }
+
+    celebrations: list[str] = []
+    for ft in chronic:
+        if current_session_faults.get(ft, 0) > 0:
+            continue
+        entry = profile_lookup.get(ft)
+        if not entry:
+            continue
+        label = _fault_label(ft)
+        celebrations.append(
+            f"CELEBRATE THIS: {label} has been a consistent issue — it appeared "
+            f"in {entry['sessions_present']} of your last {n_sessions} sessions — "
+            f"but it hasn't shown up at ALL today after {completed_sets} sets. "
+            f"This is a real breakthrough — make sure they feel that."
+        )
+
+    return " ".join(celebrations) if celebrations else None
+
+
+def build_trend_comparison_lines(
+    fault_trends: dict | None, current_set_faults: dict[str, int]
+) -> list[str]:
+    """Cross-session trend context for set recaps."""
+    if not fault_trends:
+        return []
+
+    n_sessions = fault_trends.get("sessions_analyzed", 0)
+    if n_sessions < 2:
+        return []
+
+    total_reps = fault_trends.get("total_reps", 0)
+    profile_lookup = {
+        e["fault_type"]: e for e in fault_trends.get("fault_profile", [])
+    }
+
+    lines: list[str] = []
+    for ft, count in current_set_faults.items():
+        entry = profile_lookup.get(ft)
+        if not entry or entry["total_occurrences"] < 3:
+            continue
+        avg_per_session = round(entry["total_occurrences"] / n_sessions, 1)
+        label = _fault_label(ft)
+        if count < avg_per_session * 0.5:
+            lines.append(
+                f"CROSS-SESSION TREND: {label} hit {count} reps this set vs "
+                f"{avg_per_session} per session average — trending the right direction."
+            )
+        elif count > avg_per_session * 1.5:
+            lines.append(
+                f"CROSS-SESSION TREND: {label} hit {count} reps this set vs "
+                f"{avg_per_session} per session average — above their usual."
+            )
+
+    return lines

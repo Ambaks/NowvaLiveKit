@@ -324,6 +324,33 @@ class TestDispatch:
             assert "5 reps" in call_args
         asyncio.run(_run())
 
+    def test_set_recap_with_fault_trends_and_faults(self, mock_callbacks):
+        """Recap must survive dict-shaped fault_summary stats when trends exist."""
+        orch = CoachingOrchestrator(**mock_callbacks)
+        orch.fault_trends = {
+            "sessions_analyzed": 3,
+            "total_reps": 45,
+            "fault_profile": [{"fault_type": "forward_lean", "total_occurrences": 9}],
+            "chronic_faults": ["forward_lean"],
+        }
+
+        async def _run():
+            event = CoachingEvent(
+                CuePriority.LLM_SET_RECAP,
+                time.monotonic(),
+                "llm_set_recap",
+                data={
+                    "set_number": 1, "total_reps": 5, "clean_reps": 4,
+                    "avg_depth": 95.0, "depth_consistency": 3.5,
+                    "fault_summary": {"forward_lean": {"count": 1, "pct": 20}},
+                },
+            )
+            await orch._dispatch(event)
+            mock_callbacks["generate_llm_reply_fn"].assert_awaited_once()
+            call_args = mock_callbacks["generate_llm_reply_fn"].call_args[0][0]
+            assert "CROSS-SESSION TREND" in call_args
+        asyncio.run(_run())
+
     def test_motivation_calls_llm(self, mock_callbacks):
         orch = CoachingOrchestrator(**mock_callbacks)
 

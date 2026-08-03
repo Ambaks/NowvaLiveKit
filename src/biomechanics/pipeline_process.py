@@ -43,10 +43,10 @@ from biomechanics.diagnosis.demo_builder import build_demo_data
 from biomechanics.diagnosis.engine import HypothesisEngine
 from biomechanics.diagnosis.rep_scoring import score_set
 from biomechanics.diagnosis.types import SetFeatures
-from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter, precreate_window, animate_window_fullscreen
+from biomechanics.viz import draw_skeleton, draw_fps, FPSCounter
+from biomechanics.viz.live_stream import get_display_sink
 from biomechanics.viz.demo_ws_bridge import (
     DemoWSBridge,
-    DEMO_WS_PORT,
     FAULT_HIGHLIGHT_JOINTS,
     mediapipe_to_viewer_coords,
 )
@@ -270,6 +270,7 @@ def _serialize_diagnosis(diagnosis_result, score_summary) -> tuple[dict, dict]:
             "trunk_control": round(sum(r.trunk_control_score for r in per_rep) / n, 3) if n else 0,
             "knee_tracking": round(sum(r.knee_tracking_score for r in per_rep) / n, 3) if n else 0,
             "symmetry": round(sum(r.symmetry_score for r in per_rep) / n, 3) if n else 0,
+            "tempo": round(sum(r.tempo_score for r in per_rep) / n, 3) if n else 0,
         },
         "best_rep": score_summary.best_rep_number,
         "worst_rep": score_summary.worst_rep_number,
@@ -302,24 +303,24 @@ def _skeleton_pixels(skeleton_2d) -> np.ndarray | None:
 
 
 def _restart_demo_bridge(existing: DemoWSBridge | None) -> DemoWSBridge:
-    """Replace any live viewer bridge with a fresh one and open the browser.
+    """Replace any live viewer bridge with a fresh one and show it on the display.
 
     Stopping first matters: the bridge binds a fixed port, so starting a
     second one on top of a live one leaves the new server thread dead.
-    The browser launch runs off-thread — it is slow enough to stall the
-    frame loop, and the bridge replays its init payload to whichever
-    client connects, so nothing is lost by opening late.
+    The display announce runs off-thread so the frame loop never waits on
+    the bind delay, and the bridge replays its init payload to whichever
+    client connects, so nothing is lost by announcing late.
     """
     if existing is not None:
         existing.stop()
     bridge = DemoWSBridge()
     bridge.start()
 
-    def _open_viewer() -> None:
-        time.sleep(0.3)  # let the server finish binding
-        webbrowser.open(f"http://localhost:{DEMO_WS_PORT}")
+    def _announce_viewer() -> None:
+        time.sleep(0.3)  # let the server finish binding before the display iframes it
+        get_display_sink().send_event({"type": "demo", "action": "start"})
 
-    threading.Thread(target=_open_viewer, daemon=True).start()
+    threading.Thread(target=_announce_viewer, daemon=True).start()
     return bridge
 
 
@@ -429,9 +430,7 @@ def run_biomechanics_pipeline(
         return
 
     fps_counter = FPSCounter()
-    window_name = f"Nowva — {exercise_name}"
-    precreate_window(window_name)
-    _window_animated = False
+    display_sink = get_display_sink()
     session_output = os.environ.get("NOWVA_SESSION_OUTPUT_DIR")
     out_dir = make_output_dir(base=os.path.join(session_output, "output") if session_output else "output")
 
@@ -492,11 +491,18 @@ def run_biomechanics_pipeline(
         print(f"  ASSESSMENT PHASE ({ASSESSMENT_TARGET_REPS} bodyweight squats)")
         print(f"{'='*60}\n")
 
-        # Wait for readiness gate + bone constraint calibration
-        print("  [ASSESSMENT] Waiting for readiness gate + bone constraints...")
+        # Wait for readiness gate + bone constraint calibration.
+        # The pre-IK chain no longer calls bone_constraints (stages commented
+        # out in preik_chain.py), so drive the record-only calibration pass
+        # from here instead: during its calibration window enforce() measures
+        # bone lengths and returns the skeleton unchanged, and nothing calls
+        # it after this loop exits — the skeleton stream stays unfiltered.
+        print("  [ASSESSMENT] Waiting for readiness gate + bone measurement...")
         try:
             while not (pipeline.is_ready and pipeline._bone_constraints.is_calibrated):
                 result = pipeline.process_frame()
+                if pipeline.is_ready and result.skeleton_3d is not None:
+                    pipeline._bone_constraints.enforce(result.skeleton_3d)
 
                 frame = pipeline.last_frame
                 if frame is not None:
@@ -517,16 +523,7 @@ def run_biomechanics_pipeline(
                     _draw_hud_pill(display, pill_text, accent=HUD_VIOLET)
                     _draw_wordmark(display)
 
-                    if not _window_animated:
-                        animate_window_fullscreen(window_name)
-                        _window_animated = True
-                    cv2.imshow(window_name, display)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        print("\nAssessment stopped early by user")
-                        cv2.destroyAllWindows()
-                        pipeline.release()
-                        ipc_client.disconnect()
-                        return
+                    display_sink.show(display)
 
                 total_ms = sum(result.latency_ms.values())
                 target_ms = 1000.0 / config.target_fps
@@ -534,14 +531,13 @@ def run_biomechanics_pipeline(
                     time.sleep((target_ms - total_ms) / 1000.0)
         except KeyboardInterrupt:
             print("\nAssessment stopped by user")
-            cv2.destroyAllWindows()
             pipeline.release()
             ipc_client.disconnect()
             return
 
         # Tracking is locked in — tell the agent it can cue the first squat
         ipc_client.send_message({"type": "assessment_ready"})
-        print("  [ASSESSMENT] Gate passed + bones calibrated — sent assessment_ready")
+        print("  [ASSESSMENT] Gate passed + bones measured — sent assessment_ready")
 
         # Extract athlete params from bone constraints
         athlete_params = _extract_athlete_params(pipeline)
@@ -563,7 +559,7 @@ def run_biomechanics_pipeline(
             bridge = DemoWSBridge()
             bridge.start()
             time.sleep(0.3)
-            webbrowser.open(f"http://localhost:{DEMO_WS_PORT}")
+            display_sink.send_event({"type": "demo", "action": "start"})
             time.sleep(1.0)
             bridge.send_init(demo_data)
 
@@ -624,10 +620,7 @@ def run_biomechanics_pipeline(
                         if result.skeleton_2d is not None:
                             draw_skeleton(display, result.skeleton_2d)
                         fps_counter.update()
-                        cv2.imshow(window_name, display)
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            print("\nDemo stopped early by user")
-                            return False
+                        display_sink.show(display)
 
                     total_ms = sum(result.latency_ms.values())
                     target_ms = 1000.0 / config.target_fps
@@ -635,6 +628,7 @@ def run_biomechanics_pipeline(
                         time.sleep((target_ms - total_ms) / 1000.0)
             finally:
                 bridge.stop()
+                display_sink.send_event({"type": "demo", "action": "end"})
 
         # Assessment loop: collect reps, diagnose, repeat until no immediate causes
         assessment_passed = False
@@ -672,12 +666,16 @@ def run_biomechanics_pipeline(
                                 bottom_kpts, bottom_angles = pipeline.consume_bottom_frame()
                             if hasattr(pipeline, 'consume_standing_frame'):
                                 standing_kpts = pipeline.consume_standing_frame()
+                            trajectory_samples = None
+                            if hasattr(pipeline, 'consume_rep_trajectory'):
+                                trajectory_samples = pipeline.consume_rep_trajectory()
 
                             session_tracker.on_rep_complete(
                                 result.rep_data,
                                 bottom_kpts=bottom_kpts,
                                 bottom_angles=bottom_angles,
                                 standing_kpts=standing_kpts,
+                                trajectory_samples=trajectory_samples,
                             )
                             assessment_reps_done += 1
 
@@ -713,13 +711,7 @@ def run_biomechanics_pipeline(
                         )
                         _draw_wordmark(display)
 
-                        cv2.imshow(window_name, display)
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            print("\nAssessment stopped early by user")
-                            cv2.destroyAllWindows()
-                            pipeline.release()
-                            ipc_client.disconnect()
-                            return
+                        display_sink.show(display)
 
                     total_ms = sum(result.latency_ms.values())
                     target_ms = 1000.0 / config.target_fps
@@ -728,6 +720,7 @@ def run_biomechanics_pipeline(
 
                 # --- Run diagnosis on assessment reps ---
                 kinematic_buffer = list(session_tracker._rep_kinematic_buffer)
+                trajectory_buffer = list(session_tracker._rep_trajectory_buffer)
 
                 if kinematic_buffer and athlete_params is not None:
                     anthro = build_anthro_dict(athlete_params)
@@ -741,7 +734,9 @@ def run_biomechanics_pipeline(
                         rom=rom,
                     )
                     diagnosis_result = HypothesisEngine().diagnose(set_features)
-                    score_summary = score_set(kinematic_buffer, anthro, rom)
+                    score_summary = score_set(
+                        kinematic_buffer, anthro, rom, trajectory_buffer,
+                    )
 
                     has_immediate = len(diagnosis_result.immediate_causes) > 0
                     diagnosis_dict, scoring_dict = _serialize_diagnosis(diagnosis_result, score_summary)
@@ -786,7 +781,6 @@ def run_biomechanics_pipeline(
                         if pending_demo is not None:
                             demo_played = True
                             if not _run_demo_phase(pending_demo):
-                                cv2.destroyAllWindows()
                                 pipeline.release()
                                 ipc_client.disconnect()
                                 return
@@ -806,12 +800,7 @@ def run_biomechanics_pipeline(
                                 _draw_hud_pill(display, f"WAITING {current}/{required}", accent=HUD_VIOLET)
                                 _draw_wordmark(display)
 
-                                cv2.imshow(window_name, display)
-                                if cv2.waitKey(1) & 0xFF == ord('q'):
-                                    cv2.destroyAllWindows()
-                                    pipeline.release()
-                                    ipc_client.disconnect()
-                                    return
+                                display_sink.show(display)
                             total_ms = sum(result.latency_ms.values())
                             target_ms = 1000.0 / config.target_fps
                             if total_ms < target_ms:
@@ -830,7 +819,6 @@ def run_biomechanics_pipeline(
 
         except KeyboardInterrupt:
             print("\nAssessment stopped by user")
-            cv2.destroyAllWindows()
             pipeline.release()
             ipc_client.disconnect()
             return
@@ -904,13 +892,7 @@ def run_biomechanics_pipeline(
                     )
                     _draw_wordmark(display)
 
-                    cv2.imshow(window_name, display)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        print("\nCalibration stopped early by user")
-                        cv2.destroyAllWindows()
-                        pipeline.release()
-                        ipc_client.disconnect()
-                        return
+                    display_sink.show(display)
 
                 # Throttle
                 total_ms = sum(result.latency_ms.values())
@@ -978,7 +960,6 @@ def run_biomechanics_pipeline(
 
         except KeyboardInterrupt:
             print("\nCalibration stopped by user")
-            cv2.destroyAllWindows()
             pipeline.release()
             ipc_client.disconnect()
             return
@@ -1199,6 +1180,7 @@ def run_biomechanics_pipeline(
                         on_demand_bridge.stop()
                         on_demand_bridge = None
                         on_demand_replay = False
+                        display_sink.send_event({"type": "demo", "action": "end"})
                     workout_finished = True
                     pipeline.presence_only = True
                     print("[PIPELINE] Workout complete — stopping rep counting")
@@ -1238,6 +1220,7 @@ def run_biomechanics_pipeline(
                     on_demand_bridge.stop()
                     on_demand_bridge = None
                     on_demand_replay = False
+                    display_sink.send_event({"type": "demo", "action": "end"})
                     print("  [ON-DEMAND DEMO] Viewer closed")
 
             # Collect data for post-session plots (not during rest — the
@@ -1298,6 +1281,7 @@ def run_biomechanics_pipeline(
                         bottom_kpts=bottom_kpts,
                         bottom_angles=bottom_angles,
                         standing_kpts=standing_kpts,
+                        trajectory_samples=pipeline.consume_rep_trajectory(),
                     )
 
                 if session_tracker.check_set_timeout(time.time()):
@@ -1372,13 +1356,7 @@ def run_biomechanics_pipeline(
                 if pipeline_inspector is not None:
                     pipeline_inspector.record_frame(result, display, pipeline, resting)
 
-                if not _window_animated:
-                    animate_window_fullscreen(window_name)
-                    _window_animated = True
-                cv2.imshow(window_name, display)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("\nStopped by user (pressed 'q')")
-                    break
+                display_sink.show(display)
 
             # Throttle to target FPS
             total_ms = sum(result.latency_ms.values())
@@ -1399,7 +1377,7 @@ def run_biomechanics_pipeline(
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-        cv2.destroyAllWindows()
+        display_sink.close()
         pipeline.release()
         try:
             bridge.send_pipeline_status("stopped", {})
@@ -1445,8 +1423,8 @@ def run_biomechanics_pipeline(
                 "rep_events": plot_rep_events,
             }
             print(f"Plots will be saved to: {out_dir}\n")
-            plot_hip_position(plot_data, out_dir)
-            plot_hip_velocity(plot_data, out_dir)
+            plot_hip_position(plot_data, out_dir, show=False)
+            plot_hip_velocity(plot_data, out_dir, show=False)
             print(f"\nAll plots saved in: {out_dir}")
         else:
             print("Not enough data for plots (need >10 frames with joint angles).")

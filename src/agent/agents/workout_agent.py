@@ -2,10 +2,18 @@
 WorkoutAgent - Handles active workout sessions with wake word system and coaching
 """
 
+from __future__ import annotations
+
 import asyncio
+import concurrent.futures
 import logging
+import os
+import time
+from pathlib import Path
 from typing import Optional
 
+import numpy as np
+from livekit import rtc
 from livekit.agents import RunContext
 from livekit.agents.llm import function_tool
 
@@ -19,6 +27,15 @@ logger = logging.getLogger(__name__)
 UPRIGHT_TRUNK_DEG = 180.0
 # ForwardLeanRule's mild threshold, expressed as lean from vertical.
 NOTABLE_LEAN_DEG = 35.0
+
+# Wake word ONNX detection parameters (matching livekit-wakeword internals)
+_WW_SAMPLE_RATE = 16_000
+_WW_STRIDE_SAMPLES = 1280         # 80 ms between predictions, also local mic blocksize
+_WW_CHUNK_SECONDS = 2.0
+_WW_CHUNK_SAMPLES = int(_WW_CHUNK_SECONDS * _WW_SAMPLE_RATE)
+# A genuine phrase ramps and holds a high score across strides; false positives
+# tend to be single-stride spikes. Require the previous stride to clear this too.
+_WW_CONFIRM_SCORE = 0.5
 
 
 def _assess_standing_setup(angles: dict) -> list[str]:
@@ -87,8 +104,21 @@ class WorkoutAgent(BaseNovaAgent):
         self._wake_word_active: bool = False
         self._wake_word_listening: bool = False
         self._wake_word_timeout_task: Optional[asyncio.Task] = None
-        self._wake_word_phrases: list[str] = ["hey nova", "hey, nova", "a nova"]
-        self._wake_word_timeout_seconds: float = 5.0
+        # Must outlast the turn detector's max endpointing delay (3.0s) so a
+        # pending user turn can't commit after the window closes.
+        self._wake_word_timeout_seconds: float = 3.0
+
+        # Wake word detection (ONNX default, Porcupine via WAKE_WORD_ENGINE=porcupine)
+        self._ww_model = None
+        self._porcupine = None
+        self._ww_session = None  # session ref captured at start; Agent.session raises after shutdown
+        self._ww_audio_stream: rtc.AudioStream | None = None
+        self._ww_detection_task: asyncio.Task | None = None
+        self._ww_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._ww_threshold: float = float(os.environ.get("WAKE_WORD_THRESHOLD", "0.7"))
+        self._ww_debounce: float = float(os.environ.get("WAKE_WORD_DEBOUNCE", "2.0"))
+        self._ww_last_detection: float = 0.0
+        self._ww_last_near_miss: float = 0.0
 
         super().__init__(state=state, userdata=userdata, instructions=get_workout_prompt())
 
@@ -116,10 +146,10 @@ class WorkoutAgent(BaseNovaAgent):
         coaching_service._workout_active = True
         self.userdata.coaching_service = coaching_service
 
-        # Last-session progress context for the greeting (None on first workout)
-        from agent.services.progress_context import build_greeting_progress_line
-        baseline = await coaching_service.wait_progress_baseline()
-        progress_line = build_greeting_progress_line(baseline)
+        # Last-session progress context and multi-session trends for the greeting
+        from agent.services.progress_context import build_detailed_greeting_context
+        baseline, fault_trends = await coaching_service.wait_progress_context()
+        progress_line = build_detailed_greeting_context(baseline, fault_trends)
         progress_suffix = f" {progress_line}" if progress_line else ""
 
         # Generate context-aware greeting BEFORE starting wake word system.
@@ -267,38 +297,6 @@ class WorkoutAgent(BaseNovaAgent):
         except Exception as e:
             logger.error(f"[WAKE WORD] FAILED to set active listening turn detection: {e}", exc_info=True)
 
-    def _on_user_transcription_for_wake_word(self, ev):
-        """Handle user transcriptions during workout mode for wake word detection."""
-        logger.info(
-            f"[WAKE WORD] Transcription event: is_final={ev.is_final} "
-            f"active={self._wake_word_active} listening={self._wake_word_listening} "
-            f"transcript='{getattr(ev, 'transcript', '')[:50]}'"
-        )
-
-        if not self._wake_word_active:
-            return
-
-        if self._wake_word_listening:
-            if not ev.is_final and self._wake_word_timeout_task:
-                self._wake_word_timeout_task.cancel()
-                self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
-            return
-
-        if not ev.is_final:
-            return
-
-        transcript = ev.transcript.lower().strip()
-        if not transcript:
-            return
-
-        wake_word_detected = any(phrase in transcript for phrase in self._wake_word_phrases)
-
-        if wake_word_detected:
-            logger.info(f"[WAKE WORD] ★ DETECTED in: '{transcript}'")
-            asyncio.create_task(self._activate_listening_mode(transcript))
-        else:
-            logger.info(f"[WAKE WORD] No wake word in: '{transcript}'")
-
     def _on_speech_created_for_wake_word(self, ev):
         """Cancel auto-generated responses in workout mode.
         Allows coaching LLM speech and programmatic calls through.
@@ -319,48 +317,33 @@ class WorkoutAgent(BaseNovaAgent):
             logger.info("[WAKE WORD] Allowing speech (coaching LLM in progress)")
             return
 
-        if not ev.user_initiated:
-            try:
-                ev.speech_handle.cancel()
-                logger.info("[WAKE WORD] ✗ CANCELLED auto-response (user_initiated=False)")
-            except Exception as e:
-                logger.error(f"[WAKE WORD] Failed to cancel speech: {e}", exc_info=True)
-        else:
-            logger.info("[WAKE WORD] Allowing speech through (user_initiated=True — programmatic call)")
+        # Dormant mode: cancel everything else. Turn replies that commit late
+        # (endpointing delay) arrive with user_initiated=True, so that flag
+        # can't distinguish them from programmatic calls.
+        try:
+            ev.speech_handle.cancel()
+            logger.info("[WAKE WORD] ✗ CANCELLED speech (dormant mode)")
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Failed to cancel speech: {e}", exc_info=True)
 
-    async def _activate_listening_mode(self, trigger_transcript: str):
+    async def _activate_listening_mode(self):
         """Activate listening mode after wake word detection."""
         coaching = self.userdata.coaching_service
         if coaching and coaching.is_coaching_speaking:
             logger.info("[WAKE WORD] Coaching LLM in progress — deferring wake word response")
             return
 
-        logger.info(f"[WAKE WORD] Activating listening mode (trigger: '{trigger_transcript}')")
+        logger.info("[WAKE WORD] Activating listening mode")
         self._wake_word_listening = True
+        if self.userdata.visual_bridge:
+            self.userdata.visual_bridge.send_wake_event("detected")
         self._set_active_listening_turn_detection()
 
-        # Extract command after the wake word (if any)
-        command_after_wake = ""
-        for phrase in self._wake_word_phrases:
-            if phrase in trigger_transcript.lower():
-                idx = trigger_transcript.lower().index(phrase) + len(phrase)
-                command_after_wake = trigger_transcript[idx:].strip(" ,.")
-                break
+        await self.session.generate_reply(
+            instructions="The user just said 'Hey Nova' during a workout. Respond very briefly (2-5 words max) like 'Yeah?', 'What's up?', or 'I'm here!' — then wait for their question."
+        )
 
-        if command_after_wake and len(command_after_wake) > 3:
-            logger.info(f"[WAKE WORD] Command included: '{command_after_wake}'")
-            await self.session.generate_reply(
-                user_input=command_after_wake,
-            )
-        else:
-            await self.session.generate_reply(
-                instructions="The user just said 'Hey Nova' during a workout. Respond very briefly (2-5 words max) like 'Yeah?', 'What's up?', or 'I'm here!' — then wait for their question."
-            )
-
-        # Start timeout to revert back to wake word mode
-        if self._wake_word_timeout_task:
-            self._wake_word_timeout_task.cancel()
-        self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
+        self._restart_wake_word_timeout()
 
     async def _deactivate_listening_mode(self):
         """Revert from active listening back to wake word detection mode."""
@@ -369,18 +352,43 @@ class WorkoutAgent(BaseNovaAgent):
         if self._wake_word_timeout_task:
             self._wake_word_timeout_task.cancel()
             self._wake_word_timeout_task = None
+        if self.userdata.visual_bridge:
+            self.userdata.visual_bridge.send_wake_event("dormant")
+        try:
+            self._ww_session.clear_user_turn()
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Failed to clear pending user turn: {e}", exc_info=True)
         self._set_workout_turn_detection()
         logger.info("[WAKE WORD] Reverted to wake word mode")
 
+    def _conversation_in_progress(self) -> bool:
+        return (
+            self._ww_session.agent_state in ("thinking", "speaking")
+            or self._ww_session.user_state == "speaking"
+        )
+
     async def _wake_word_timeout(self):
-        """After inactivity, revert back to workout (wake word) mode."""
+        """Revert to wake word mode once the conversation goes idle."""
         try:
-            await asyncio.sleep(self._wake_word_timeout_seconds)
-            if self._wake_word_active and self._wake_word_listening:
-                logger.info("[WAKE WORD] Timeout — reverting to wake word mode")
+            while True:
+                await asyncio.sleep(self._wake_word_timeout_seconds)
+                if not (self._wake_word_active and self._wake_word_listening):
+                    return
+                # Session already shut down (Ctrl+C race) — nothing to revert.
+                if not getattr(self._ww_session, "_started", False):
+                    return
+                if self._conversation_in_progress():
+                    continue
+                logger.info("[WAKE WORD] Conversation idle — reverting to wake word mode")
                 await self._deactivate_listening_mode()
+                return
         except asyncio.CancelledError:
             pass
+
+    def _restart_wake_word_timeout(self):
+        if self._wake_word_timeout_task:
+            self._wake_word_timeout_task.cancel()
+        self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
 
     def _on_agent_state_changed_for_wake_word(self, ev):
         """Auto-revert after wake-word-triggered responses complete."""
@@ -388,9 +396,281 @@ class WorkoutAgent(BaseNovaAgent):
             return
 
         if ev.new_state in ("listening", "idle") and ev.old_state == "speaking":
-            if self._wake_word_timeout_task:
-                self._wake_word_timeout_task.cancel()
-            self._wake_word_timeout_task = asyncio.create_task(self._wake_word_timeout())
+            self._restart_wake_word_timeout()
+
+    def _on_user_state_changed_for_wake_word(self, ev):
+        """Keep the listening window open while the user is talking."""
+        if not self._wake_word_active or not self._wake_word_listening:
+            return
+        self._restart_wake_word_timeout()
+
+    def _on_user_transcript_for_wake_word(self, ev):
+        """Keep the listening window open while a user turn is still endpointing."""
+        if not self._wake_word_active or not self._wake_word_listening:
+            return
+        self._restart_wake_word_timeout()
+
+    def _find_microphone_track(self, room) -> rtc.RemoteAudioTrack | None:
+        """Find the first subscribed microphone track from any remote participant."""
+        for participant in room.remote_participants.values():
+            for pub in participant.track_publications.values():
+                if (pub.source == rtc.TrackSource.SOURCE_MICROPHONE
+                        and pub.track is not None
+                        and pub.subscribed):
+                    return pub.track
+        return None
+
+    def _on_track_subscribed_for_wakeword(self, track, publication, participant):
+        """Start detection loop when a microphone track becomes available."""
+        if not self._wake_word_active:
+            return
+        if publication.source != rtc.TrackSource.SOURCE_MICROPHONE:
+            return
+        if self._ww_detection_task is not None and not self._ww_detection_task.done():
+            return
+        logger.info(f"[WAKE WORD] Microphone track subscribed from {participant.identity}")
+        self._start_detection_on_track(track)
+
+    def _start_detection_on_track(self, track):
+        """Create AudioStream from track and launch the detection loop."""
+        self._ww_audio_stream = rtc.AudioStream(
+            track,
+            sample_rate=_WW_SAMPLE_RATE,
+            num_channels=1,
+        )
+        self._ww_detection_task = asyncio.create_task(
+            self._make_detection_loop(self._room_audio_frames())
+        )
+        logger.info("[WAKE WORD] Detection loop started on audio track")
+
+    def _make_detection_loop(self, frames):
+        if self._porcupine is not None:
+            return self._porcupine_detection_loop(frames)
+        return self._wake_word_detection_loop(frames)
+
+    async def _room_audio_frames(self):
+        async for event in self._ww_audio_stream:
+            yield np.frombuffer(event.frame.data, dtype=np.int16)
+
+    async def _local_mic_frames(self):
+        import sounddevice as sd
+
+        loop = asyncio.get_event_loop()
+        frame_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
+
+        def _enqueue(data):
+            try:
+                frame_queue.put_nowait(data)
+            except asyncio.QueueFull:
+                pass
+
+        def _on_audio(indata, frames, time_info, status):
+            data = indata[:, 0].copy()
+            try:
+                loop.call_soon_threadsafe(_enqueue, data)
+            except RuntimeError:
+                pass
+
+        stream = sd.InputStream(
+            samplerate=_WW_SAMPLE_RATE,
+            channels=1,
+            dtype="int16",
+            blocksize=_WW_STRIDE_SAMPLES,
+            callback=_on_audio,
+        )
+        stream.start()
+        try:
+            while True:
+                yield await frame_queue.get()
+        finally:
+            stream.stop()
+            stream.close()
+
+    async def _wake_word_detection_loop(self, frames):
+        """Buffer 16 kHz mono int16 audio and run ONNX wake word detection.
+
+        Source frames can be any size (room tracks deliver ~10 ms frames,
+        the local mic 80 ms) — audio is accumulated by sample count into a
+        rolling 2-second window, with one prediction per 80 ms stride.
+        """
+        loop = asyncio.get_event_loop()
+        window = np.zeros(_WW_CHUNK_SAMPLES, dtype=np.int16)
+        samples_filled = 0
+        samples_since_predict = 0
+        prev_scores: dict[str, float] = {}
+
+        try:
+            async for frame_data in frames:
+                if not self._wake_word_active:
+                    break
+
+                if self._wake_word_listening or self._ww_session.agent_state == "speaking":
+                    samples_filled = 0
+                    samples_since_predict = 0
+                    prev_scores.clear()
+                    continue
+
+                n_samples = len(frame_data)
+                if n_samples >= _WW_CHUNK_SAMPLES:
+                    window[:] = frame_data[-_WW_CHUNK_SAMPLES:]
+                else:
+                    window[:-n_samples] = window[n_samples:]
+                    window[-n_samples:] = frame_data
+                samples_filled = min(samples_filled + n_samples, _WW_CHUNK_SAMPLES)
+                samples_since_predict += n_samples
+
+                if (samples_filled < _WW_CHUNK_SAMPLES
+                        or samples_since_predict < _WW_STRIDE_SAMPLES):
+                    continue
+                samples_since_predict = 0
+
+                try:
+                    scores = await loop.run_in_executor(
+                        self._ww_executor,
+                        self._ww_model.predict,
+                        window.copy(),
+                    )
+                except Exception as e:
+                    logger.error(f"[WAKE WORD] Inference error: {e}")
+                    continue
+
+                now = time.monotonic()
+                for name, score in scores.items():
+                    prev_score = prev_scores.get(name, 0.0)
+                    prev_scores[name] = score
+                    if 0.4 <= score < self._ww_threshold:
+                        if now - self._ww_last_near_miss >= 1.0:
+                            self._ww_last_near_miss = now
+                            logger.info(
+                                f"[WAKE WORD] near miss '{name}' "
+                                f"(confidence={score:.3f} < threshold={self._ww_threshold})"
+                            )
+                    if score >= self._ww_threshold:
+                        if prev_score < _WW_CONFIRM_SCORE:
+                            logger.info(
+                                f"[WAKE WORD] Spike rejected '{name}' "
+                                f"(confidence={score:.3f}, prev={prev_score:.3f} < {_WW_CONFIRM_SCORE})"
+                            )
+                            continue
+                        if now - self._ww_last_detection >= self._ww_debounce:
+                            self._ww_last_detection = now
+                            samples_filled = 0
+                            prev_scores.clear()
+                            logger.info(
+                                f"[WAKE WORD] ★ DETECTED '{name}' "
+                                f"(confidence={score:.3f})"
+                            )
+                            coaching = self.userdata.coaching_service
+                            if coaching and coaching.is_coaching_speaking:
+                                logger.info("[WAKE WORD] Coaching in progress — ignoring detection")
+                                break
+                            asyncio.create_task(self._activate_listening_mode())
+                            break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Detection loop crashed: {e}", exc_info=True)
+        finally:
+            await frames.aclose()
+            if self._ww_audio_stream:
+                await self._ww_audio_stream.aclose()
+                self._ww_audio_stream = None
+            logger.info("[WAKE WORD] Detection loop ended")
+
+    async def _porcupine_detection_loop(self, frames):
+        """Feed fixed-size frames to Porcupine's stateful streaming detector.
+
+        Porcupine consumes exactly frame_length samples (512 @ 16 kHz) per
+        call and returns a keyword index >= 0 on detection — no windowing,
+        scoring, or spike rejection needed.
+        """
+        loop = asyncio.get_event_loop()
+        frame_length = self._porcupine.frame_length
+        buffer = np.zeros(0, dtype=np.int16)
+
+        try:
+            async for frame_data in frames:
+                if not self._wake_word_active:
+                    break
+
+                if self._wake_word_listening or self._ww_session.agent_state == "speaking":
+                    buffer = np.zeros(0, dtype=np.int16)
+                    continue
+
+                buffer = np.concatenate([buffer, frame_data])
+                while len(buffer) >= frame_length:
+                    chunk = buffer[:frame_length]
+                    buffer = buffer[frame_length:]
+                    try:
+                        keyword_index = await loop.run_in_executor(
+                            self._ww_executor,
+                            self._porcupine.process,
+                            chunk,
+                        )
+                    except Exception as e:
+                        logger.error(f"[WAKE WORD] Porcupine inference error: {e}")
+                        continue
+
+                    if keyword_index < 0:
+                        continue
+                    now = time.monotonic()
+                    if now - self._ww_last_detection < self._ww_debounce:
+                        continue
+                    self._ww_last_detection = now
+                    buffer = np.zeros(0, dtype=np.int16)
+                    logger.info("[WAKE WORD] ★ DETECTED 'hey_nova' (porcupine)")
+                    coaching = self.userdata.coaching_service
+                    if coaching and coaching.is_coaching_speaking:
+                        logger.info("[WAKE WORD] Coaching in progress — ignoring detection")
+                        break
+                    asyncio.create_task(self._activate_listening_mode())
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Detection loop crashed: {e}", exc_info=True)
+        finally:
+            await frames.aclose()
+            if self._ww_audio_stream:
+                await self._ww_audio_stream.aclose()
+                self._ww_audio_stream = None
+            logger.info("[WAKE WORD] Detection loop ended")
+
+    def _create_porcupine(self):
+        """Build a Porcupine handle from env config, or None to fall back to ONNX."""
+        try:
+            import pvporcupine
+        except ImportError:
+            logger.error("[WAKE WORD] pvporcupine not installed — falling back to ONNX")
+            return None
+
+        access_key = os.environ.get("PORCUPINE_ACCESS_KEY", "")
+        if not access_key:
+            logger.error("[WAKE WORD] PORCUPINE_ACCESS_KEY not set — falling back to ONNX")
+            return None
+
+        sensitivity = float(os.environ.get("PORCUPINE_SENSITIVITY", "0.5"))
+        keyword_path = os.environ.get("PORCUPINE_KEYWORD_PATH", "")
+        try:
+            if keyword_path:
+                handle = pvporcupine.create(
+                    access_key=access_key,
+                    keyword_paths=[keyword_path],
+                    sensitivities=[sensitivity],
+                )
+                logger.info(f"[WAKE WORD] Porcupine ready (custom keyword: {keyword_path})")
+            else:
+                keyword = os.environ.get("PORCUPINE_KEYWORD", "porcupine")
+                handle = pvporcupine.create(
+                    access_key=access_key,
+                    keywords=[keyword],
+                    sensitivities=[sensitivity],
+                )
+                logger.info(f"[WAKE WORD] Porcupine ready (built-in keyword: '{keyword}')")
+            return handle
+        except Exception as e:
+            logger.error(f"[WAKE WORD] Porcupine init failed: {e} — falling back to ONNX")
+            return None
 
     async def _start_wake_word_system(self):
         """Activate wake word detection for workout mode."""
@@ -398,64 +678,131 @@ class WorkoutAgent(BaseNovaAgent):
             await self._stop_wake_word_system()
 
         logger.info("[WAKE WORD] === Starting wake word system ===")
+
+        if os.environ.get("WAKE_WORD_ENGINE", "onnx") == "porcupine":
+            self._porcupine = self._create_porcupine()
+
+        # ONNX path (default, and fallback if Porcupine init failed)
+        if self._porcupine is None:
+            # Load model (prefer prewarmed, fall back to disk)
+            self._ww_model = getattr(self.userdata, "wakeword_model", None)
+            if self._ww_model is None:
+                from livekit.wakeword import WakeWordModel
+                model_path = os.environ.get("WAKE_WORD_MODEL_PATH", "models/hey_nova.onnx")
+                if not Path(model_path).exists():
+                    logger.error(f"[WAKE WORD] Model not found at {model_path} — wake word disabled")
+                    self._wake_word_active = True
+                    self._set_workout_turn_detection()
+                    return
+                self._ww_model = WakeWordModel(models=[model_path])
+                logger.info(f"[WAKE WORD] Loaded model from {model_path}")
+
+        self._ww_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="wakeword",
+        )
         self._wake_word_active = True
         self._wake_word_listening = False
-
-        try:
-            self.session.on("user_input_transcribed", self._on_user_transcription_for_wake_word)
-            logger.info("[WAKE WORD] Registered user_input_transcribed handler")
-        except Exception as e:
-            logger.error(f"[WAKE WORD] FAILED to register user_input_transcribed: {e}", exc_info=True)
+        self._ww_session = self.session
 
         try:
             self.session.on("agent_state_changed", self._on_agent_state_changed_for_wake_word)
-            logger.info("[WAKE WORD] Registered agent_state_changed handler")
         except Exception as e:
             logger.error(f"[WAKE WORD] FAILED to register agent_state_changed: {e}", exc_info=True)
 
         try:
             self.session.on("speech_created", self._on_speech_created_for_wake_word)
-            logger.info("[WAKE WORD] Registered speech_created handler")
         except Exception as e:
             logger.error(f"[WAKE WORD] FAILED to register speech_created: {e}", exc_info=True)
 
-        # Disable preemptive_generation
+        try:
+            self.session.on("user_state_changed", self._on_user_state_changed_for_wake_word)
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to register user_state_changed: {e}", exc_info=True)
+
+        try:
+            self.session.on("user_input_transcribed", self._on_user_transcript_for_wake_word)
+        except Exception as e:
+            logger.error(f"[WAKE WORD] FAILED to register user_input_transcribed: {e}", exc_info=True)
+
         try:
             self.session.options.turn_handling["preemptive_generation"]["enabled"] = False
-            logger.info("[WAKE WORD] Disabled preemptive_generation on AgentSession")
-        except Exception as e:
-            logger.error(f"[WAKE WORD] Failed to disable preemptive_generation: {e}")
+        except Exception:
+            pass
 
         try:
             self.session.options.turn_handling["endpointing"]["min_delay"] = 0.2
         except Exception:
             pass
 
+        # Attach to microphone track (or wait for subscription).
+        # WAKE_WORD_LOCAL_MIC=1 captures the local mic instead — console mode
+        # has no LiveKit room track to tap.
+        if os.environ.get("WAKE_WORD_LOCAL_MIC") == "1":
+            self._ww_detection_task = asyncio.create_task(
+                self._make_detection_loop(self._local_mic_frames())
+            )
+            logger.info("[WAKE WORD] Detection loop started on local microphone")
+        else:
+            room = self.userdata.room
+            track = self._find_microphone_track(room)
+            if track:
+                self._start_detection_on_track(track)
+            else:
+                room.on("track_subscribed", self._on_track_subscribed_for_wakeword)
+                logger.info("[WAKE WORD] Waiting for participant audio track...")
+
         self._set_workout_turn_detection()
-        logger.info("[WAKE WORD] === Wake word system ACTIVE ===")
+        logger.info("[WAKE WORD] === ONNX wake word system ACTIVE ===")
 
     async def _stop_wake_word_system(self):
         """Deactivate wake word detection when leaving workout mode."""
         self._wake_word_active = False
         self._wake_word_listening = False
+        if self.userdata.visual_bridge:
+            self.userdata.visual_bridge.send_wake_event("dormant")
 
         if self._wake_word_timeout_task:
             self._wake_word_timeout_task.cancel()
             self._wake_word_timeout_task = None
 
+        if self._ww_detection_task:
+            self._ww_detection_task.cancel()
+            try:
+                await self._ww_detection_task
+            except asyncio.CancelledError:
+                pass
+            self._ww_detection_task = None
+
+        if self._ww_audio_stream:
+            await self._ww_audio_stream.aclose()
+            self._ww_audio_stream = None
+
+        if self._porcupine is not None:
+            try:
+                self._porcupine.delete()
+            except Exception:
+                pass
+            self._porcupine = None
+
+        if self._ww_executor:
+            self._ww_executor.shutdown(wait=False)
+            self._ww_executor = None
+
         try:
-            self.session.off("user_input_transcribed", self._on_user_transcription_for_wake_word)
+            self.userdata.room.off("track_subscribed", self._on_track_subscribed_for_wakeword)
+        except Exception:
+            pass
+
+        try:
             self.session.off("agent_state_changed", self._on_agent_state_changed_for_wake_word)
             self.session.off("speech_created", self._on_speech_created_for_wake_word)
         except Exception:
             pass
 
-        # Re-enable preemptive_generation for conversational mode
         try:
             self.session.options.turn_handling["preemptive_generation"]["enabled"] = True
-            logger.info("[WAKE WORD] Re-enabled preemptive_generation")
-        except Exception as e:
-            logger.error(f"[WAKE WORD] Failed to re-enable preemptive_generation: {e}")
+        except Exception:
+            pass
 
         try:
             self.session.options.turn_handling["endpointing"]["min_delay"] = 0.3

@@ -399,6 +399,7 @@ class BiomechanicsSet(Base):
     trunk_score_avg = Column(Float, nullable=True)
     knee_score_avg = Column(Float, nullable=True)
     symmetry_score_avg = Column(Float, nullable=True)
+    tempo_score_avg = Column(Float, nullable=True)
     trend_slope = Column(Float, nullable=True)  # Score trend across reps (fatigue signal)
     best_rep_number = Column(Integer, nullable=True)
     worst_rep_number = Column(Integer, nullable=True)
@@ -434,6 +435,7 @@ class BiomechanicsRep(Base):
     trunk_control_score = Column(Float, nullable=True)
     knee_tracking_score = Column(Float, nullable=True)
     symmetry_score = Column(Float, nullable=True)
+    tempo_score = Column(Float, nullable=True)
     # Full detail for ML training
     kinematics = Column(JSONB, nullable=True)  # RepKinematicSummary dump
     faults = Column(JSONB, nullable=True)  # faults_detailed list

@@ -15,6 +15,7 @@ import signal
 import threading
 import subprocess
 import logging
+import time
 from pathlib import Path
 
 # Add current directory to path
@@ -38,6 +39,13 @@ logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 DEFAULT_EXERCISE_NAME = "Barbell Back Squat"
 COACHING_SOCKET_PATH = "/tmp/nowva_coaching.sock"
+
+# Played via afplay when the display window opens (browser autoplay policies
+# block page-side audio without a user gesture). Any afplay-supported format
+# works (wav/mp3/aiff/m4a); silently skipped if the file doesn't exist.
+BOOT_SOUND_PATH = Path(
+    os.environ.get("NOWVA_BOOT_SOUND", str(Path(__file__).parent / "assets" / "boot_sound.wav"))
+)
 
 # Session params seeded by --test_assess. The assessment itself is bodyweight
 # with a pipeline-defined rep count; these only matter if the run continues
@@ -109,6 +117,9 @@ class NowvaApp:
         self._fastapi_log = None
         self._cal_file: str | None = None
         self.test_assess_mode = False
+        self.display_server = None
+        self._boot_progress = 0.0
+        self._boot_sound_last_played = float("-inf")
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -214,12 +225,14 @@ class NowvaApp:
                 "-i", f"{screen_idx}:{mic_idx}",
                 "-f", "avfoundation",
                 "-i", f":{blackhole_idx}",
-                "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first",
+                "-map", "0:v", "-map", "0:a", "-map", "1:a",
+                "-metadata:s:a:0", "title=Microphone",
+                "-metadata:s:a:1", "title=System Audio",
                 "-c:v", "h264_videotoolbox", "-b:v", "5M",
                 "-c:a", "aac", "-ar", "48000", "-b:a", "128k",
                 str(session_dir / "screen_recording.mp4"),
             ]
-            print(f"[RECORDING] Screen + mic + system audio (BlackHole)")
+            print(f"[RECORDING] Screen + mic + system audio (BlackHole, separate tracks)")
         elif mic_idx is not None:
             cmd = [
                 "ffmpeg", "-y",
@@ -469,6 +482,80 @@ class NowvaApp:
 
         print("Pose estimation process started")
 
+    def _start_display(self):
+        """Start the display hub and open the browser on the idle screen.
+
+        The boot sound fires when the page actually connects (websocket
+        subscribe), not when the browser is asked to open — so audio and
+        the page's fade-in land together.
+        """
+        from visual import DISPLAY_PORT, DisplayServer
+
+        self.display_server = DisplayServer(on_subscriber=self._play_boot_sound)
+        if not self.display_server.start():
+            print("[DISPLAY] Server failed to start — continuing without display")
+            self.display_server = None
+            return
+        print(f"[DISPLAY] Live at http://localhost:{DISPLAY_PORT}")
+
+        def _open_browser():
+            import webbrowser
+            webbrowser.open(f"http://localhost:{DISPLAY_PORT}")
+
+        threading.Thread(target=_open_browser, daemon=True).start()
+
+    def _play_boot_sound(self):
+        """Fire the display-open sound without blocking; no-op if absent.
+
+        Debounced: page refreshes replay it, rapid reconnects don't.
+        """
+        now = time.monotonic()
+        # Debounce past the clip length so a quick refresh can't overlap
+        # two full-volume instances of the sound.
+        if now - self._boot_sound_last_played < 6.0:
+            return
+        self._boot_sound_last_played = now
+        if not BOOT_SOUND_PATH.exists():
+            print(f"[DISPLAY] No boot sound at {BOOT_SOUND_PATH} — skipping")
+            return
+        try:
+            subprocess.Popen(
+                ["afplay", str(BOOT_SOUND_PATH)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as e:
+            print(f"[DISPLAY] Boot sound failed: {e}")
+
+    def _boot_step(self, label: str, progress: float):
+        """Publish a boot milestone to the display page (monotonic)."""
+        if not self.display_server or progress <= self._boot_progress:
+            return
+        self._boot_progress = progress
+        self.display_server.publish({
+            "type": "boot", "label": label, "progress": round(progress, 3),
+        })
+
+    # Markers in the voice agent's stdout mapped to boot milestones.
+    # Matched by substring in _pump_agent_output as the agent initializes.
+    _AGENT_BOOT_MARKERS = (
+        ("[PREWARM] Starting parallel pre-load", "Spinning up neural cores", 0.34),
+        ("[PREWARM] Silero VAD", "Calibrating voice activity sensors", 0.46),
+        ("[PREWARM] Audio cues pre-loaded", "Loading coaching audio matrix", 0.55),
+        ("[PREWARM] WakeWordModel pre-loaded", "Arming wake-word sentinel", 0.63),
+        ("[NOVA] Initializing cascade pipeline", "Synthesizing speech cortex", 0.74),
+        ("[NOVA] Agent session created", "Linking conversational reasoning engine", 0.88),
+        ("Nova voice agent started in room", "All systems nominal — Nova online", 1.0),
+    )
+
+    def _scan_agent_boot_markers(self, line: str):
+        if self._boot_progress >= 1.0:
+            return
+        for marker, label, progress in self._AGENT_BOOT_MARKERS:
+            if marker in line:
+                self._boot_step(label, progress)
+                return
+
     def _start_coaching_ipc(self):
         """Bind the coaching IPC server and serve it from a daemon thread.
 
@@ -617,11 +704,17 @@ class NowvaApp:
         print("NOWVA - AI-Powered Smart Squat Rack")
         print("="*60)
 
+        # Open the persistent display first — boot progress renders there
+        self._start_display()
+        self._boot_step("Initializing neural substrate", 0.04)
+
         # Start FastAPI backend server
         print("\nStarting FastAPI backend...")
+        self._boot_step("Establishing secure data link", 0.10)
         self._start_fastapi_server()
 
         # Initialize database (skips if tables already exist)
+        self._boot_step("Mounting athlete memory core", 0.18)
         init_db()
 
         # Check for existing session
@@ -669,6 +762,7 @@ class NowvaApp:
             os.set_blocking(self._state_pipe_r, False)
 
             # Start voice agent for returning user
+            self._boot_step("Identity verified — waking conversational cortex", 0.26)
             from agent.agents.console_launcher import run_console_voice_agent
             try:
                 self._voice_agent_process = await run_console_voice_agent(
@@ -686,6 +780,7 @@ class NowvaApp:
             os.set_blocking(self._state_pipe_r, False)
 
             # Run onboarding - returns (success, agent_process)
+            self._boot_step("Waking conversational cortex", 0.26)
             try:
                 success, voice_agent_process = await self.run_onboarding(state_notify_fd=state_pipe_w)
                 self._voice_agent_process = voice_agent_process
@@ -731,6 +826,7 @@ class NowvaApp:
         def _pump_agent_output():
             for line in iter(self._voice_agent_process.stdout.readline, ''):
                 print(line, end='', flush=True)
+                self._scan_agent_boot_markers(line)
 
         agent_output_thread = threading.Thread(target=_pump_agent_output, daemon=True)
         agent_output_thread.start()
@@ -1027,6 +1123,10 @@ class NowvaApp:
         if self.ipc_server:
             print("Stopping IPC server...")
             self.ipc_server.stop()
+
+        if self.display_server:
+            self.display_server.stop()
+            self.display_server = None
 
         self._stop_screen_recording()
 

@@ -82,8 +82,9 @@ class CoachingService:
         # Workout data persistence (sessions/sets/reps/cue outcomes → PostgreSQL)
         self._biomech_recorder = None
 
-        # Last-session baseline for progress comparisons (fetched async at workout start)
+        # Last-session baseline and multi-session trends (fetched async at workout start)
         self._progress_baseline: dict | None = None
+        self._fault_trends: dict | None = None
         self._baseline_task: Optional[asyncio.Task] = None
 
         # Pending on-demand demo response (request_last_rep / request_demo)
@@ -132,22 +133,28 @@ class CoachingService:
         )
 
     async def _fetch_progress_baseline(self, user_id) -> dict | None:
-        """Load last-session comparison data without blocking the event loop."""
+        """Load last-session baseline and multi-session fault trends."""
         def _fetch():
             from db.database import SessionLocal
-            from db.biomechanics_persistence import get_progress_baseline
+            from db.biomechanics_persistence import (
+                get_progress_baseline,
+                get_multi_session_fault_trends,
+            )
             db = SessionLocal()
             try:
-                return get_progress_baseline(db, user_id)
+                baseline = get_progress_baseline(db, user_id)
+                fault_trends = get_multi_session_fault_trends(db, user_id)
+                return baseline, fault_trends
             finally:
                 db.close()
 
         try:
-            baseline = await asyncio.to_thread(_fetch)
+            baseline, fault_trends = await asyncio.to_thread(_fetch)
         except Exception:
             logger.exception("[BIOMECH DB] Progress baseline fetch failed")
             return None
         self._progress_baseline = baseline
+        self._fault_trends = fault_trends
         if baseline:
             if self._coaching_orchestrator:
                 self._coaching_orchestrator.progress_baseline = baseline
@@ -157,6 +164,15 @@ class CoachingService:
             )
         else:
             logger.info("[BIOMECH DB] No previous session — first-workout baseline")
+        if fault_trends:
+            if self._coaching_orchestrator:
+                self._coaching_orchestrator.fault_trends = fault_trends
+            chronic = fault_trends.get("chronic_faults", [])
+            logger.info(
+                f"[BIOMECH DB] Fault trends loaded: {fault_trends.get('sessions_analyzed', 0)} sessions, "
+                f"{len(fault_trends.get('fault_profile', []))} fault types, "
+                f"chronic={chronic}"
+            )
         return baseline
 
     async def wait_progress_baseline(self, timeout_s: float = 2.5) -> dict | None:
@@ -164,11 +180,26 @@ class CoachingService:
         if self._baseline_task is None:
             return self._progress_baseline
         try:
-            return await asyncio.wait_for(
+            await asyncio.wait_for(
                 asyncio.shield(self._baseline_task), timeout=timeout_s
             )
         except asyncio.TimeoutError:
-            return None
+            pass
+        return self._progress_baseline
+
+    async def wait_progress_context(
+        self, timeout_s: float = 2.5
+    ) -> tuple[dict | None, dict | None]:
+        """Return (baseline, fault_trends) once the background fetch finishes."""
+        if self._baseline_task is None:
+            return self._progress_baseline, self._fault_trends
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._baseline_task), timeout=timeout_s
+            )
+        except asyncio.TimeoutError:
+            pass
+        return self._progress_baseline, self._fault_trends
 
     async def _close_biomech_recording(self) -> None:
         if self._biomech_recorder is None:

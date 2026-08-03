@@ -1,0 +1,14 @@
+# livekit-wakeword training config for "Hey Nova"
+# Train: livekit-wakeword run config/hey_nova.yaml
+# Eval:  livekit-wakeword eval config/hey_nova.yaml
+# Output: models/hey_nova.onnx
+
+model_name: hey_nova
+target_phrases:
+  - "hey nova"
+n_samples: 2000
+model:
+  model_type: conv_attention
+  model_size: small
+steps: 50000
+target_fp_per_hour: 0.2

@@ -54,6 +54,7 @@ def _make_summary(
             trunk_control_score=score,
             knee_tracking_score=score,
             symmetry_score=score,
+            tempo_score=score,
             composite_score=score,
         )
         for index, score in enumerate(composite_scores)

@@ -638,7 +638,9 @@ class TestDiagnosisIntegration:
         assert len(diag_msgs) == 1
 
         per_dim = diag_msgs[0]["scoring"]["per_dimension"]
-        assert set(per_dim.keys()) == {"depth", "trunk_control", "knee_tracking", "symmetry"}
+        assert set(per_dim.keys()) == {
+            "depth", "trunk_control", "knee_tracking", "symmetry", "tempo",
+        }
         for key, value in per_dim.items():
             assert 0.0 <= value <= 1.0, f"{key} score {value} out of [0, 1] range"
 

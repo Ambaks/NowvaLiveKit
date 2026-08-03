@@ -540,24 +540,30 @@ class TestAggregateEffectiveness:
 
 
 class _FakeSetRow:
-    def __init__(self, depth=0.8, trunk=0.75, knee=0.6, symmetry=0.78):
+    def __init__(self, depth=0.8, trunk=0.75, knee=0.6, symmetry=0.78,
+                 tempo=0.9, set_number=1, rep_count=5, mean_score=0.7):
         self.depth_score_avg = depth
         self.trunk_score_avg = trunk
         self.knee_score_avg = knee
         self.symmetry_score_avg = symmetry
+        self.tempo_score_avg = tempo
+        self.set_number = set_number
+        self.rep_count = rep_count
+        self.mean_score = mean_score
 
 
 class _FakeBaselineRep:
-    def __init__(self, kinematics=None, faults=None):
+    def __init__(self, kinematics=None, faults=None, set_number=1):
         self.kinematics = kinematics
         self.faults = faults
+        self.set_number = set_number
 
 
 class TestBuildBaselineSummary:
     def test_aggregates_dimensions_kinematics_and_faults(self):
         from datetime import datetime, timedelta
 
-        set_rows = [_FakeSetRow(knee=0.6), _FakeSetRow(knee=0.7)]
+        set_rows = [_FakeSetRow(knee=0.6, set_number=1), _FakeSetRow(knee=0.7, set_number=2)]
         rep_rows = [
             _FakeBaselineRep(
                 kinematics={

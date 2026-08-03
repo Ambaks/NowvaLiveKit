@@ -334,6 +334,7 @@ class IPCBridge:
                     "trunk_control": round(sum(r.trunk_control_score for r in per_rep) / n, 3),
                     "knee_tracking": round(sum(r.knee_tracking_score for r in per_rep) / n, 3),
                     "symmetry": round(sum(r.symmetry_score for r in per_rep) / n, 3),
+                    "tempo": round(sum(r.tempo_score for r in per_rep) / n, 3),
                 },
                 "best_rep": score_summary.best_rep_number,
                 "worst_rep": score_summary.worst_rep_number,

@@ -25,6 +25,8 @@ from db.models import (
 logger = logging.getLogger(__name__)
 
 CLOSE_TIMEOUT_S = 5.0
+CHRONIC_FAULT_SESSION_THRESHOLD = 0.5
+CHRONIC_MIN_SESSIONS = 3
 
 # Fault types the pipeline evaluates at or after rep completion. They never
 # appear in a rep's faults_detailed and their rep_number tags the NEXT rep,
@@ -118,6 +120,7 @@ def _rep_score_columns(score: dict) -> dict:
         "trunk_control_score": score.get("trunk_control_score"),
         "knee_tracking_score": score.get("knee_tracking_score"),
         "symmetry_score": score.get("symmetry_score"),
+        "tempo_score": score.get("tempo_score"),
     }
 
 
@@ -160,6 +163,7 @@ def build_baseline_summary(
         ("trunk_control", "trunk_score_avg"),
         ("knee_tracking", "knee_score_avg"),
         ("symmetry", "symmetry_score_avg"),
+        ("tempo", "tempo_score_avg"),
     )
     per_dimension = {}
     for key, attr in dimension_columns:
@@ -206,8 +210,30 @@ def build_baseline_summary(
         }
         for entry in sorted(
             fault_counts.values(), key=lambda e: e["count"], reverse=True
-        )[:2]
+        )
     ]
+
+    # Per-set fault breakdown
+    reps_by_set: dict[int, list] = {}
+    for rep in rep_rows:
+        sn = getattr(rep, "set_number", None)
+        if sn is not None:
+            reps_by_set.setdefault(sn, []).append(rep)
+
+    per_set: list[dict] = []
+    for set_row in sorted(set_rows, key=lambda s: s.set_number):
+        set_faults: dict[str, int] = {}
+        for rep in reps_by_set.get(set_row.set_number, []):
+            for fault in rep.faults or []:
+                ft = fault.get("fault_type")
+                if ft:
+                    set_faults[ft] = set_faults.get(ft, 0) + 1
+        per_set.append({
+            "set_number": set_row.set_number,
+            "rep_count": set_row.rep_count or 0,
+            "mean_score": set_row.mean_score,
+            "faults": set_faults,
+        })
 
     started_local_date = (
         started_at.replace(tzinfo=timezone.utc).astimezone().date()
@@ -220,6 +246,7 @@ def build_baseline_summary(
         "total_reps": total_reps,
         "total_sets": total_sets,
         "top_faults": top_faults,
+        "per_set": per_set,
         "avg_knee_valgus_deg": (
             round(sum(valgus_values) / len(valgus_values), 1) if valgus_values else None
         ),
@@ -504,6 +531,7 @@ class BiomechanicsRecorder:
                 "trunk_score_avg": per_dimension.get("trunk_control"),
                 "knee_score_avg": per_dimension.get("knee_tracking"),
                 "symmetry_score_avg": per_dimension.get("symmetry"),
+                "tempo_score_avg": per_dimension.get("tempo"),
                 "trend_slope": scoring.get("trend_slope"),
                 "best_rep_number": scoring.get("best_rep"),
                 "worst_rep_number": scoring.get("worst_rep"),
@@ -808,6 +836,7 @@ def get_score_progress(
             "trunk_control": row.trunk_score_avg,
             "knee_tracking": row.knee_score_avg,
             "symmetry": row.symmetry_score_avg,
+            "tempo": row.tempo_score_avg,
             "trend_slope": row.trend_slope,
         }
         for row in rows
@@ -871,3 +900,122 @@ def get_cue_effectiveness(
     if fault_type is not None:
         query = query.filter(CueEvent.fault_type == fault_type)
     return _aggregate_effectiveness(query.all())
+
+
+def _compute_fault_trend(per_session_counts: list[int]) -> str:
+    """Compare older-half mean to newer-half mean of per-session occurrence counts."""
+    if len(per_session_counts) < 2:
+        return "stable"
+    mid = len(per_session_counts) // 2
+    older_mean = sum(per_session_counts[:mid]) / mid
+    newer_mean = sum(per_session_counts[mid:]) / (len(per_session_counts) - mid)
+    if older_mean == 0:
+        return "worsening" if newer_mean > 0 else "stable"
+    ratio = newer_mean / older_mean
+    if ratio < 0.8:
+        return "improving"
+    if ratio > 1.2:
+        return "worsening"
+    return "stable"
+
+
+def get_multi_session_fault_trends(
+    db: Session,
+    user_id,
+    exercise: str = "squat",
+    max_sessions: int = 10,
+) -> dict:
+    """Aggregate fault occurrence across the last N sessions for trend analysis."""
+    session_rows = (
+        db.query(BiomechanicsSession)
+        .filter(
+            BiomechanicsSession.user_id == user_id,
+            BiomechanicsSession.exercise == exercise,
+            BiomechanicsSession.completed_at.isnot(None),
+            BiomechanicsSession.mean_session_score.isnot(None),
+        )
+        .order_by(BiomechanicsSession.started_at.desc())
+        .limit(max_sessions)
+        .all()
+    )
+    if not session_rows:
+        return {
+            "sessions_analyzed": 0,
+            "total_reps": 0,
+            "fault_profile": [],
+            "chronic_faults": [],
+        }
+
+    session_ids = [s.id for s in session_rows]
+    # Chronological order (oldest first) for trend computation
+    session_ids.reverse()
+
+    rep_rows = (
+        db.query(BiomechanicsRep)
+        .filter(BiomechanicsRep.session_id.in_(session_ids))
+        .all()
+    )
+
+    total_reps = len(rep_rows)
+    n_sessions = len(session_ids)
+    session_id_to_idx = {sid: idx for idx, sid in enumerate(session_ids)}
+
+    # fault_type -> {total, severity_sum, severity_n, per_session_counts[]}
+    accum: dict[str, dict] = {}
+
+    for rep in rep_rows:
+        s_idx = session_id_to_idx.get(rep.session_id)
+        if s_idx is None:
+            continue
+        for fault in rep.faults or []:
+            ft = fault.get("fault_type")
+            if not ft:
+                continue
+            if ft not in accum:
+                accum[ft] = {
+                    "total": 0,
+                    "severity_sum": 0.0,
+                    "severity_n": 0,
+                    "session_set": set(),
+                    "per_session": [0] * n_sessions,
+                }
+            entry = accum[ft]
+            entry["total"] += 1
+            entry["session_set"].add(s_idx)
+            entry["per_session"][s_idx] += 1
+            if fault.get("severity_score") is not None:
+                entry["severity_sum"] += fault["severity_score"]
+                entry["severity_n"] += 1
+
+    fault_profile = []
+    for ft, entry in accum.items():
+        sessions_present = len(entry["session_set"])
+        fault_profile.append({
+            "fault_type": ft,
+            "total_occurrences": entry["total"],
+            "sessions_present": sessions_present,
+            "session_frequency": round(sessions_present / n_sessions, 3),
+            "rep_frequency": round(entry["total"] / total_reps, 3) if total_reps else 0,
+            "avg_severity": (
+                round(entry["severity_sum"] / entry["severity_n"], 2)
+                if entry["severity_n"]
+                else None
+            ),
+            "trend": _compute_fault_trend(entry["per_session"]),
+        })
+
+    fault_profile.sort(key=lambda e: e["total_occurrences"], reverse=True)
+
+    chronic_faults = [
+        e["fault_type"]
+        for e in fault_profile
+        if e["session_frequency"] >= CHRONIC_FAULT_SESSION_THRESHOLD
+        and n_sessions >= CHRONIC_MIN_SESSIONS
+    ]
+
+    return {
+        "sessions_analyzed": n_sessions,
+        "total_reps": total_reps,
+        "fault_profile": fault_profile,
+        "chronic_faults": chronic_faults,
+    }

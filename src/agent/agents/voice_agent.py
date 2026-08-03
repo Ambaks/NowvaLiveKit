@@ -19,10 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 load_dotenv()
 
 from livekit import agents
-from livekit.agents import AgentSession, TurnHandlingOptions, AgentStateChangedEvent, MetricsCollectedEvent, metrics
+from livekit.agents import AgentSession, TurnHandlingOptions, AgentStateChangedEvent, MetricsCollectedEvent, inference, metrics
 from openai.types import Reasoning
 from livekit.agents.voice.room_io import RoomInputOptions
-from livekit.plugins import deepgram, openai, silero, cartesia, noise_cancellation
+from livekit.plugins import deepgram, openai, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from agent.core.agent_state import AgentState, set_state_notify_fd, PROJECT_ROOT
@@ -107,6 +107,23 @@ async def entrypoint(ctx: agents.JobContext):
         userdata.audio_cue_service = prewarmed_cue_svc
         logger.info("[NOVA] Prewarmed AudioCueService attached to userdata")
 
+    # Retrieve prewarmed WakeWordModel (if available)
+    prewarmed_ww = ctx.proc.userdata.get("wakeword_model")
+    if prewarmed_ww is not None:
+        userdata.wakeword_model = prewarmed_ww
+        logger.info("[NOVA] Prewarmed WakeWordModel attached to userdata")
+
+    # Best-effort bridge to the display page (idle orb / wake word indicator)
+    from agent.services.visual_bridge import VisualBridge
+    visual_bridge = VisualBridge()
+    visual_bridge.start()
+    userdata.visual_bridge = visual_bridge
+
+    async def close_visual_bridge():
+        await visual_bridge.aclose()
+
+    ctx.add_shutdown_callback(close_visual_bridge)
+
     # Initialize cascade pipeline components (STT + LLM + TTS)
     logger.info("[NOVA] Initializing cascade pipeline...")
     stt = deepgram.STT(
@@ -134,11 +151,12 @@ async def entrypoint(ctx: agents.JobContext):
             reasoning_effort="low",
         )
 
-    tts = cartesia.TTS(
+    # Cartesia via LiveKit Inference — billed to LiveKit Cloud credits,
+    # authenticated with LIVEKIT_API_KEY/SECRET (no Cartesia key needed).
+    tts = inference.TTS(
+        model="cartesia/sonic-3",
         voice=os.getenv("CARTESIA_VOICE_ID", "3e39e9a5-585c-4f5f-bac6-5e4905c51095"),
-        model="sonic-3",
         language="en",
-        speed=1.0,  # sonic-3 requires a float in [0.6, 2.0]
     )
     logger.info("[NOVA] Cascade pipeline initialized")
 
@@ -222,6 +240,7 @@ async def entrypoint(ctx: agents.JobContext):
     def _on_agent_state(ev):
         logger.info(f"[SESSION] Agent state: {ev.old_state} → {ev.new_state}")
         profiler.record("agent", "state_change", old=str(ev.old_state), new=str(ev.new_state))
+        visual_bridge.send_agent_state(str(ev.new_state))
 
     @session.on("user_state_changed")
     def _on_user_state(ev):
@@ -425,7 +444,7 @@ def prewarm(proc: agents.JobProcess):
     import concurrent.futures
     import time
 
-    logger.info("[PREWARM] Starting parallel pre-load (VAD + audio cues)...")
+    logger.info("[PREWARM] Starting parallel pre-load (VAD + audio cues + wake word)...")
     start = time.monotonic()
 
     def _load_vad():
@@ -435,9 +454,17 @@ def prewarm(proc: agents.JobProcess):
         from agent.services.audio_cue_service import AudioCueService
         return AudioCueService(session=None)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    def _load_wakeword():
+        model_path = os.environ.get("WAKE_WORD_MODEL_PATH", "models/hey_nova.onnx")
+        if Path(model_path).exists():
+            from livekit.wakeword import WakeWordModel
+            return WakeWordModel(models=[model_path])
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         vad_future = executor.submit(_load_vad)
         cue_future = executor.submit(_load_audio_cues)
+        ww_future = executor.submit(_load_wakeword)
 
         try:
             proc.userdata["vad"] = vad_future.result(timeout=10)
@@ -454,6 +481,16 @@ def prewarm(proc: agents.JobProcess):
             )
         except Exception as e:
             logger.warning(f"[PREWARM] Audio cue pre-load failed (will retry at session start): {e}")
+
+        try:
+            ww_model = ww_future.result(timeout=10)
+            if ww_model is not None:
+                proc.userdata["wakeword_model"] = ww_model
+                logger.info("[PREWARM] WakeWordModel pre-loaded")
+            else:
+                logger.info("[PREWARM] No wake word model found (will run without wake word detection)")
+        except Exception as e:
+            logger.warning(f"[PREWARM] WakeWordModel pre-load failed: {e}")
 
     elapsed = time.monotonic() - start
     logger.info(f"[PREWARM] Parallel pre-load complete in {elapsed:.3f}s")
