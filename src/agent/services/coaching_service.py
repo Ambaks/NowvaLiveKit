@@ -21,12 +21,19 @@ from agent.services.coaching_constants import (
     ADJUSTMENT_PARAM_LABELS,
     ADJUSTMENT_SYSTEM_PROMPT,
     COACHING_PERSONA,
+    CUE_TEXT_MAP,
 )
+from agent.services.visual_bridge import VisualBridge
 
 logger = logging.getLogger(__name__)
 
 COACHING_SOCKET_PATH = "/tmp/nowva_coaching.sock"
 LISTENER_RECONNECT_POLL_S = 1.0
+
+# Cue keys whose on-screen banner should read as praise, not correction
+POSITIVE_CUE_KEYS = frozenset(
+    {"good_rep", "great_depth", "strong", "clean", "perfect", "adjust_good"}
+)
 
 
 class CoachingService:
@@ -58,6 +65,7 @@ class CoachingService:
         self._coaching_ipc = None
         self._coaching_orchestrator = None
         self._audio_cue_service = audio_cue_service
+        self._visual_bridge: VisualBridge | None = None
 
         # Internal state
         self._listener_running = False
@@ -241,6 +249,10 @@ class CoachingService:
         self._init_orchestrator()
         asyncio.create_task(self._start_ipc_listener())
 
+        # Best-effort link to the display page for on-screen cue banners
+        self._visual_bridge = VisualBridge()
+        self._visual_bridge.start()
+
         self._started = True
         logger.info("[COACHING SERVICE] Started")
 
@@ -268,6 +280,9 @@ class CoachingService:
 
         self._stop_ipc_listener()
         self._audio_cue_service = None
+        if self._visual_bridge is not None:
+            await self._visual_bridge.aclose()
+            self._visual_bridge = None
         self._started = False
         logger.info("[COACHING SERVICE] Stopped")
 
@@ -1131,11 +1146,27 @@ class CoachingService:
     async def _play_cached_cue_audio(self, cue_key: str):
         """Play a cached cue through LiveKit's session.say()."""
         logger.info(f"[COACHING SERVICE] → Playing cached cue: {cue_key}")
+        self._publish_cue_banner(cue_key)
         if self._audio_cue_service:
             await self._audio_cue_service.play_cue(cue_key)
             logger.info(f"[COACHING SERVICE] ✓ Cached cue played: {cue_key}")
         else:
             logger.warning(f"[COACHING SERVICE] No audio_cue_service — cannot play: {cue_key}")
+
+    def _publish_cue_banner(self, cue_key: str) -> None:
+        """Mirror a spoken cue on the display page. Rep-count callouts are
+        skipped — the on-screen rep counter already ticks for those."""
+        if self._visual_bridge is None or cue_key.startswith("rep_"):
+            return
+        text = CUE_TEXT_MAP.get(cue_key)
+        if not text:
+            return
+        self._visual_bridge.send({
+            "type": "cue",
+            "key": cue_key,
+            "text": text,
+            "kind": "positive" if cue_key in POSITIVE_CUE_KEYS else "correction",
+        })
 
     def _get_cached_audio(self, cue_key: str) -> bool:
         """Check if cached audio exists for a cue key."""

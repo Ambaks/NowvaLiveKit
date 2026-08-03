@@ -23,6 +23,12 @@ class BaseNovaAgent(Agent):
         """Get current user ID from state"""
         return self.state.get_user().get("id")
 
+    def _publish_visual(self, event: dict) -> None:
+        """Best-effort publish to the display page; no-op without a bridge."""
+        bridge = getattr(self.userdata, "visual_bridge", None)
+        if bridge is not None:
+            bridge.send(event)
+
     @property
     def user_name(self) -> str:
         """Get current user name from state, defaults to 'there'"""

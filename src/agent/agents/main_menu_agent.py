@@ -27,6 +27,7 @@ class MainMenuAgent(BaseNovaAgent):
 
     async def on_enter(self):
         """Generate main menu greeting only on first visit or first login; silent otherwise."""
+        self._publish_visual({"type": "menu", "action": "show"})
         if self.state.is_first_time_main_menu():
             self.state.mark_main_menu_visited()
             self.state.save_state()
@@ -55,6 +56,7 @@ class MainMenuAgent(BaseNovaAgent):
         User might say: "start workout", "let's train", "I'm ready", "begin workout"
         """
         logger.info("[MAIN MENU] User requested to start workout")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "workout"})
 
         from db.schedule_utils import get_todays_workout
         from agent.core.workout_session import WorkoutSession
@@ -66,6 +68,7 @@ class MainMenuAgent(BaseNovaAgent):
 
             if not workout:
                 logger.info("[WORKOUT] No workout scheduled for today")
+                self._publish_visual({"type": "menu", "action": "show"})
                 return None, f"Tell the user: 'Hey you don't have a workout scheduled for today. Would you like to check your upcoming schedule or create a new program?' Keep it helpful and supportive."
 
             # Initialize workout session
@@ -105,6 +108,10 @@ class MainMenuAgent(BaseNovaAgent):
             logger.info("[STATE] Switched to workout mode - main.py will detect and start pose estimation")
 
             self._log_function_call("start_workout", {}, "handoff to WorkoutAgent")
+            self._publish_visual({
+                "type": "menu", "action": "prepare",
+                "label": f"Loading {exercise_name}",
+            })
 
             # Handoff to WorkoutAgent
             await self._suppress_turn_detection()
@@ -113,6 +120,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to load workout")
+            self._publish_visual({"type": "menu", "action": "show"})
             result = (None, f"Tell the user: 'Hmm, I'm having trouble loading your workout right now. Let's try again in a moment.' Keep it reassuring.")
             self._log_function_call("start_workout", {}, result)
             return result
@@ -151,6 +159,7 @@ class MainMenuAgent(BaseNovaAgent):
             f"[MAIN MENU] User wants quick exercise: {exercise_name} "
             f"(sets={sets}, reps={reps}, weight={weight}, rest={rest_seconds})"
         )
+        self._publish_visual({"type": "menu", "action": "select", "choice": "quick_exercise"})
         return CollectExerciseInfoTask(
             exercise_name=exercise_name,
             user_id=self.user_id,
@@ -311,6 +320,7 @@ class MainMenuAgent(BaseNovaAgent):
         Args:
             user_request: The user's full original request (enables smart parameter extraction)
         """
+        self._publish_visual({"type": "menu", "action": "select", "choice": "program"})
         logger.info("="*80)
         logger.info("[MAIN MENU] create_program() CALLED")
         logger.info(f"[MAIN MENU] User request: {user_request}")
@@ -347,6 +357,7 @@ class MainMenuAgent(BaseNovaAgent):
         User might say: "update my program", "modify my program", "change my program"
         """
         logger.info("[MAIN MENU] User requested to update program")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "program"})
 
         user_id = self.user_id
         db = SessionLocal()
@@ -397,6 +408,7 @@ class MainMenuAgent(BaseNovaAgent):
             days_ahead: Number of days to look ahead (default 7)
         """
         logger.info(f"[MAIN MENU] User requested schedule (next {days_ahead} days)")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "schedule"})
 
         from db.schedule_utils import get_upcoming_workouts
         from datetime import datetime
@@ -435,6 +447,7 @@ class MainMenuAgent(BaseNovaAgent):
             date_text: The day to view (e.g., "today", "tomorrow", "monday", "next friday")
         """
         logger.info(f"[MAIN MENU] User requested exercises for: {date_text}")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "schedule"})
 
         from db.schedule_utils import get_upcoming_workouts
         from datetime import datetime, date, timedelta
@@ -517,6 +530,7 @@ class MainMenuAgent(BaseNovaAgent):
             user_request: The user's complete original request about schedule changes
         """
         logger.info(f"[MAIN MENU] Schedule management requested: {user_request}")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "schedule"})
 
         intent = self._classify_schedule_intent(user_request)
         logger.info(f"[MAIN MENU] Classified schedule intent: {intent}")
@@ -577,6 +591,7 @@ class MainMenuAgent(BaseNovaAgent):
         Call this when the user wants to view their progress, stats, or history.
         """
         logger.info("[MAIN MENU] User requested to view progress")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "progress"})
         user_id = self.state.get("user.id")
         if not user_id:
             return None, (
@@ -624,6 +639,7 @@ class MainMenuAgent(BaseNovaAgent):
         Call this when the user wants to update their profile or settings.
         """
         logger.info("[MAIN MENU] User requested to update profile")
+        self._publish_visual({"type": "menu", "action": "select", "choice": "progress"})
         return None, f"The user wants to update their profile. Say something like: 'profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
 
     @function_tool
@@ -634,6 +650,7 @@ class MainMenuAgent(BaseNovaAgent):
         "quit", "close", "power off", "see you later"
         """
         logger.info("[MAIN MENU] User requested shutdown")
+        self._publish_visual({"type": "menu", "action": "hide"})
 
         # Signal main.py to initiate graceful shutdown
         self.state.set("shutdown_requested", True)

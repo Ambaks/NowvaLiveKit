@@ -536,6 +536,32 @@ class NowvaApp:
             "type": "boot", "label": label, "progress": round(progress, 3),
         })
 
+    def _publish_display(self, event: dict) -> None:
+        """Best-effort publish to the display page; no-op without a display."""
+        if self.display_server:
+            self.display_server.publish(event)
+
+    def _publish_workout_start(self) -> None:
+        """Push the workout config to the display so the HUD knows targets."""
+        exercise_name = self.state.get("workout.exercise_name") or DEFAULT_EXERCISE_NAME
+        total_sets, target_reps, weight = 0, 0, 0.0
+        session_data = self.state.get("workout.current_session") or {}
+        exercises = session_data.get("exercises") or []
+        if exercises:
+            sets = exercises[0].get("sets") or []
+            total_sets = len(sets)
+            if sets:
+                target_reps = sets[0].get("target_reps") or 0
+                weight = sets[0].get("target_weight") or 0.0
+        self._publish_display({
+            "type": "workout",
+            "action": "start",
+            "exercise": exercise_name,
+            "total_sets": total_sets,
+            "target_reps": target_reps,
+            "weight_lbs": weight,
+        })
+
     # Markers in the voice agent's stdout mapped to boot milestones.
     # Matched by substring in _pump_agent_output as the agent initializes.
     _AGENT_BOOT_MARKERS = (
@@ -573,8 +599,12 @@ class NowvaApp:
             if msg_type == "rest_start":
                 rest_sec = message.get("rest_seconds", 30)
                 print(f"[COACHING IPC] Received rest_start ({rest_sec}s) from voice agent")
+                self._publish_display({
+                    "type": "rest", "action": "start", "seconds": rest_sec,
+                })
             elif msg_type == "workout_complete":
                 print("[COACHING IPC] Received workout_complete from voice agent")
+                self._publish_display({"type": "workout", "action": "complete"})
             # Snapshot the reference — this runs on the coaching IPC thread
             # while the main loop can nil self.ipc_server during shutdown
             pose_ipc = self.ipc_server
@@ -922,6 +952,7 @@ class NowvaApp:
                                 print(f"[BIOMECH] Calibration rep {rep}/{total}")
                             elif msg_type == 'calibration_complete':
                                 print(f"[BIOMECH] Calibration complete for {message.get('movement_pattern')}")
+                                self._publish_workout_start()
                             elif msg_type == 'diagnosis_complete':
                                 print(f"[BIOMECH] Diagnosis complete — confidence={message.get('diagnosis', {}).get('confidence', 0):.2f}")
                             elif msg_type == 'assessment_rep':
@@ -931,6 +962,8 @@ class NowvaApp:
                             elif msg_type == 'assessment_result':
                                 passed = message.get('passed', False)
                                 print(f"[BIOMECH] Assessment result: {'PASSED' if passed else 'NEEDS CORRECTION'} (round {message.get('round', 1)})")
+                                if passed:
+                                    self._publish_workout_start()
                             elif msg_type == 'pipeline_status':
                                 print(f"[BIOMECH] Pipeline: {message.get('status')}")
                             # --- Legacy / backward-compatible types ---
@@ -946,6 +979,45 @@ class NowvaApp:
                             elif msg_type == 'error':
                                 value = message.get('value')
                                 print(f"[IPC] Error: {value}")
+
+                            # --- Display page events (best-effort) ---
+                            if msg_type == 'rep_complete':
+                                self._publish_display({
+                                    "type": "rep",
+                                    "rep_number": message.get("rep_number"),
+                                    "set_number": message.get("set_number"),
+                                    "depth_class_name": message.get("depth_class_name")
+                                        or message.get("depth_category", ""),
+                                    "is_clean": message.get("is_clean", True),
+                                    "faults": message.get("faults_in_rep", []),
+                                })
+                            elif msg_type == 'shallow_rep':
+                                self._publish_display({
+                                    "type": "shallow_rep",
+                                    "depth_class_name": message.get("depth_class_name", ""),
+                                })
+                            elif msg_type == 'set_complete':
+                                self._publish_display({
+                                    "type": "set_summary",
+                                    "set_number": message.get("set_number"),
+                                    "total_reps": message.get("total_reps"),
+                                    "clean_reps": message.get("clean_reps"),
+                                    "avg_depth": message.get("avg_depth"),
+                                    "depth_consistency": message.get("depth_consistency"),
+                                    "fault_summary": message.get("fault_summary", {}),
+                                })
+                            elif msg_type == 'diagnosis_complete':
+                                scoring = message.get("scoring") or {}
+                                self._publish_display({
+                                    "type": "set_scores",
+                                    "set_number": message.get("set_number"),
+                                    "mean_score": scoring.get("mean_score"),
+                                    "per_dimension": scoring.get("per_dimension", {}),
+                                    "best_rep": scoring.get("best_rep"),
+                                    "worst_rep": scoring.get("worst_rep"),
+                                })
+                            elif msg_type == 'rest_complete':
+                                self._publish_display({"type": "rest", "action": "end"})
 
                             # Record IPC messages for profiler
                             if msg_type and msg_type != 'frame_data':
@@ -1043,12 +1115,18 @@ class NowvaApp:
                                 print(f"[PRELOAD] Failed to send start_capture: {e}")
 
                     pose_running = True
+                    # In calibration/assessment mode the working sets start
+                    # later — the HUD is armed on calibration_complete /
+                    # assessment_result instead of here.
+                    if not self.state.get("calibration.active"):
+                        self._publish_workout_start()
                     print("[POSE] Pose estimation started" if not getattr(self, 'simulate_mode', False) else "[SIMULATE] IPC servers ready — waiting for simulator")
 
                 elif current_mode != "workout" and pose_running:
                     print("\n" + "="*50)
                     print("ENDING WORKOUT SESSION")
                     print("="*50)
+                    self._publish_display({"type": "workout", "action": "end"})
                     self._stop_pose_process()
                     if self.coaching_ipc:
                         self.coaching_ipc.stop()

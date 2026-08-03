@@ -4,13 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nowva</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&display=swap">
 <style>
   :root {
     --bg: #09090e;
     --accent: #a78bfa;
+    --accent-deep: #6d28d9;
     --listen: #22d3ee;
+    --warn: #fbbf24;
     --ink: #f6f5f8;
     --ink-dim: #928fa0;
+    --ink-faint: #5d5a6b;
+    --glass: rgba(15, 15, 22, .72);
+    --hairline: rgba(167, 139, 250, .18);
+    --font-display: "Sora", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-num: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
@@ -57,7 +67,8 @@
     align-items: center; justify-content: center; gap: 30px;
     transition: opacity .5s ease;
   }
-  body.pose #hero, body.demo #hero { opacity: 0; pointer-events: none; }
+  body.pose #hero, body.demo #hero, body.complete #hero,
+  body.menu #hero, body.setup #hero, body.preparing #hero { opacity: 0; pointer-events: none; }
   #hero .sphere-box {
     position: relative;
     width: min(46vmin, 420px); height: min(46vmin, 420px);
@@ -115,7 +126,7 @@
     color: var(--ink-dim); font-variant-numeric: tabular-nums;
   }
 
-  /* ---------- corner widget (workout) ---------- */
+  /* ---------- corner widget (voice orb) ---------- */
   #widget {
     position: fixed; right: 28px; bottom: 28px; z-index: 3;
     display: flex; align-items: center; gap: 14px;
@@ -123,18 +134,638 @@
     pointer-events: none;
     transition: opacity .35s ease, transform .35s cubic-bezier(.34,1.56,.64,1);
   }
-  body.pose.widget-on #widget { opacity: 1; transform: translateY(0) scale(1); }
+  body.pose.widget-on #widget, body.resting.widget-on #widget {
+    opacity: 1; transform: translateY(0) scale(1);
+  }
   #widget .sphere-box { position: relative; width: 96px; height: 96px; }
   #widget .label {
     font-size: 12px; letter-spacing: .22em; text-transform: uppercase;
     color: var(--ink-dim); font-weight: 600;
-    background: rgba(15,15,22,.72); border: 1px solid rgba(167,139,250,.18);
+    background: var(--glass); border: 1px solid var(--hairline);
     padding: 8px 14px; border-radius: 999px;
     backdrop-filter: blur(8px);
   }
   body[data-wake="detected"] #widget .label,
   body[data-agent="listening"] #widget .label { color: var(--listen); }
   body[data-agent="speaking"] #widget .label { color: var(--accent); }
+
+  /* ================= workout HUD ================= */
+
+  #hud {
+    position: fixed; inset: 0; z-index: 2; pointer-events: none;
+    opacity: 0; transition: opacity .5s ease;
+  }
+  body.workout.pose:not(.resting):not(.complete) #hud { opacity: 1; }
+
+  /* legibility scrims over the pose feed */
+  #hud .scrim-top {
+    position: absolute; left: 0; right: 0; top: 0; height: 22vh;
+    background: linear-gradient(180deg, rgba(9,9,14,.62), transparent);
+  }
+  #hud .scrim-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 30vh;
+    background: linear-gradient(0deg, rgba(9,9,14,.72), transparent);
+  }
+
+  /* --- session pill, top-left --- */
+  #session-pill {
+    position: absolute; left: 32px; top: 30px;
+    display: flex; align-items: center; gap: 14px;
+    background: var(--glass); border: 1px solid var(--hairline);
+    border-radius: 999px; padding: 12px 22px 12px 18px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 10px 34px rgba(0,0,0,.35);
+  }
+  #session-pill .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--listen));
+    box-shadow: 0 0 10px rgba(167,139,250,.8);
+    animation: dot-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes dot-pulse { 50% { transform: scale(.72); opacity: .7; } }
+  #session-pill .exercise {
+    font-family: var(--font-display);
+    font-size: 15px; font-weight: 600; letter-spacing: .04em;
+  }
+  #session-pill .sep { width: 1px; height: 18px; background: var(--hairline); }
+  #session-pill .meta {
+    font-size: 11px; letter-spacing: .26em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  #session-pill .meta b { color: var(--accent); font-weight: 700; }
+
+  /* --- rep counter, bottom-left --- */
+  #rep-hud {
+    position: absolute; left: 40px; bottom: 34px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  #rep-hud .eyebrow {
+    font-size: 11px; letter-spacing: .34em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; margin-left: 6px;
+  }
+  #rep-line { display: flex; align-items: baseline; gap: 10px; }
+  #rep-now {
+    font-family: var(--font-num);
+    font-size: min(17vh, 150px); font-weight: 750; line-height: .95;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+    background: linear-gradient(180deg, #ffffff 30%, #c9bfec 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 4px 26px rgba(109,40,217,.45));
+  }
+  #rep-now.pop { animation: rep-pop .55s cubic-bezier(.22,1.4,.36,1); }
+  @keyframes rep-pop {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.16); filter: drop-shadow(0 4px 34px rgba(167,139,250,.95)); }
+    100% { transform: scale(1); }
+  }
+  #rep-target {
+    font-family: var(--font-num);
+    font-size: min(5.2vh, 44px); font-weight: 600;
+    color: var(--ink-faint); font-variant-numeric: tabular-nums;
+  }
+
+  /* --- rep receipt pill --- */
+  #receipt {
+    position: absolute; left: 44px; bottom: calc(34px + min(17vh,150px) + 58px);
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--glass); border: 1px solid var(--hairline);
+    border-radius: 999px; padding: 10px 20px;
+    backdrop-filter: blur(12px);
+    font-size: 13px; font-weight: 700;
+    letter-spacing: .22em; text-transform: uppercase;
+    opacity: 0; transform: translateY(12px);
+  }
+  #receipt.show { animation: receipt-cycle 2.8s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes receipt-cycle {
+    0%   { opacity: 0; transform: translateY(12px) scale(.92); }
+    9%   { opacity: 1; transform: translateY(0) scale(1); }
+    82%  { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-8px); }
+  }
+  #receipt .tick { font-size: 14px; }
+  #receipt.clean { color: var(--listen); border-color: rgba(34,211,238,.4);
+    box-shadow: 0 0 26px rgba(34,211,238,.16); }
+  #receipt.ok { color: var(--accent); border-color: rgba(167,139,250,.4); }
+  #receipt.warn { color: var(--warn); border-color: rgba(251,191,36,.4);
+    box-shadow: 0 0 26px rgba(251,191,36,.14); }
+
+  /* --- cue banner, lower center --- */
+  #cue {
+    position: fixed; left: 50%; bottom: 17vh; transform: translateX(-50%);
+    z-index: 3; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    opacity: 0;
+  }
+  #cue.show { animation: cue-cycle 3.4s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes cue-cycle {
+    0%   { opacity: 0; transform: translateX(-50%) translateY(26px); filter: blur(8px); }
+    8%   { opacity: 1; transform: translateX(-50%) translateY(0); filter: blur(0); }
+    86%  { opacity: 1; }
+    100% { opacity: 0; transform: translateX(-50%) translateY(-14px); }
+  }
+  #cue .eyebrow {
+    font-size: 12px; letter-spacing: .4em; text-transform: uppercase;
+    font-weight: 700; color: var(--accent);
+    text-shadow: 0 1px 8px rgba(9,9,14,.95), 0 0 18px rgba(9,9,14,.9);
+  }
+  #cue.positive .eyebrow { color: var(--listen); }
+  #cue .text {
+    font-family: var(--font-display);
+    font-size: min(6.4vh, 58px); font-weight: 700; letter-spacing: -.01em;
+    text-align: center; max-width: 80vw;
+    text-shadow: 0 2px 30px rgba(9,9,14,.9), 0 0 60px rgba(109,40,217,.5);
+  }
+  #cue.positive .text { text-shadow: 0 2px 30px rgba(9,9,14,.9), 0 0 60px rgba(34,211,238,.4); }
+  #cue .bar {
+    height: 3px; width: 72px; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent-deep), var(--accent), var(--listen));
+    box-shadow: 0 0 16px rgba(167,139,250,.7);
+  }
+  #cue.show .bar { animation: cue-bar 3.4s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes cue-bar { 0% { width: 0; } 12% { width: 72px; } 100% { width: 72px; } }
+
+  /* ================= rest overlay ================= */
+
+  #rest {
+    position: fixed; inset: 0; z-index: 5;
+    display: none;
+    align-items: center; justify-content: center; gap: min(7vw, 110px);
+    padding: 6vmin;
+    background:
+      radial-gradient(58vw 58vw at 12% 8%, rgba(109,40,217,.16), transparent 62%),
+      radial-gradient(48vw 48vw at 92% 94%, rgba(34,211,238,.07), transparent 62%),
+      rgba(9,9,14,.93);
+    backdrop-filter: blur(14px);
+  }
+  body.resting #rest { display: flex; }
+
+  #rest .col-timer {
+    display: flex; flex-direction: column; align-items: center; gap: 26px;
+    animation: rest-rise .7s cubic-bezier(.22,1,.36,1) both;
+  }
+  @keyframes rest-rise {
+    from { opacity: 0; transform: translateY(26px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  #ring-box { position: relative; width: min(38vh, 320px); height: min(38vh, 320px); }
+  #ring-box svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  #ring-track { fill: none; stroke: rgba(167,139,250,.13); stroke-width: 7; }
+  #ring-fill {
+    fill: none; stroke: url(#ring-grad); stroke-width: 7; stroke-linecap: round;
+    filter: drop-shadow(0 0 10px rgba(167,139,250,.55));
+    transition: stroke-dashoffset .5s linear;
+  }
+  #ring-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px;
+  }
+  #ring-center .eyebrow {
+    font-size: 12px; letter-spacing: .42em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; margin-left: .42em;
+  }
+  #rest-time {
+    font-family: var(--font-num);
+    font-size: min(9.4vh, 78px); font-weight: 250; letter-spacing: .01em;
+    font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  #rest-next {
+    font-size: 12px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  #rest-next b { color: var(--accent); font-weight: 700; }
+
+  /* --- set report card --- */
+  #report {
+    width: min(560px, 44vw);
+    border-radius: 26px; padding: 34px 38px 30px;
+    background: linear-gradient(158deg, rgba(32,26,56,.82), rgba(14,13,23,.92) 58%);
+    border: 1px solid var(--hairline);
+    backdrop-filter: blur(20px);
+    box-shadow: 0 30px 80px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+    position: relative; overflow: hidden;
+    animation: rest-rise .7s cubic-bezier(.22,1,.36,1) .12s both;
+  }
+  #report::before {  /* luminous top edge */
+    content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(167,139,250,.6), rgba(34,211,238,.4), transparent);
+  }
+
+  #report .head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  #report .head .eyebrow {
+    font-size: 11px; letter-spacing: .38em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700; margin-bottom: 8px;
+  }
+  #report .head h2 {
+    font-family: var(--font-display);
+    font-size: 25px; font-weight: 700; letter-spacing: -.01em;
+  }
+  #score-hero { text-align: right; }
+  #score-hero .num {
+    font-family: var(--font-num);
+    font-size: 52px; font-weight: 750; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(180deg, #fff 30%, #b9a8ef);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  #score-hero .lbl {
+    font-size: 10px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; margin-top: 4px;
+  }
+
+  #report .tiles {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    margin-bottom: 26px;
+  }
+  #report .tile {
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 15px; padding: 13px 8px 11px;
+    text-align: center;
+  }
+  #report .tile .v {
+    font-family: var(--font-num);
+    font-size: 23px; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  #report .tile .v small { font-size: 13px; font-weight: 600; color: var(--ink-dim); }
+  #report .tile .k {
+    font-size: 9px; letter-spacing: .22em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; margin-top: 5px;
+  }
+
+  #scores { display: flex; flex-direction: column; gap: 13px; }
+  .score-row {
+    display: grid; grid-template-columns: 118px 1fr 34px 58px;
+    align-items: center; gap: 14px;
+  }
+  .score-row .name {
+    font-size: 12px; font-weight: 600; letter-spacing: .05em;
+    color: var(--ink-dim);
+  }
+  .score-row .track {
+    height: 6px; border-radius: 999px;
+    background: rgba(167,139,250,.13); overflow: hidden;
+  }
+  .score-row .fill {
+    height: 100%; width: 0; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+    box-shadow: 0 0 10px rgba(167,139,250,.5);
+    transition: width 1s cubic-bezier(.22,1,.36,1);
+  }
+  .score-row .val {
+    font-size: 14px; font-weight: 700; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .score-row .delta {
+    font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .score-row .delta.up { color: var(--listen); }
+  .score-row .delta.down { color: var(--warn); }
+  .score-row .delta.flat { color: var(--ink-faint); }
+
+  #report .focus {
+    margin-top: 26px; padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,.07);
+    display: flex; align-items: baseline; gap: 16px;
+  }
+  #report .focus .k {
+    font-size: 10px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--listen); font-weight: 700; white-space: nowrap;
+  }
+  #report .focus .t {
+    font-family: var(--font-display);
+    font-size: 17px; font-weight: 600;
+  }
+
+  /* hide empty report gracefully until data lands */
+  #report.empty .tiles, #report.empty #scores, #report.empty .focus { opacity: .25; }
+
+  /* ================= workout complete ================= */
+
+  #complete {
+    position: fixed; inset: 0; z-index: 5;
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 30px;
+    background:
+      radial-gradient(60vw 60vw at 50% 118%, rgba(109,40,217,.24), transparent 64%),
+      var(--bg);
+  }
+  body.complete #complete { display: flex; }
+  #complete .halo {
+    position: absolute; width: min(74vh, 680px); height: min(74vh, 680px);
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, rgba(109,40,217,.0), rgba(167,139,250,.2),
+      rgba(34,211,238,.16), rgba(109,40,217,.0));
+    filter: blur(46px);
+    animation: halo-spin 14s linear infinite;
+  }
+  @keyframes halo-spin { to { transform: rotate(360deg); } }
+  #complete > * { position: relative; }
+  #complete .eyebrow {
+    font-size: 12px; letter-spacing: .46em; text-transform: uppercase;
+    color: var(--listen); font-weight: 700; margin-left: .46em;
+    animation: rest-rise .7s cubic-bezier(.22,1,.36,1) both;
+  }
+  #complete h1 {
+    font-family: var(--font-display);
+    font-size: min(9vh, 74px); font-weight: 800; letter-spacing: -.02em;
+    text-align: center;
+    background: linear-gradient(180deg, #fff 25%, #b9a8ef);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: rest-rise .7s cubic-bezier(.22,1,.36,1) .1s both;
+  }
+  #complete .sub {
+    font-size: 14px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600;
+    animation: rest-rise .7s cubic-bezier(.22,1,.36,1) .18s both;
+  }
+  #complete .stats {
+    display: flex; gap: 12px; margin-top: 14px;
+    animation: rest-rise .7s cubic-bezier(.22,1,.36,1) .26s both;
+  }
+  #complete .stat {
+    min-width: 128px; text-align: center;
+    background: rgba(255,255,255,.045);
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 17px; padding: 18px 20px 15px;
+    backdrop-filter: blur(10px);
+  }
+  #complete .stat .v {
+    font-family: var(--font-num);
+    font-size: 34px; font-weight: 750; font-variant-numeric: tabular-nums;
+  }
+  #complete .stat .k {
+    font-size: 10px; letter-spacing: .26em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; margin-top: 6px;
+  }
+
+  /* ================= main menu ================= */
+
+  #menu {
+    position: fixed; inset: 0; z-index: 2;
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 3vh;
+    padding: 5vh 4vw;
+  }
+  body.menu:not(.pose):not(.demo) #menu { display: flex; }
+
+  @keyframes menu-rise {
+    from { opacity: 0; transform: translateY(26px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  #menu .orb-box {
+    position: relative;
+    width: min(23vh, 220px); height: min(23vh, 220px);
+    animation: menu-rise .8s cubic-bezier(.22,1,.36,1) both;
+  }
+  #menu .orb-box .logo {
+    position: absolute; inset: 0; margin: auto; width: 32%;
+    filter: drop-shadow(0 2px 12px rgba(0,0,0,.5));
+    pointer-events: none;
+  }
+
+  #menu .eyebrow {
+    font-size: 12px; letter-spacing: .44em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; margin-left: .44em;
+    animation: menu-rise .8s cubic-bezier(.22,1,.36,1) .08s both;
+  }
+  #menu h1 {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4.8vh, 46px); font-weight: 700;
+    letter-spacing: -.015em; text-align: center;
+    background: linear-gradient(180deg, #fff 30%, #b9a8ef);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: menu-rise .8s cubic-bezier(.22,1,.36,1) .14s both;
+  }
+
+  #menu .cards {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px;
+    width: min(1540px, 94vw); margin-top: 1.2vh;
+  }
+  .menu-card {
+    position: relative; border-radius: 22px; overflow: hidden;
+    transition: transform .55s cubic-bezier(.22,1,.36,1),
+                opacity .55s ease, filter .55s ease;
+    animation: menu-rise .8s cubic-bezier(.22,1,.36,1) both;
+  }
+  .menu-card:nth-child(1) { animation-delay: .22s; }
+  .menu-card:nth-child(2) { animation-delay: .30s; }
+  .menu-card:nth-child(3) { animation-delay: .38s; }
+  .menu-card:nth-child(4) { animation-delay: .46s; }
+
+  /* rotating gradient ring, revealed on selection through the 1px inset */
+  .menu-card .ring {
+    position: absolute; inset: -60%; opacity: 0;
+    background: conic-gradient(from 0deg,
+      transparent 0 62%, rgba(109,40,217,.9) 76%,
+      rgba(167,139,250,1) 86%, rgba(34,211,238,.95) 94%, transparent);
+    animation: ring-spin 1.5s linear infinite;
+    transition: opacity .4s ease;
+  }
+  @keyframes ring-spin { to { transform: rotate(360deg); } }
+  .menu-card .inner {
+    position: absolute; inset: 1px; border-radius: 21px;
+    background: linear-gradient(165deg, rgba(31,26,54,.9), rgba(13,12,22,.96) 62%);
+    border: 1px solid var(--hairline);
+    backdrop-filter: blur(16px);
+    padding: 26px 24px 22px;
+    display: flex; flex-direction: column; gap: 12px;
+    transition: border-color .4s ease;
+  }
+  .menu-card { aspect-ratio: auto; min-height: 218px; }
+  .menu-card .icon { width: 38px; height: 38px; color: var(--accent); }
+  .menu-card .icon svg { width: 100%; height: 100%; }
+  .menu-card h3 {
+    font-family: var(--font-display);
+    font-size: 19px; font-weight: 600; letter-spacing: .01em;
+  }
+  .menu-card p {
+    font-size: 13px; line-height: 1.55; color: var(--ink-dim);
+  }
+  .menu-card .say {
+    margin-top: auto; display: flex; align-items: center; gap: 9px;
+    font-size: 12.5px; font-weight: 600; color: rgba(34,211,238,.9);
+  }
+  .menu-card .say .mic {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--listen);
+    box-shadow: 0 0 8px rgba(34,211,238,.9);
+    animation: dot-pulse 2.2s ease-in-out infinite;
+  }
+  .menu-card .say .q { font-style: italic; font-weight: 500; }
+
+  #menu.selecting .menu-card:not(.selected) {
+    opacity: .18; transform: scale(.955); filter: blur(2px) saturate(.5);
+  }
+  .menu-card.selected {
+    transform: scale(1.055); z-index: 1;
+  }
+  .menu-card.selected .ring { opacity: 1; }
+  .menu-card.selected .inner { border-color: transparent; }
+  .menu-card.selected {
+    box-shadow: 0 26px 80px rgba(109,40,217,.4), 0 0 44px rgba(167,139,250,.28);
+  }
+
+  #menu .listen-hint {
+    font-size: 11px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; margin-top: 1vh;
+    animation: menu-rise .8s cubic-bezier(.22,1,.36,1) .55s both;
+  }
+
+  /* ================= quick exercise setup ================= */
+
+  #setup {
+    position: fixed; inset: 0; z-index: 2;
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 3.6vh;
+    padding: 6vh 6vw;
+  }
+  body.setup:not(.pose):not(.demo) #setup { display: flex; }
+
+  #setup .eyebrow {
+    font-size: 12px; letter-spacing: .44em; text-transform: uppercase;
+    color: var(--listen); font-weight: 700; margin-left: .44em;
+    animation: menu-rise .7s cubic-bezier(.22,1,.36,1) both;
+  }
+  #setup h1 {
+    font-family: var(--font-display);
+    font-size: clamp(40px, 7.4vh, 68px); font-weight: 800;
+    letter-spacing: -.02em; text-align: center;
+    background: linear-gradient(180deg, #fff 28%, #b9a8ef);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: menu-rise .7s cubic-bezier(.22,1,.36,1) .08s both;
+  }
+
+  #setup .fields {
+    display: grid; grid-template-columns: repeat(4, minmax(172px, 216px));
+    gap: 16px;
+    animation: menu-rise .7s cubic-bezier(.22,1,.36,1) .16s both;
+  }
+  .field {
+    position: relative; border-radius: 20px;
+    padding: 26px 16px 20px; text-align: center; min-height: 132px;
+    background: linear-gradient(165deg, rgba(30,25,52,.72), rgba(13,12,22,.9) 62%);
+    border: 1px solid var(--hairline);
+    backdrop-filter: blur(14px);
+    display: flex; flex-direction: column; justify-content: center; gap: 9px;
+    transition: border-color .5s ease, box-shadow .5s ease;
+  }
+  .field .k {
+    font-size: 10px; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600; order: 2;
+  }
+  .field .v {
+    font-family: var(--font-num);
+    font-size: 42px; font-weight: 750; line-height: 1;
+    font-variant-numeric: tabular-nums; order: 1;
+  }
+  .field .v small { font-size: 19px; font-weight: 600; color: var(--ink-dim); }
+  .field.pending { border-style: dashed; border-color: rgba(167,139,250,.32); }
+  .field.pending .v { display: none; }
+  .field .dots { display: none; order: 1; height: 42px;
+    align-items: center; justify-content: center; gap: 7px; }
+  .field.pending .dots { display: flex; }
+  .field .dots span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent); opacity: .3;
+    animation: dot-listen 1.5s ease-in-out infinite;
+  }
+  .field .dots span:nth-child(2) { animation-delay: .22s; }
+  .field .dots span:nth-child(3) { animation-delay: .44s; }
+  @keyframes dot-listen {
+    35% { opacity: 1; transform: translateY(-5px);
+          box-shadow: 0 0 10px rgba(167,139,250,.8); }
+  }
+  .field.filled { border-color: rgba(34,211,238,.34); }
+  .field.filled::after {
+    content: ""; position: absolute; top: 13px; right: 13px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--listen); box-shadow: 0 0 10px rgba(34,211,238,.9);
+  }
+  .field.pop { animation: field-pop .65s cubic-bezier(.22,1.4,.36,1); }
+  @keyframes field-pop {
+    0% { transform: scale(.94); box-shadow: 0 0 0 rgba(34,211,238,0); }
+    40% { transform: scale(1.06); box-shadow: 0 0 34px rgba(34,211,238,.35); }
+    100% { transform: scale(1); }
+  }
+
+  #setup .hint {
+    font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-dim); font-weight: 600;
+    display: flex; align-items: center; gap: 10px;
+    animation: menu-rise .7s cubic-bezier(.22,1,.36,1) .24s both;
+  }
+  #setup .hint .mic {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--listen); box-shadow: 0 0 8px rgba(34,211,238,.9);
+    animation: dot-pulse 2.2s ease-in-out infinite;
+  }
+
+  /* ================= preparing (transition) ================= */
+
+  #prepare {
+    position: fixed; inset: 0; z-index: 2;
+    display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 30px;
+  }
+  body.preparing:not(.pose):not(.demo) #prepare { display: flex; }
+
+  #prepare .pulse {
+    position: relative; width: 130px; height: 130px;
+    animation: menu-rise .6s cubic-bezier(.22,1,.36,1) both;
+  }
+  #prepare .pulse .core {
+    position: absolute; inset: 18px; border-radius: 50%;
+    background: radial-gradient(circle at 36% 32%,
+      rgba(167,139,250,.85), rgba(109,40,217,.55) 55%, rgba(26,14,62,.9));
+    box-shadow: 0 0 46px rgba(139,92,246,.5);
+    animation: core-breathe 2.2s ease-in-out infinite;
+  }
+  @keyframes core-breathe { 50% { transform: scale(.88); } }
+  #prepare .pulse .orbit {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0 68%,
+      rgba(167,139,250,.9) 84%, rgba(34,211,238,.9) 96%, transparent);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+    animation: ring-spin 1.3s linear infinite;
+  }
+  #prepare .label {
+    font-family: var(--font-display);
+    font-size: 21px; font-weight: 600; letter-spacing: .05em;
+    background: linear-gradient(90deg, #7f7a92 20%, #f6f5f8 50%, #7f7a92 80%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 2.4s linear infinite,
+               menu-rise .6s cubic-bezier(.22,1,.36,1) .08s both;
+  }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  #prepare .bar {
+    position: relative; width: 300px; height: 3px;
+    background: rgba(167,139,250,.14); border-radius: 999px; overflow: hidden;
+    animation: menu-rise .6s cubic-bezier(.22,1,.36,1) .14s both;
+  }
+  #prepare .bar::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 40%;
+    left: -40%; border-radius: 999px;
+    background: linear-gradient(90deg, transparent, #6d28d9, #a78bfa, #22d3ee, transparent);
+    animation: prep-sweep 1.5s ease-in-out infinite;
+  }
+  @keyframes prep-sweep { to { left: 100%; } }
 
   /* ---------- demo overlay ---------- */
   #demo-frame {
@@ -155,7 +786,9 @@
     transition: opacity 2.8s ease .3s, transform 3.4s cubic-bezier(.22,.61,.36,1) .3s;
   }
   body.revealed #hero { opacity: 1; transform: scale(1); }
-  body.revealed.pose #hero, body.revealed.demo #hero { opacity: 0; }
+  body.revealed.pose #hero, body.revealed.demo #hero,
+  body.revealed.complete #hero, body.revealed.menu #hero,
+  body.revealed.setup #hero, body.revealed.preparing #hero { opacity: 0; }
 
   /* ---------- connection hint ---------- */
   #conn {
@@ -186,10 +819,171 @@
     </div>
   </div>
 
+  <!-- ============ workout HUD ============ -->
+  <div id="hud">
+    <div class="scrim-top"></div>
+    <div class="scrim-bottom"></div>
+
+    <div id="session-pill">
+      <div class="dot"></div>
+      <span class="exercise" id="pill-exercise">Barbell Back Squat</span>
+      <span class="sep"></span>
+      <span class="meta">Set <b id="pill-set">1</b> / <span id="pill-sets">3</span></span>
+      <span class="sep" id="pill-weight-sep"></span>
+      <span class="meta" id="pill-weight">185 lb</span>
+    </div>
+
+    <div id="receipt"><span class="tick" id="receipt-tick">●</span><span id="receipt-text"></span></div>
+
+    <div id="rep-hud">
+      <span class="eyebrow">Reps</span>
+      <div id="rep-line">
+        <span id="rep-now">0</span>
+        <span id="rep-target">/ 8</span>
+      </div>
+    </div>
+  </div>
+
   <div id="widget">
     <div class="label" id="widget-label">Listening</div>
     <div class="sphere-box">
       <canvas class="sphere" id="widget-sphere"></canvas>
+    </div>
+  </div>
+
+  <!-- ============ main menu ============ -->
+  <div id="menu">
+    <div class="orb-box">
+      <canvas class="sphere" id="menu-sphere"></canvas>
+      <img class="logo" src="/logo.png" alt="">
+    </div>
+    <span class="eyebrow" id="menu-eyebrow">Main menu</span>
+    <h1>What are we doing today?</h1>
+    <div class="cards">
+      <div class="menu-card" data-id="workout">
+        <div class="ring"></div>
+        <div class="inner">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2.5 12h2M19.5 12h2M7 12h10"/><rect x="4.5" y="7.5" width="2.5" height="9" rx="1"/><rect x="17" y="7.5" width="2.5" height="9" rx="1"/></svg></div>
+          <h3>Today's Workout</h3>
+          <p>Your scheduled session — Nova watches every rep and coaches your form live.</p>
+          <div class="say"><span class="mic"></span><span class="q">"Let's train"</span></div>
+        </div>
+      </div>
+      <div class="menu-card" data-id="quick_exercise">
+        <div class="ring"></div>
+        <div class="inner">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M13 2.5 4.5 13.5H11L10 21.5l8.5-11H12l1-8Z"/></svg></div>
+          <h3>Quick Exercise</h3>
+          <p>One lift, full analysis. Pick a movement and get coached set by set.</p>
+          <div class="say"><span class="mic"></span><span class="q">"I want to squat"</span></div>
+        </div>
+      </div>
+      <div class="menu-card" data-id="program">
+        <div class="ring"></div>
+        <div class="inner">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3 3 8l9 5 9-5-9-5Z"/><path d="m3 13 9 5 9-5"/></svg></div>
+          <h3>Programs</h3>
+          <p>Create a training plan built around your goals, or update the one you have.</p>
+          <div class="say"><span class="mic"></span><span class="q">"Build me a program"</span></div>
+        </div>
+      </div>
+      <div class="menu-card" data-id="insight">
+        <div class="ring"></div>
+        <div class="inner">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 20.5v-4M9.2 20.5v-8M14.8 20.5V7.5M20.5 20.5v-17"/></svg></div>
+          <h3>Progress &amp; Schedule</h3>
+          <p>Your form trends, streaks, and what's coming up this week.</p>
+          <div class="say"><span class="mic"></span><span class="q">"How am I doing?"</span></div>
+        </div>
+      </div>
+    </div>
+    <span class="listen-hint">Just say it — Nova is listening</span>
+  </div>
+
+  <!-- ============ quick exercise setup ============ -->
+  <div id="setup">
+    <span class="eyebrow">Quick exercise</span>
+    <h1 id="setup-exercise">Back Squat</h1>
+    <div class="fields" id="setup-fields"></div>
+    <div class="hint"><span class="mic"></span><span id="setup-hint">Tell Nova the rest</span></div>
+  </div>
+
+  <!-- ============ preparing transition ============ -->
+  <div id="prepare">
+    <div class="pulse"><div class="orbit"></div><div class="core"></div></div>
+    <div class="label" id="prepare-label">Setting up your session</div>
+    <div class="bar"></div>
+  </div>
+
+  <!-- cue banner -->
+  <div id="cue">
+    <span class="eyebrow" id="cue-eyebrow">Nova · Cue</span>
+    <span class="text" id="cue-text"></span>
+    <span class="bar"></span>
+  </div>
+
+  <!-- ============ rest overlay ============ -->
+  <div id="rest">
+    <div class="col-timer">
+      <div id="ring-box">
+        <svg viewBox="0 0 260 260">
+          <defs>
+            <linearGradient id="ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#6d28d9"/>
+              <stop offset="55%" stop-color="#a78bfa"/>
+              <stop offset="100%" stop-color="#22d3ee"/>
+            </linearGradient>
+          </defs>
+          <circle id="ring-track" cx="130" cy="130" r="118"/>
+          <circle id="ring-fill" cx="130" cy="130" r="118"/>
+        </svg>
+        <div id="ring-center">
+          <span class="eyebrow">Rest</span>
+          <span id="rest-time">2:00</span>
+        </div>
+      </div>
+      <span id="rest-next">Up next · <b>Set 2</b> of 3</span>
+    </div>
+
+    <div id="report" class="empty">
+      <div class="head">
+        <div>
+          <div class="eyebrow" id="report-eyebrow">Set 1 Report</div>
+          <h2 id="report-title">Barbell Back Squat</h2>
+        </div>
+        <div id="score-hero">
+          <div class="num" id="score-num">—</div>
+          <div class="lbl">Form score</div>
+        </div>
+      </div>
+
+      <div class="tiles">
+        <div class="tile"><div class="v" id="tile-reps">—</div><div class="k">Reps</div></div>
+        <div class="tile"><div class="v" id="tile-clean">—</div><div class="k">Clean</div></div>
+        <div class="tile"><div class="v" id="tile-depth">—</div><div class="k">Avg depth</div></div>
+        <div class="tile"><div class="v" id="tile-consistency">—</div><div class="k">Consistency</div></div>
+      </div>
+
+      <div id="scores"></div>
+
+      <div class="focus">
+        <span class="k">Focus next set</span>
+        <span class="t" id="focus-text">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ workout complete ============ -->
+  <div id="complete">
+    <div class="halo"></div>
+    <span class="eyebrow">Session complete</span>
+    <h1>Strong work.</h1>
+    <span class="sub" id="complete-exercise">Barbell Back Squat</span>
+    <div class="stats">
+      <div class="stat"><div class="v" id="done-sets">—</div><div class="k">Sets</div></div>
+      <div class="stat"><div class="v" id="done-reps">—</div><div class="k">Total reps</div></div>
+      <div class="stat"><div class="v" id="done-clean">—</div><div class="k">Clean reps</div></div>
+      <div class="stat"><div class="v" id="done-score">—</div><div class="k">Form score</div></div>
     </div>
   </div>
 
@@ -348,6 +1142,7 @@
 
   const heroSphere = new Sphere(document.getElementById("hero-sphere"));
   const widgetSphere = new Sphere(document.getElementById("widget-sphere"));
+  const menuSphere = new Sphere(document.getElementById("menu-sphere"));
 
   let lastTick = performance.now();
   function tick(now) {
@@ -355,13 +1150,18 @@
     lastTick = now;
     const wakeBoost = body.dataset.wake === "detected" ? "listening" : null;
     const target = STATE_PARAMS[wakeBoost || body.dataset.agent] || STATE_PARAMS.idle;
-    if (!body.classList.contains("pose") && !body.classList.contains("demo")) {
+    const menuVisible = body.classList.contains("menu")
+      && !body.classList.contains("pose") && !body.classList.contains("demo");
+    if (menuVisible) {
+      menuSphere.step(dt, target);
+    } else if (!body.classList.contains("pose") && !body.classList.contains("demo")) {
       heroSphere.step(dt, target);
     }
     if (body.classList.contains("widget-on")) {
       widgetSphere.step(dt, target);
     }
     stepBoot(dt);
+    stepRest(now);
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
@@ -417,7 +1217,416 @@
     setTimeout(() => body.classList.remove("booting"), BOOT_FADE_MS);
   }
 
-  /* ================= state machine ================= */
+  /* ================= workout state ================= */
+
+  const SCORE_DIMS = [
+    ["depth", "Depth"],
+    ["trunk_control", "Trunk control"],
+    ["knee_tracking", "Knee tracking"],
+    ["symmetry", "Symmetry"],
+    ["tempo", "Tempo"],
+  ];
+
+  // fault_type → what to do about it, phrased as coaching, not diagnostics
+  const FOCUS_TEXT = {
+    depth: "Hit full depth on every rep",
+    range_of_motion: "Use your full range of motion",
+    bilateral_asymmetry: "Even out left and right",
+    forward_lean: "Keep your chest up",
+    knee_valgus: "Drive your knees out",
+    back_rounding: "Keep your back flat",
+    lockout: "Finish tall — full lockout",
+    elbow_flare: "Keep your elbows tucked",
+    bar_path: "Keep the bar over mid-foot",
+    shoulder_stability: "Lock your shoulders down",
+    trunk_stability: "Stay braced through your core",
+    tempo: "Control the tempo",
+  };
+
+  const workout = {
+    active: false,
+    exercise: "",
+    totalSets: 0,
+    targetReps: 0,
+    weightLbs: 0,
+    currentSet: 1,
+    reps: 0,
+    summaries: {},   // set_number → set_summary msg
+    scores: {},      // set_number → set_scores msg
+  };
+
+  const pillExercise = document.getElementById("pill-exercise");
+  const pillSet = document.getElementById("pill-set");
+  const pillSets = document.getElementById("pill-sets");
+  const pillWeight = document.getElementById("pill-weight");
+  const pillWeightSep = document.getElementById("pill-weight-sep");
+  const repNow = document.getElementById("rep-now");
+  const repTarget = document.getElementById("rep-target");
+  const receipt = document.getElementById("receipt");
+  const receiptTick = document.getElementById("receipt-tick");
+  const receiptText = document.getElementById("receipt-text");
+  const cueBox = document.getElementById("cue");
+  const cueEyebrow = document.getElementById("cue-eyebrow");
+  const cueText = document.getElementById("cue-text");
+
+  function startWorkout(msg) {
+    leaveMenuStates();
+    workout.active = true;
+    workout.exercise = msg.exercise || "Workout";
+    workout.totalSets = msg.total_sets || 0;
+    workout.targetReps = msg.target_reps || 0;
+    workout.weightLbs = msg.weight_lbs || 0;
+    workout.currentSet = 1;
+    workout.reps = 0;
+    workout.summaries = {};
+    workout.scores = {};
+    body.classList.add("workout");
+    body.classList.remove("resting", "complete");
+    pillExercise.textContent = workout.exercise;
+    pillSets.textContent = workout.totalSets || "—";
+    repTarget.textContent = workout.targetReps ? `/ ${workout.targetReps}` : "";
+    document.getElementById("report-title").textContent = workout.exercise;
+    document.getElementById("complete-exercise").textContent = workout.exercise;
+    const showWeight = workout.weightLbs > 0;
+    pillWeight.style.display = showWeight ? "" : "none";
+    pillWeightSep.style.display = showWeight ? "" : "none";
+    if (showWeight) pillWeight.textContent = `${Math.round(workout.weightLbs)} lb`;
+    updateSetPill();
+    repNow.textContent = "0";
+  }
+
+  function endWorkout() {
+    workout.active = false;
+    body.classList.remove("workout", "resting", "complete");
+    stopRestTimer();
+  }
+
+  function updateSetPill() {
+    pillSet.textContent = workout.currentSet;
+  }
+
+  function onRep(msg) {
+    if (!workout.active) return;
+    if (msg.set_number) { workout.currentSet = msg.set_number; updateSetPill(); }
+    workout.reps = msg.rep_number || (workout.reps + 1);
+    repNow.textContent = workout.reps;
+    repNow.classList.remove("pop");
+    void repNow.offsetWidth;  // restart the animation
+    repNow.classList.add("pop");
+
+    const depth = (msg.depth_class_name || "").trim();
+    if (msg.is_clean) {
+      showReceipt("clean", "●", depth ? `${depth} · Clean` : "Clean rep");
+    } else {
+      showReceipt("ok", "●", depth || "Logged");
+    }
+  }
+
+  function onShallowRep() {
+    if (!workout.active) return;
+    showReceipt("warn", "▲", "Too shallow · didn’t count");
+  }
+
+  function showReceipt(kind, tick, text) {
+    receipt.className = kind;
+    receiptTick.textContent = tick;
+    receiptText.textContent = text;
+    void receipt.offsetWidth;
+    receipt.classList.add("show");
+  }
+
+  function onCue(msg) {
+    if (!msg.text) return;
+    const positive = msg.kind === "positive";
+    cueBox.classList.remove("show", "positive");
+    if (positive) cueBox.classList.add("positive");
+    cueEyebrow.textContent = positive ? "Nova" : "Nova · Cue";
+    cueText.textContent = msg.text;
+    void cueBox.offsetWidth;
+    cueBox.classList.add("show");
+  }
+
+  /* ================= rest overlay ================= */
+
+  const RING_CIRC = 2 * Math.PI * 118;
+  const ringFill = document.getElementById("ring-fill");
+  const restTime = document.getElementById("rest-time");
+  const restNext = document.getElementById("rest-next");
+  const report = document.getElementById("report");
+  const scoresBox = document.getElementById("scores");
+
+  ringFill.style.strokeDasharray = RING_CIRC;
+  ringFill.style.strokeDashoffset = 0;
+
+  let restEndsAt = null;
+  let restTotalMs = 0;
+
+  function enterRest(seconds) {
+    restTotalMs = Math.max(1, seconds) * 1000;
+    restEndsAt = performance.now() + restTotalMs;
+    renderReport();
+    const next = Math.min(workout.currentSet + 1, workout.totalSets || workout.currentSet + 1);
+    restNext.innerHTML = workout.totalSets
+      ? `Up next · <b>Set ${next}</b> of ${workout.totalSets}`
+      : `Up next · <b>Set ${next}</b>`;
+    body.classList.add("resting");
+  }
+
+  function exitRest() {
+    stopRestTimer();
+    if (!workout.active) return;
+    // pipeline rep counters reset at rest end — mirror that here
+    const lastSummary = Object.keys(workout.summaries).length
+      ? Math.max(...Object.keys(workout.summaries).map(Number)) : workout.currentSet;
+    workout.currentSet = Math.min(lastSummary + 1, workout.totalSets || lastSummary + 1);
+    workout.reps = 0;
+    repNow.textContent = "0";
+    updateSetPill();
+    body.classList.remove("resting");
+  }
+
+  function stopRestTimer() {
+    restEndsAt = null;
+    body.classList.remove("resting");
+  }
+
+  function stepRest(now) {
+    if (restEndsAt === null) return;
+    const remaining = Math.max(0, restEndsAt - now);
+    const totalSec = Math.ceil(remaining / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    restTime.textContent = `${m}:${String(s).padStart(2, "0")}`;
+    ringFill.style.strokeDashoffset = RING_CIRC * (1 - remaining / restTotalMs);
+    // rest_complete from the pipeline is authoritative; this is the visual floor
+    if (remaining <= 0) restEndsAt = null;
+  }
+
+  /* ---- set report card ---- */
+
+  function renderReport() {
+    const setN = workout.currentSet;
+    const summary = workout.summaries[setN];
+    const scores = workout.scores[setN];
+    const prev = workout.scores[setN - 1];
+
+    document.getElementById("report-eyebrow").textContent = `Set ${setN} Report`;
+    report.classList.toggle("empty", !summary && !scores);
+
+    if (summary) {
+      const t = (id) => document.getElementById(id);
+      t("tile-reps").innerHTML = workout.targetReps
+        ? `${summary.total_reps}<small> / ${workout.targetReps}</small>`
+        : `${summary.total_reps}`;
+      t("tile-clean").textContent = summary.clean_reps ?? "—";
+      t("tile-depth").textContent =
+        summary.avg_depth != null ? `${Math.round(summary.avg_depth)}°` : "—";
+      t("tile-consistency").textContent =
+        summary.depth_consistency != null ? `±${summary.depth_consistency}°` : "—";
+      document.getElementById("focus-text").textContent = focusLine(summary);
+    }
+
+    const scoreNum = document.getElementById("score-num");
+    scoreNum.textContent = scores && scores.mean_score != null
+      ? Math.round(scores.mean_score * 100) : "—";
+
+    scoresBox.innerHTML = "";
+    if (scores && scores.per_dimension) {
+      SCORE_DIMS.forEach(([key, label], i) => {
+        const v = scores.per_dimension[key];
+        if (v == null) return;
+        const pct = Math.round(v * 100);
+        const prevVal = prev && prev.per_dimension ? prev.per_dimension[key] : null;
+        const delta = deltaChip(v, prevVal);
+        const row = document.createElement("div");
+        row.className = "score-row";
+        row.innerHTML =
+          `<span class="name">${label}</span>` +
+          `<div class="track"><div class="fill"></div></div>` +
+          `<span class="val">${pct}</span>` +
+          `<span class="delta ${delta.cls}">${delta.text}</span>`;
+        scoresBox.appendChild(row);
+        const fill = row.querySelector(".fill");
+        setTimeout(() => { fill.style.width = pct + "%"; }, 150 + i * 110);
+      });
+    }
+  }
+
+  function deltaChip(current, previous) {
+    if (previous == null) return { cls: "flat", text: "" };
+    const d = Math.round((current - previous) * 100);
+    if (d > 0) return { cls: "up", text: `▲ ${d}` };
+    if (d < 0) return { cls: "down", text: `▼ ${Math.abs(d)}` };
+    return { cls: "flat", text: "—" };
+  }
+
+  function focusLine(summary) {
+    const faults = summary.fault_summary || {};
+    const entries = Object.entries(faults);
+    if (!entries.length) return "Clean set — hold this standard.";
+    entries.sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+    const topFault = entries[0][0];
+    return FOCUS_TEXT[topFault] || topFault.replace(/_/g, " ");
+  }
+
+  /* ---- workout complete ---- */
+
+  function showComplete() {
+    stopRestTimer();
+    body.classList.remove("resting");
+    const summaries = Object.values(workout.summaries);
+    const scores = Object.values(workout.scores)
+      .map((s) => s.mean_score).filter((v) => v != null);
+    document.getElementById("done-sets").textContent =
+      summaries.length || workout.currentSet || "—";
+    document.getElementById("done-reps").textContent = summaries.length
+      ? summaries.reduce((a, s) => a + (s.total_reps || 0), 0) : "—";
+    document.getElementById("done-clean").textContent = summaries.length
+      ? summaries.reduce((a, s) => a + (s.clean_reps || 0), 0) : "—";
+    document.getElementById("done-score").textContent = scores.length
+      ? Math.round(scores.reduce((a, v) => a + v, 0) / scores.length * 100) : "—";
+    body.classList.add("complete");
+    // fall back to the hero if no explicit workout end arrives
+    setTimeout(() => body.classList.remove("complete"), 45000);
+  }
+
+  /* ================= main menu & quick-exercise setup ================= */
+
+  const menuEl = document.getElementById("menu");
+  const setupExercise = document.getElementById("setup-exercise");
+  const setupFields = document.getElementById("setup-fields");
+  const setupHint = document.getElementById("setup-hint");
+  const prepareLabel = document.getElementById("prepare-label");
+
+  // agent tool choice → card id (schedule & progress share one card)
+  const MENU_CARD_FOR_CHOICE = {
+    workout: "workout",
+    quick_exercise: "quick_exercise",
+    program: "program",
+    schedule: "insight",
+    progress: "insight",
+  };
+  const MENU_SELECT_RESTORE_MS = 2600;
+  const SETUP_COMPLETE_LINGER_MS = 2100;
+
+  const SETUP_FIELDS = [
+    ["sets", "Sets", (v) => `${v}`],
+    ["reps", "Reps", (v) => `${v}`],
+    ["weight_lbs", "Weight", (v) => v > 0
+      ? `${Math.round(v)}<small> lb</small>` : "BW"],
+    ["rest_seconds", "Rest", (v) => `${v}<small> s</small>`],
+  ];
+
+  let menuRestoreTimer = null;
+  let setupPrepareTimer = null;
+  let setupParams = {};
+
+  function clearMenuSelection() {
+    menuEl.classList.remove("selecting");
+    menuEl.querySelectorAll(".menu-card.selected")
+      .forEach((c) => c.classList.remove("selected"));
+  }
+
+  function showMenu() {
+    body.classList.add("menu");
+    body.classList.remove("setup", "preparing", "complete");
+    clearTimeout(setupPrepareTimer);
+    clearMenuSelection();
+  }
+
+  function selectMenuChoice(choice) {
+    const cardId = MENU_CARD_FOR_CHOICE[choice];
+    if (!cardId) return;
+    body.classList.add("menu");
+    body.classList.remove("setup", "preparing");
+    menuEl.classList.add("selecting");
+    menuEl.querySelectorAll(".menu-card").forEach((c) =>
+      c.classList.toggle("selected", c.dataset.id === cardId));
+    // info choices return to the menu; navigations get interrupted by
+    // a setup/prepare/workout event before this fires
+    clearTimeout(menuRestoreTimer);
+    menuRestoreTimer = setTimeout(clearMenuSelection, MENU_SELECT_RESTORE_MS);
+  }
+
+  function showPrepare(label) {
+    prepareLabel.textContent = label || "Getting things ready";
+    body.classList.remove("menu", "setup");
+    body.classList.add("preparing");
+    clearMenuSelection();
+  }
+
+  function leaveMenuStates() {
+    body.classList.remove("menu", "setup", "preparing");
+    clearTimeout(menuRestoreTimer);
+    clearTimeout(setupPrepareTimer);
+    clearMenuSelection();
+  }
+
+  function titleCase(name) {
+    return (name || "").replace(/\w\S*/g,
+      (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+  }
+
+  function renderSetup(exercise, params) {
+    setupExercise.textContent = titleCase(exercise);
+    setupParams = { ...params };
+    setupFields.innerHTML = "";
+    const missing = [];
+    SETUP_FIELDS.forEach(([key, label, fmt]) => {
+      const v = params[key];
+      const known = v != null;
+      if (!known) missing.push(label.toLowerCase());
+      const tile = document.createElement("div");
+      tile.className = "field " + (known ? "filled" : "pending");
+      tile.dataset.key = key;
+      tile.innerHTML =
+        `<div class="v">${known ? fmt(v) : ""}</div>` +
+        `<div class="dots"><span></span><span></span><span></span></div>` +
+        `<div class="k">${label}</div>`;
+      setupFields.appendChild(tile);
+    });
+    setupHint.textContent = missing.length
+      ? `Tell Nova your ${missing.join(", ")}`
+      : "All set — confirming with Nova";
+    return missing.length;
+  }
+
+  function showSetup(msg) {
+    body.classList.add("setup");
+    body.classList.remove("menu", "preparing");
+    clearTimeout(setupPrepareTimer);
+    clearMenuSelection();
+    renderSetup(msg.exercise, msg.params || {});
+  }
+
+  function completeSetup(msg) {
+    if (!body.classList.contains("setup")) {
+      showSetup(msg);
+    }
+    const params = msg.params || {};
+    let popIndex = 0;
+    SETUP_FIELDS.forEach(([key, label, fmt]) => {
+      const tile = setupFields.querySelector(`.field[data-key="${key}"]`);
+      const v = params[key];
+      if (!tile || v == null) return;
+      const wasPending = tile.classList.contains("pending");
+      if (!wasPending) return;
+      const delay = 250 + popIndex * 200;
+      popIndex += 1;
+      setTimeout(() => {
+        tile.classList.remove("pending");
+        tile.classList.add("filled", "pop");
+        tile.querySelector(".v").innerHTML = fmt(v);
+      }, delay);
+    });
+    setupHint.textContent = "Locked in";
+    clearTimeout(setupPrepareTimer);
+    setupPrepareTimer = setTimeout(
+      () => showPrepare("Setting up your session"),
+      SETUP_COMPLETE_LINGER_MS + popIndex * 200);
+  }
+
+  /* ================= agent state machine ================= */
 
   let lastFrameAt = 0;
   let lastPoseUrl = null;
@@ -488,6 +1697,11 @@
     if (lastPoseUrl) URL.revokeObjectURL(lastPoseUrl);
     lastPoseUrl = url;
     body.classList.add("pose");
+    // the camera view supersedes menu/setup/preparing screens
+    if (body.classList.contains("menu") || body.classList.contains("setup")
+        || body.classList.contains("preparing")) {
+      leaveMenuStates();
+    }
   }
 
   function handleEvent(msg) {
@@ -500,6 +1714,47 @@
         break;
       case "boot":
         handleBoot(msg);
+        break;
+      case "workout":
+        if (msg.action === "start") startWorkout(msg);
+        else if (msg.action === "complete") { showComplete(); }
+        else endWorkout();
+        break;
+      case "menu":
+        if (msg.action === "show") showMenu();
+        else if (msg.action === "select") selectMenuChoice(msg.choice);
+        else if (msg.action === "prepare") showPrepare(msg.label);
+        else leaveMenuStates();
+        break;
+      case "setup":
+        if (msg.action === "show") showSetup(msg);
+        else if (msg.action === "complete") completeSetup(msg);
+        break;
+      case "rep":
+        onRep(msg);
+        break;
+      case "shallow_rep":
+        onShallowRep();
+        break;
+      case "cue":
+        onCue(msg);
+        break;
+      case "set_summary":
+        if (msg.set_number != null) {
+          workout.summaries[msg.set_number] = msg;
+          workout.currentSet = msg.set_number;
+          if (body.classList.contains("resting")) renderReport();
+        }
+        break;
+      case "set_scores":
+        if (msg.set_number != null) {
+          workout.scores[msg.set_number] = msg;
+          if (body.classList.contains("resting")) renderReport();
+        }
+        break;
+      case "rest":
+        if (msg.action === "start") enterRest(msg.seconds || 60);
+        else exitRest();
         break;
       case "demo":
         if (msg.action === "start") {

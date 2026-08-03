@@ -97,6 +97,12 @@ class CollectExerciseInfoTask(AgentTask):
         self.state = state
         self.userdata = userdata
         self.exercise_name = exercise_name
+        self.initial_params = {
+            "sets": sets,
+            "reps": reps,
+            "weight_lbs": weight,
+            "rest_seconds": rest_seconds,
+        }
         self.all_params_known = all(
             value is not None for value in (sets, reps, weight, rest_seconds)
         )
@@ -105,7 +111,18 @@ class CollectExerciseInfoTask(AgentTask):
             check_calibration(user_id, exercise_name)
         )
 
+    def _publish_visual(self, event: dict) -> None:
+        bridge = getattr(self.userdata, "visual_bridge", None)
+        if bridge is not None:
+            bridge.send(event)
+
     async def on_enter(self):
+        self._publish_visual({
+            "type": "setup",
+            "action": "show",
+            "exercise": self.exercise_name,
+            "params": self.initial_params,
+        })
         if self.all_params_known:
             await self.session.generate_reply(
                 instructions=(
@@ -140,6 +157,17 @@ class CollectExerciseInfoTask(AgentTask):
             f"[QUICK EXERCISE] Collected: {sets}x{reps}, "
             f"weight={weight}, rest={rest_seconds}s, exercise={exercise_name}"
         )
+        self._publish_visual({
+            "type": "setup",
+            "action": "complete",
+            "exercise": exercise_name,
+            "params": {
+                "sets": sets,
+                "reps": reps,
+                "weight_lbs": weight,
+                "rest_seconds": rest_seconds,
+            },
+        })
 
         calibration_profile = await self.calibration_task
 

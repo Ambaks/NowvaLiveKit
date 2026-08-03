@@ -27,7 +27,19 @@ _LOGO_PNG = Path(__file__).with_name("logo-white.png")
 
 # Event types whose latest value is replayed to newly connected browsers
 # so a page refresh lands in the correct state.
-_STICKY_EVENT_TYPES = ("agent_state", "wake_word", "demo", "boot")
+_STICKY_EVENT_TYPES = (
+    "agent_state", "wake_word", "demo", "boot",
+    "workout", "rep", "set_summary", "set_scores", "rest",
+    "menu", "setup",
+)
+
+# Stickies scoped to one workout — dropped when a new "workout" event arrives
+# so a refresh during a later workout doesn't replay the previous one's reps.
+_WORKOUT_SCOPED_TYPES = ("rep", "set_summary", "set_scores", "rest", "menu", "setup")
+
+# Mutually exclusive screens: showing one drops the other's sticky so a page
+# refresh never replays both.
+_STICKY_EXCLUSIONS = {"menu": ("setup",), "setup": ("menu",)}
 
 
 class DisplayServer:
@@ -168,6 +180,11 @@ class DisplayServer:
             event_type = json.loads(payload).get("type")
         except (json.JSONDecodeError, AttributeError):
             return
+        if event_type == "workout":
+            for scoped in _WORKOUT_SCOPED_TYPES:
+                self._sticky_events.pop(scoped, None)
+        for excluded in _STICKY_EXCLUSIONS.get(event_type, ()):
+            self._sticky_events.pop(excluded, None)
         if event_type in _STICKY_EVENT_TYPES:
             self._sticky_events[event_type] = payload
 

@@ -534,6 +534,7 @@ class TestAdjustmentCuesArePreCached:
         service.is_coaching_speaking = False
         service._audio_cue_service = _Cues()
         service._session = None  # any LLM fallback would blow up here
+        service._visual_bridge = None
         return service, played
 
     def test_direction_cues_play_from_cache(self):
