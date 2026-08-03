@@ -151,8 +151,8 @@ Do NOT use show_me when the user just asks about their form verbally (use check_
 # Assessment & Calibration Mode
 If the workout starts with calibration (the user has no biomechanical profile for this exercise), the system runs two phases:
 
-1. **Form Assessment** (2 reps): The user does 2 bodyweight squats. The system analyzes their form and either:
-   - Finds issues → you give specific corrective feedback (via orchestrator instructions), user tries 2 more
+1. **Form Assessment** (1 rep): The user does 1 bodyweight squat. The system analyzes their form and either:
+   - Finds issues → you give specific corrective feedback (via orchestrator instructions), user does 1 more rep
    - No issues → you praise their form, mention any things to watch for, and transition to calibration
 
 2. **Calibration** (5 reps): The user does 5 deep bodyweight squats to calibrate personalized thresholds.

@@ -150,7 +150,7 @@ class WorkoutAgent(BaseNovaAgent):
         from agent.services.progress_context import build_detailed_greeting_context
         baseline, fault_trends = await coaching_service.wait_progress_context()
         progress_line = build_detailed_greeting_context(baseline, fault_trends)
-        progress_suffix = f" {progress_line}" if progress_line else ""
+        progress_block = f"\n{progress_line}" if progress_line else ""
 
         # Generate context-aware greeting BEFORE starting wake word system.
         # _say() suppresses turn detection so the greeting can't be interrupted.
@@ -163,24 +163,31 @@ class WorkoutAgent(BaseNovaAgent):
             is_quick = session.is_quick_exercise
             if is_quick:
                 await self._say(
-                    f"Quick exercise started! First up: {first_desc}. "
-                    f"Tell the user enthusiastically that you're ready to go — get them going for the first set "
-                    f"{progress_suffix}",
+                    f"[CONTEXT] quick exercise session just started, "
+                    f"first exercise: {first_desc}{progress_block}\n\n"
+                    "Greet the user into the workout with real energy, name "
+                    "the first exercise, and get them moving. Two sentences "
+                    "max. Vary your opener between sessions.",
                     restore=False,
                 )
             else:
                 workout_name = session_data.get("workout_name", "today's workout")
                 await self._say(
-                    f"Workout started! Today's workout: {workout_name}. "
-                    f"First exercise: {first_desc}. Inform the user enthusiastically "
-                    f"and let them know you're tracking their form"
-                    f"{progress_suffix}",
+                    f"[CONTEXT] workout just started: {workout_name}, "
+                    f"first exercise: {first_desc}{progress_block}\n\n"
+                    "Greet the user into the workout with real energy, name "
+                    "the first exercise, and mention you're watching their "
+                    "form. Two sentences max. Vary your opener between "
+                    "sessions.",
                     restore=False,
                 )
         else:
             await self._say(
-                f"Workout mode is starting. Psych the user up and get them ready to workout!"
-                f"{progress_suffix}",
+                f"[CONTEXT] workout mode just started, no session details "
+                f"available{progress_block}\n\n"
+                "Greet the user into the workout with real energy and get "
+                "them moving. Two sentences max. Vary your opener between "
+                "sessions.",
                 restore=False,
             )
 
@@ -844,7 +851,7 @@ class WorkoutAgent(BaseNovaAgent):
         coaching = self.userdata.coaching_service
         if not coaching:
             return None, (
-                "Tell the user: 'Got it, set logged.' Keep it brief."
+                "Confirm the set is logged, in a few words. Vary the phrasing."
             )
 
         # Check if the orchestrator already auto-completed this set
@@ -862,24 +869,25 @@ class WorkoutAgent(BaseNovaAgent):
                 next_desc = result.get("next_set_description", "the next set")
                 rest_display = f"{rest_sec // 60}:{rest_sec % 60:02d}" if rest_sec >= 60 else f"{rest_sec} seconds"
                 return None, (
-                    f"Tell the user: 'Got it — {reps_completed} reps, set logged. "
-                    f"Rest for {rest_display}. Next up: {next_desc}.' "
-                    f"Keep it brief and encouraging."
+                    f"Confirm you logged {reps_completed} reps, tell them to rest "
+                    f"for {rest_display}, and name what's next: {next_desc}. "
+                    f"One or two brief sentences, vary the phrasing."
                 )
             elif result["status"] == "workout_complete":
                 return None, (
-                    f"Tell the user: 'That's {reps_completed} reps — and that was your last set! "
-                    f"Amazing work today.' Be celebratory. Then call end_workout()."
+                    f"Celebrate the finish in your own words — "
+                    f"{reps_completed} reps on the final set — one or two "
+                    f"sentences, then call end_workout."
                 )
             else:
                 return None, (
-                    f"Tell the user: 'Got it, {reps_completed} reps logged.' Keep it brief."
+                    f"Confirm you logged {reps_completed} reps, in a few words. Vary the phrasing."
                 )
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to end set early")
             return None, (
-                "Tell the user: 'Got it, set logged. Rest up!' Keep it simple."
+                "Confirm the set is logged and tell them to rest up. One brief sentence."
             )
 
     @function_tool
@@ -897,14 +905,14 @@ class WorkoutAgent(BaseNovaAgent):
 
         session_data = self.state.get("workout.current_session")
         if not session_data:
-            return None, "Tell the user: 'No active workout to skip. Let's start a workout first!' Keep it helpful."
+            return None, "Tell the user there's no active workout to skip and offer to start one. One helpful sentence."
 
         try:
             session = WorkoutSession.from_dict(session_data)
 
             current_exercise = session.get_current_exercise()
             if not current_exercise:
-                return None, "Tell the user: 'You're all done with the workout! No more exercises to skip.' Keep it positive."
+                return None, "Tell the user the workout is already finished — nothing left to skip. One positive sentence."
 
             exercise_name = current_exercise.exercise_name
 
@@ -916,13 +924,20 @@ class WorkoutAgent(BaseNovaAgent):
             next_exercise = session.get_current_exercise()
             if next_exercise:
                 next_desc = session.get_current_exercise_description()
-                return None, f"Tell the user: 'No problem, skipping {exercise_name}. Moving on to {next_desc}' Keep it supportive and matter-of-fact."
+                return None, (
+                    f"Confirm you're skipping {exercise_name} and introduce {next_desc}. "
+                    f"Supportive and matter-of-fact, one or two sentences, vary the phrasing."
+                )
             else:
-                return None, f"Tell the user: 'Alright, skipped {exercise_name}. That was the last exercise! Great work on what you did today. Ready to wrap up?' Keep it encouraging."
+                return None, (
+                    f"Confirm you skipped {exercise_name} — that was the last exercise. "
+                    f"Congratulate them on what they did today and ask if they're ready "
+                    f"to wrap up. One or two encouraging sentences."
+                )
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to skip exercise")
-            return None, "Tell the user: 'Okay, let's move on to the next exercise.' Keep it simple."
+            return None, "Tell the user you're moving on to the next exercise. One brief sentence."
 
     @function_tool
     async def get_next_exercise(self, context: RunContext = None):
@@ -936,7 +951,7 @@ class WorkoutAgent(BaseNovaAgent):
 
         session_data = self.state.get("workout.current_session")
         if not session_data:
-            return None, "Tell the user: 'No active workout. Start a workout to see your exercises!' Keep it helpful."
+            return None, "Tell the user there's no active workout and offer to start one. One helpful sentence."
 
         try:
             session = WorkoutSession.from_dict(session_data)
@@ -945,17 +960,24 @@ class WorkoutAgent(BaseNovaAgent):
 
             if next_exercise:
                 set_count = len(next_exercise.sets)
-                return None, f"Tell the user: 'Coming up next: {next_exercise.exercise_name}, {set_count} sets. But let's finish this exercise first!' Keep it focused and motivating."
+                return None, (
+                    f"Preview what's next — {next_exercise.exercise_name}, {set_count} sets — "
+                    f"then steer them back to finishing the current exercise. "
+                    f"One motivating sentence."
+                )
             else:
                 current = session.get_current_exercise()
                 if current:
-                    return None, f"Tell the user: '{current.exercise_name} is the last exercise! Finish strong!' Keep it motivating."
+                    return None, (
+                        f"Tell them {current.exercise_name} is the last exercise and to "
+                        f"finish strong. One sentence, vary the phrasing."
+                    )
                 else:
-                    return None, "Tell the user: 'You're done! That was the last exercise. Great job!' Keep it celebratory."
+                    return None, "Tell them the workout is done and congratulate them. One sentence."
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to get next exercise")
-            return None, "Tell the user: 'Let's focus on this exercise first!' Keep it simple."
+            return None, "Redirect them to the current exercise. One brief sentence."
 
     @function_tool
     async def get_workout_progress(self, context: RunContext = None):
@@ -969,18 +991,23 @@ class WorkoutAgent(BaseNovaAgent):
 
         session_data = self.state.get("workout.current_session")
         if not session_data:
-            return None, "Tell the user: 'No active workout. Start a workout to track your progress!' Keep it helpful."
+            return None, "Tell the user there's no active workout and offer to start one. One helpful sentence."
 
         try:
             session = WorkoutSession.from_dict(session_data)
 
             summary = session.get_progress_summary()
 
-            return None, f"Tell the user: 'You're crushing it! You've completed {summary['completed_sets']} out of {summary['total_sets']} sets. That's {summary['percent_complete']}% done. Currently on {summary['current_exercise_name']}.' Keep it motivating and clear."
+            return None, (
+                f"Give them their progress: {summary['completed_sets']} of "
+                f"{summary['total_sets']} sets done ({summary['percent_complete']} percent), "
+                f"currently on {summary['current_exercise_name']}. Encouraging, one or two "
+                f"sentences, say the numbers naturally, vary the phrasing."
+            )
 
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to get progress")
-            return None, "Tell the user: 'Keep pushing! You're doing great.' Keep it simple and encouraging."
+            return None, "Encourage them to keep going. One brief sentence."
 
     @function_tool
     async def check_my_form(self, context: RunContext = None):
@@ -1001,14 +1028,14 @@ class WorkoutAgent(BaseNovaAgent):
         snapshot = coaching.get_current_form_snapshot()
         if not snapshot:
             return None, (
-                "Tell the user: 'Hold your position for a second so I can "
-                "get a read on you.' Keep it natural."
+                "Ask them to hold their position for a second so you can "
+                "get a read on them. One natural sentence."
             )
 
         if snapshot["data_age_ms"] > 3000:
             return None, (
-                "Tell the user: 'Hold that position for me — I need a "
-                "fresh look.' Keep it brief and encouraging."
+                "Ask them to hold the position so you can get a fresh look. "
+                "One brief, encouraging sentence."
             )
 
         angles = snapshot["angles"]
@@ -1066,16 +1093,23 @@ class WorkoutAgent(BaseNovaAgent):
             result = await coaching.request_last_rep_replay()
             if not result or result.get("error"):
                 return None, (
-                    "Tell the user: 'I don't have your last rep saved yet — "
-                    "do a few reps first and then ask me again.' Keep it encouraging."
+                    "Tell them you don't have a rep saved yet — they should do "
+                    "a few reps and ask again. One encouraging sentence."
                 )
+            from agent.services.progress_context import fault_label
+
             rep_data = result.get("rep_data", {})
             faults = rep_data.get("faults", [])
-            fault_desc = ", ".join(f["fault_type"] for f in faults) if faults else "clean form"
+            fault_desc = (
+                ", ".join(fault_label(f["fault_type"]) for f in faults)
+                if faults
+                else "clean form"
+            )
             return None, (
-                f"Tell the user: 'Here's your last rep — take a look at the screen.' "
-                f"The rep had: {fault_desc}. Briefly describe what you see based on "
-                f"the fault data. Keep it to 1-2 sentences."
+                f"Tell the user their last rep is up on the screen and to "
+                f"take a look. The rep had: {fault_desc}. Briefly describe "
+                f"what you see in plain coach language, never technical "
+                f"fault names. Keep it to 1-2 sentences."
             )
 
         cause_id = coaching.get_last_cue_cause_id()
@@ -1083,12 +1117,11 @@ class WorkoutAgent(BaseNovaAgent):
         result = await coaching.request_on_demand_demo(cause_id=cause_id)
         if not result or result.get("error") or result.get("status") == "unavailable":
             return None, (
-                "Tell the user: 'I don't have enough data to show you a "
-                "visual demo yet. Let me see a few more reps first.' "
-                "Keep it encouraging."
+                "Tell them you need to see a few more reps before you can "
+                "show a demo. One encouraging sentence."
             )
         return None, (
-            "Tell the user: 'Check out the screen — I'm going to show you "
-            "what the correction looks like.' Keep it brief and let the "
-            "visual demo do the talking."
+            "Point them to the screen — you're about to show what the "
+            "correction looks like. One brief sentence, then let the "
+            "visual do the talking."
         )

@@ -39,19 +39,19 @@ _FULL_PRECAPTURED = {
 class TestProgramCreationPrompt:
     def test_builds_without_name_in_scope(self):
         prompt = get_program_creation_prompt({}, {})
-        assert "COLLECTING DATA" in prompt
+        assert "Collecting Data" in prompt
 
     def test_user_name_uppercased_when_provided(self):
         prompt = get_program_creation_prompt({}, {}, user_name="Marwan")
-        assert "MARWAN" in prompt
+        assert "Marwan" in prompt
 
     def test_generic_heading_without_user_name(self):
         prompt = get_program_creation_prompt({}, {})
-        assert "COLLECTING DATA FOR THE USER" in prompt
+        assert "Collecting Data for the user" in prompt
 
     def test_full_existing_and_precaptured_args_build(self):
         prompt = get_program_creation_prompt(_FULL_EXISTING_DATA, _FULL_PRECAPTURED)
-        assert "PRE-CAPTURED GOAL" in prompt
+        assert "pre-captured goal" in prompt
 
     def test_goal_raw_wrapped_in_user_data_tags(self):
         prompt = get_program_creation_prompt({}, _FULL_PRECAPTURED)

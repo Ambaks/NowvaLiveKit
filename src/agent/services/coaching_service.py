@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
@@ -76,6 +77,11 @@ class CoachingService:
 
         # Flag for wake word system to detect active coaching speech
         self.is_coaching_speaking: bool = False
+
+        # Last few spoken coaching lines — injected into every coaching prompt
+        # so the LLM never reuses phrasing (ephemeral context stripping means
+        # it otherwise has no memory of what it said last set).
+        self._spoken_coaching_lines: deque[str] = deque(maxlen=4)
 
         # Choreographed assessment demo fires once per session
         self._assessment_demo_played: bool = False
@@ -578,9 +584,9 @@ class CoachingService:
                 instructions = (
                     f"[REST COMPLETE] Rest is over. "
                     f"Set {completed_set} of {total_sets} is done. Set {next_set} of {total_sets} starts now. "
-                    f"Announce it — be energetic and brief (1 sentence max). "
-                    f"Do NOT ask if they are ready. Do NOT wait for confirmation. "
-                    f"Just announce it. Example: 'Set {completed_set} done, set {next_set} — let's go!'"
+                    f"Announce it in one energetic sentence, in your own words — "
+                    f"never the same announcement twice in a session. "
+                    f"Do NOT ask if they are ready. Do NOT wait for confirmation."
                 )
                 logger.info("[COACHING SERVICE] → Calling coaching LLM for rest_complete")
                 await self._coaching_llm_reply(instructions)
@@ -814,10 +820,10 @@ class CoachingService:
         top_issue = immediate[0] if immediate else {}
 
         context_parts = []
-        context_parts.append(f"Assessment round {round_num}: 2 bodyweight squats analyzed.")
+        context_parts.append(f"Assessment round {round_num}: their squat form was just analyzed.")
 
         mean_pct = round(scoring.get("mean_score", 0) * 100)
-        context_parts.append(f"Form score: {mean_pct}/100.")
+        context_parts.append(f"Form score: {mean_pct} out of 100.")
 
         if top_issue:
             context_parts.append(
@@ -825,8 +831,11 @@ class CoachingService:
             )
             delta = top_issue.get("parameter_delta")
             if delta:
-                delta_str = ", ".join(f"{k}: {v}" for k, v in delta.items())
-                context_parts.append(f"Recommended adjustment: {delta_str}.")
+                from biomechanics.diagnosis.demo_builder import summarize_cue_magnitude
+                context_parts.append(
+                    f"Recommended adjustment: "
+                    f"{summarize_cue_magnitude(top_issue.get('cause_id', ''), delta)}."
+                )
 
         if len(immediate) > 1:
             other = immediate[1]
@@ -842,9 +851,9 @@ class CoachingService:
             f"{context_str} "
             f"Tell the user the specific issue you found and what to adjust. "
             f"Be specific and actionable (e.g., 'widen your stance a bit' or 'push your knees out more'). "
-            f"Then tell them to try 2 more reps with that adjustment. "
+            f"Then tell them to try it again with that adjustment. "
             f"Keep it encouraging and brief (2-3 sentences). "
-            f"Do NOT say 'assessment' — say something like 'Let me see that again with [adjustment].'"
+            f"Do NOT say 'assessment' — frame it as wanting to see the fix, in your own words."
         )
 
     def _build_assessment_pass_prompt(
@@ -856,7 +865,7 @@ class CoachingService:
 
         context_parts = []
         context_parts.append(
-            f"Assessment complete after {round_num} round(s). Form score: {mean_pct}/100."
+            f"Assessment complete after {round_num} round(s). Form score: {mean_pct} out of 100."
         )
 
         other_notes = []
@@ -937,10 +946,9 @@ class CoachingService:
 
         # Announce calibration completion via LLM
         instructions = (
-            "[CALIBRATION COMPLETE] Calibration is done. "
-            "The user's custom movement thresholds are now set. "
-            "Say something like: 'Alright, we're all dialed in! Let's get into your workout.' "
-            "Keep it brief and hype."
+            "[CALIBRATION COMPLETE] Calibration is done — you now know exactly how they move. "
+            "Tell them you're dialed in and the workout starts now, in one short hyped sentence "
+            "of your own. Don't say 'calibration'."
         )
         await self._coaching_llm_reply(instructions)
 
@@ -1350,6 +1358,13 @@ class CoachingService:
             agent = self._session.current_agent
             ctx_len_before = len(agent.chat_ctx.items) if agent else 0
 
+            if self._spoken_coaching_lines:
+                recent = " | ".join(self._spoken_coaching_lines)
+                instructions = (
+                    f"{instructions}\n\nYou already said these lines this session — "
+                    f"do not reuse their phrasing or openers: {recent}"
+                )
+
             handle = self._session.generate_reply(
                 instructions=COACHING_PERSONA,
                 user_input=instructions,
@@ -1361,6 +1376,11 @@ class CoachingService:
 
             if agent and len(agent.chat_ctx.items) > ctx_len_before:
                 added = len(agent.chat_ctx.items) - ctx_len_before
+                for item in list(agent.chat_ctx.items)[ctx_len_before:]:
+                    if getattr(item, "role", None) == "assistant":
+                        spoken = getattr(item, "text_content", None)
+                        if spoken:
+                            self._spoken_coaching_lines.append(spoken.strip())
                 from livekit.agents import llm
                 new_ctx = llm.ChatContext.empty()
                 for item in list(agent.chat_ctx.items)[:ctx_len_before]:

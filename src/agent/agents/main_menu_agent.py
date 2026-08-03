@@ -32,17 +32,17 @@ class MainMenuAgent(BaseNovaAgent):
             self.state.mark_main_menu_visited()
             self.state.save_state()
             await self._say(
-                f"Welcome the user to the main menu for the first time! "
-                f"Tell them about their options: start a workout, create or update a program, "
-                f"check their progress, or update their profile. Keep it friendly and conversational."
+                "Welcome the user for the first time. Mention just two things they can do — "
+                "start a workout, or set up a program — and that they can just ask for anything else. "
+                "One or two sentences."
             )
         elif not self.state.get("session.main_menu_greeted", False):
             self.state.set("session.main_menu_greeted", True)
             self.state.save_state()
             await self._say(
-                f"The user is back at the main menu. Welcome them back and tell them "
-                f"about their options which are to start a workout, create or update a program, "
-                f"check their progress, or update their profile. Keep it friendly and conversational."
+                "The user is back at the main menu. Greet them back with one short, natural line "
+                "and an open question about what they want to do — different phrasing every session, "
+                "never a menu of options."
             )
         else:
             self._restore_turn_detection()
@@ -69,7 +69,7 @@ class MainMenuAgent(BaseNovaAgent):
             if not workout:
                 logger.info("[WORKOUT] No workout scheduled for today")
                 self._publish_visual({"type": "menu", "action": "show"})
-                return None, f"Tell the user: 'Hey you don't have a workout scheduled for today. Would you like to check your upcoming schedule or create a new program?' Keep it helpful and supportive."
+                return None, "Tell the user nothing is scheduled today and offer to check their upcoming schedule or do a quick exercise instead. One or two sentences, vary the phrasing."
 
             # Initialize workout session
             session = WorkoutSession(
@@ -121,7 +121,7 @@ class MainMenuAgent(BaseNovaAgent):
         except Exception as e:
             logger.exception("[WORKOUT ERROR] Failed to load workout")
             self._publish_visual({"type": "menu", "action": "show"})
-            result = (None, f"Tell the user: 'Hmm, I'm having trouble loading your workout right now. Let's try again in a moment.' Keep it reassuring.")
+            result = (None, "Tell the user you're having trouble loading their workout right now and to give it a moment. Keep it reassuring, one sentence, vary the phrasing.")
             self._log_function_call("start_workout", {}, result)
             return result
         finally:
@@ -367,7 +367,7 @@ class MainMenuAgent(BaseNovaAgent):
             programs = get_program_summary_list(db, user_id)
 
             if len(programs) == 0:
-                return None, f"Say something like: 'you don't have any programs yet. Would you like to create your first program?' Keep it encouraging."
+                return None, "Tell the user they don't have any programs yet and offer to create their first one. One or two sentences, vary the phrasing."
             elif len(programs) == 1:
                 program = programs[0]
                 self.state.set("program_update.selected_program_id", program["id"])
@@ -393,7 +393,7 @@ class MainMenuAgent(BaseNovaAgent):
 
         except Exception as e:
             logger.error(f"[ERROR] Failed to list programs: {e}")
-            return None, f"Say something like: 'I'm having trouble accessing your programs right now. Let's try again in a moment.' Keep it apologetic."
+            return None, "Tell the user you're having trouble accessing their programs right now and offer to try again in a moment. One or two sentences, vary the phrasing."
         finally:
             db.close()
 
@@ -425,12 +425,18 @@ class MainMenuAgent(BaseNovaAgent):
             for w in workouts:
                 date_obj = datetime.fromisoformat(w['scheduled_date'])
                 date_display = date_obj.strftime("%A, %B %d")
-                status = "completed" if w['completed'] else "scheduled"
-                schedule_list.append(f"{date_display}: {w['workout_name']} ({status})")
+                status_suffix = ", already done" if w['completed'] else ""
+                schedule_list.append(f"{date_display}: {w['workout_name']}{status_suffix}")
 
             schedule_text = "\n".join(schedule_list)
 
-            return None, f"The user wants to see their schedule. Tell them they have {len(workouts)} workouts in the next {days_ahead} days:\n{schedule_text}\n\nKeep the delivery natural and conversational."
+            return None, (
+                f"The user wants to see their schedule. They have {len(workouts)} workouts in the next {days_ahead} days:\n"
+                f"{schedule_text}\n\n"
+                "Summarize this in two to three sentences: lead with the next workout by name and day, "
+                "then how many more they have this week. Workouts marked already done are behind them. "
+                "Do not read the full list or any status labels aloud unless the user asks."
+            )
 
         except Exception as e:
             logger.exception("[SCHEDULE ERROR] Failed to load schedule")
@@ -503,10 +509,14 @@ class MainMenuAgent(BaseNovaAgent):
                     exercise_info += f" ({we.notes})"
                 exercise_list.append(exercise_info)
 
-            exercises_text = "\n".join([f"{i+1}. {ex}" for i, ex in enumerate(exercise_list)])
+            exercises_text = "\n".join(exercise_list)
             date_str = target_date.strftime("%A, %B %d")
 
-            return None, f"Workout for {date_str} - {workout.name}:\n\n{exercises_text}\n\nPresent this information naturally and conversationally."
+            return None, (
+                f"Workout for {date_str} - {workout.name}:\n\n{exercises_text}\n\n"
+                "Name the exercises in flowing conversational speech with their sets and reps — "
+                "never as a numbered list read aloud, never reciting the lines verbatim."
+            )
 
         except Exception as e:
             logger.exception("[WORKOUT VIEW ERROR] Failed to load exercises")
@@ -640,7 +650,7 @@ class MainMenuAgent(BaseNovaAgent):
         """
         logger.info("[MAIN MENU] User requested to update profile")
         self._publish_visual({"type": "menu", "action": "select", "choice": "progress"})
-        return None, f"The user wants to update their profile. Say something like: 'profile updates are coming soon! For now, you can ask me to change specific things and I'll note them down.' Keep it helpful."
+        return None, "The user wants to update their profile. Tell them profile updates are coming soon and offer to note down any specific changes they want in the meantime. One or two sentences, vary the phrasing."
 
     @function_tool
     async def shutdown(self, context: RunContext):
@@ -659,7 +669,6 @@ class MainMenuAgent(BaseNovaAgent):
         self._log_function_call("shutdown", {}, "shutdown_requested")
 
         return None, (
-            f"The user wants to shut down. Say a warm, brief goodbye to the user. "
-            f"Something like: 'Take care great chatting with you! See you next time.' "
-            f"Keep it friendly and natural — one or two sentences max."
+            "The user wants to shut down. Say one warm, brief goodbye — "
+            "one or two sentences max, different phrasing every session."
         )

@@ -83,10 +83,9 @@ class TeachingAgent(BaseNovaAgent):
         self._start_assessment_logging()
 
         await self._say(
-            f"You are Nova, an AI strength coach. Say something natural "
-            f"and brief — like you're about to check the user's "
-            f"{self.exercise} form before their workout. Think 'let me see "
-            f"how you move first' energy. One sentence, no filler, no emojis."
+            f"Say something natural and brief — like you're about to check "
+            f"the user's {self.exercise} form before their workout. Think "
+            f"'let me see how you move first' energy. One sentence, no filler."
         )
         await self._run_setup()
 

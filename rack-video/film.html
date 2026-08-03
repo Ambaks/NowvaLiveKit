@@ -22,12 +22,12 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 /* ---------------- timeline (seconds) ---------------- */
-const T_ORBIT_END = 8.0;     // orbit around closed rack
-const T_DOORS_END = 13.0;    // doors swing open
-const T_PUSH_END = 18.5;     // dolly in until screen fills frame
-const T_BOOT = 15.5;         // screen starts turning on
-const T_BOOT_DUR = 1.6;
-export const T_TOTAL = 20.0; // page keeps rendering screen-full to the end
+const T_ORBIT_END = 5.0;     // orbit around closed rack
+const T_DOORS_END = 8.2;     // doors swing open
+const T_PUSH_END = 11.7;     // dolly in until screen fills frame
+const T_BOOT = 9.8;          // screen starts turning on
+const T_BOOT_DUR = 1.4;
+export const T_TOTAL = 13.0; // page keeps rendering screen-full to the end
 
 const FOV_DEG = 35;
 const BACKDROP = 0x09090e;
@@ -297,12 +297,15 @@ let screenRig = null;
 
 /* screen content: video if provided, else drawn placeholder */
 let uiVideo = null;
-window.setUiVideo = (url) => new Promise((resolve) => {
+window.setUiVideo = async (url) => {
+  /* blob-backed src: fully seekable regardless of server Range support */
+  const blob = await (await fetch(url)).blob();
   uiVideo = document.createElement("video");
   uiVideo.muted = true;
-  uiVideo.src = url;
-  uiVideo.addEventListener("loadeddata", () => resolve(uiVideo.duration), { once: true });
-});
+  uiVideo.src = URL.createObjectURL(blob);
+  await new Promise((r) => uiVideo.addEventListener("loadeddata", r, { once: true }));
+  return uiVideo.duration;
+};
 
 function drawScreen(t) {
   if (!screenRig) return;
@@ -355,7 +358,9 @@ function screenPose(aspect) {
   const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect);
   const dH = (h / 2) / Math.tan(fovV / 2);
   const dW = (w / 2) / Math.tan(fovH / 2);
-  const d = Math.min(dH, dW) * 0.985; /* overfill: no background at edges */
+  /* width-fit distance: the 16:9 video region inside the 16:10 texture
+     exactly fills the frame, so the crossfade to the flat UI is pixel-aligned */
+  const d = Math.min(dH, dW);
   return {
     pos: center.clone().add(normal.clone().multiplyScalar(d)),
     target: center.clone(),

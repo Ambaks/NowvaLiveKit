@@ -29,11 +29,11 @@ def _build_goal_question(num: int, precaptured_params: dict, label: str = "") ->
     if precaptured_goal:
         goal_desc = GOAL_DESCRIPTIONS.get(precaptured_goal, precaptured_goal)
         return f"""
-{num}. **Question {num}{label} - PRE-CAPTURED GOAL**:
+{num}. **Question {num}{label} - pre-captured goal**:
    Confirm you detected they want to {goal_desc}
    Their original request: {_wrap_user_value(precaptured_goal_raw)}
-   → If YES: Call `capture_goal` with the exact text inside the <user_data> tags
-   → If NO/MODIFY: Ask for clarification and call `capture_goal(goal_description)`
+   → If yes: Call `capture_goal` with the exact text inside the <user_data> tags
+   → If no/modify: Ask for clarification and call `capture_goal(goal_description)`
 """
     return f"""
 {num}. **Question {num}{label}**: Ask about their main fitness goal (build muscle, get stronger, improve athleticism, etc.)
@@ -44,15 +44,15 @@ def _build_goal_question(num: int, precaptured_params: dict, label: str = "") ->
 def _build_precaptured_or_ask(num: int, label: str, precaptured_value, confirm_text: str,
                                capture_func: str, ask_text: str, optional: bool = False) -> str:
     """Build a question that either confirms a pre-captured value or asks fresh."""
-    opt = " (OPTIONAL)" if optional else ""
+    opt = " (optional)" if optional else ""
     if precaptured_value is not None:
         if isinstance(precaptured_value, str):
             precaptured_value = _wrap_user_value(precaptured_value)
         return f"""
-{num}. **Question {num}{opt} - PRE-CAPTURED**:
+{num}. **Question {num}{opt} - pre-captured**:
    {confirm_text.format(value=precaptured_value)}
-   → If YES: Call `{capture_func}`
-   → If NO/MODIFY: {ask_text}
+   → If yes: Call `{capture_func}`
+   → If no/modify: {ask_text}
 """
     return f"""
 {num}. **Question {num}{opt}**: {ask_text}
@@ -91,26 +91,26 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
         weight_lbs = int(weight_kg * 2.20462)
 
         question_1_2_instructions = f"""
-1. **CONFIRM EXISTING STATS (CRITICAL - CANNOT BE SKIPPED)**:
+1. **Confirm existing stats (critical - cannot be skipped)**:
    Confirm: {height_ft}'{height_in}", {weight_lbs} lbs, {age} years old, {sex}. Ask if still accurate.
-   - If YES: Call `capture_height_weight()` with NO args, then `capture_age_sex()` with NO args
-   - If CHANGED: Ask what changed, call with new values
-   ALWAYS call both functions to load data into state, even when confirming.
+   - If yes: Call `capture_height_weight()` with no args, then `capture_age_sex()` with no args
+   - If changed: Ask what changed, call with new values
+   Always call both functions to load data into state, even when confirming.
 
 """ + _build_goal_question(2, precaptured_params)
 
     elif has_height_weight:
         question_1_2_instructions = _build_goal_question(1, precaptured_params) + f"""
-2. **CONFIRM HEIGHT/WEIGHT**: Confirm existing values. Ask if still accurate.
-   - If YES: Call `capture_height_weight()` with NO args
-   - If NO: Call with new values
+2. **Confirm height/weight**: Confirm existing values. Ask if still accurate.
+   - If yes: Call `capture_height_weight()` with no args
+   - If no: Call with new values
    Then ask for age and sex → Call `capture_age_sex(age, sex)`
 """
 
     elif has_age_sex:
         question_1_2_instructions = _build_goal_question(1, precaptured_params) + f"""
-2. **ASK HEIGHT/WEIGHT**: Ask for height and weight → Call `capture_height_weight(height, weight)`
-   Then confirm existing age/sex. If still correct: `capture_age_sex()` with NO args. If changed: call with new values.
+2. **Ask height/weight**: Ask for height and weight → Call `capture_height_weight(height, weight)`
+   Then confirm existing age/sex. If still correct: `capture_age_sex()` with no args. If changed: call with new values.
 """
 
     else:
@@ -171,17 +171,17 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
 
     # V6: Training season (only if sport athlete)
     training_season_q = f"""
-{n+5}. **Question {n+5} (OPTIONAL — ONLY if they said a sport)**: Ask what part of the season they're in
+{n+5}. **Question {n+5} (optional — only if they said a sport)**: Ask what part of the season they're in
    → "Are you in-season, off-season, pre-season, or post-season right now?"
    → Call `capture_training_season(season)` with "off_season", "pre_season", "in_season", or "post_season"
-   → If they said "none" for sport, SKIP this and call `capture_training_season("off_season")`
+   → If they said "none" for sport, skip this and call `capture_training_season("off_season")`
 """
 
     # V6: Games per week (only if in-season)
     games_q = f"""
-{n+6}. **Question {n+6} (OPTIONAL — ONLY if in-season)**: Ask how many games/competitions per week
+{n+6}. **Question {n+6} (optional — only if in-season)**: Ask how many games/competitions per week
    → Call `capture_games_per_week(number)`
-   → If NOT in-season, SKIP this entirely
+   → If not in-season, skip this entirely
 """
 
     notes_q = _build_precaptured_or_ask(
@@ -193,12 +193,12 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
     )
 
     final_q_num = n + 8
-    heading_subject = user_name.upper() if user_name else "THE USER"
+    heading_subject = user_name if user_name else "the user"
 
     return f"""
-# COLLECTING DATA FOR {heading_subject} — FOLLOW THIS EXACT ORDER
+# Collecting Data for {heading_subject} — Follow This Exact Order
 
-**CRITICAL RULE**: Every capture function returns a continuation signal. When you see it, IMMEDIATELY ask the next question in the SAME turn. NEVER wait for user input after a function call.
+**Critical rule**: Every capture function returns a continuation signal. When you see it, immediately ask the next question in the same turn. Never wait for user input after a function call.
 
 ## Question Sequence
 
@@ -212,7 +212,7 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
 {games_q}
 {notes_q}
 
-{final_q_num}. **FINAL**: Ask if beginner, intermediate, or advanced lifter
+{final_q_num}. **Final**: Ask if beginner, intermediate, or advanced lifter
    → Call `capture_fitness_level(level)`
    → Summarize their program parameters
    → Call `set_vbt_capability(true/false)` using vbt_enabled from state
@@ -221,21 +221,21 @@ def get_program_creation_prompt(existing_data: dict = None, precaptured_params: 
 ---
 
 # Program Creation
-Your ONLY job: collect the parameters above in order, then hand off to the backend.
+Your only job: collect the parameters above in order, then hand off to the backend.
 Use coaching language: "Let's build you a program", "We'll focus on..."
 
 # VBT Decision Logic
 After `capture_fitness_level()`, the system auto-decides VBT:
-- Power/Athletic goals: enabled at ANY level (beginners limited to basic power exercises) | Advanced + Strength: enabled | Hypertrophy only: disabled | Beginners with non-power goals: disabled
+- Power/Athletic goals: enabled at any level (beginners limited to basic power exercises) | Advanced + Strength: enabled | Hypertrophy only: disabled | Beginners with non-power goals: disabled
 You don't make this decision — just collect params.
 
 # After Collection
 `generate_workout_program()` → (tool handles wait + polling internally) → When done, `finish_program_creation()`
 
 # Critical Rules
-1. NEVER generate programs yourself — the backend generates, you collect data
-2. Collect ALL parameters before calling `generate_workout_program()`
-3. NO WAITING between tool calls — chain immediately
+1. Never generate programs yourself — the backend generates, you collect data
+2. Collect all parameters before calling `generate_workout_program()`
+3. No waiting between tool calls — chain immediately
 4. Tell user to wait while generating (10-30s is normal)
 5. Final tool sequence: `capture_fitness_level` → `set_vbt_capability` → `generate_workout_program` (handles wait internally) → `finish_program_creation`
 6. Don't ask "are you ready?" — just execute
@@ -243,9 +243,7 @@ You don't make this decision — just collect params.
 8. Optional params: use sensible defaults (60 min, "none" for injuries/sport) if user says "normal" or skips
 
 # Continuation Flow
-User answers → Call capture function → Get signal → IMMEDIATELY ask next question in SAME turn
-Every response = function call + next question. Sound natural, not robotic.
-
-# Function Reference
-capture_height_weight("5'10\\"", "175 lbs") | capture_age_sex(28, "male") | capture_goal("build muscle") | capture_program_duration(12) | capture_training_frequency(4) | capture_session_duration(90) | capture_injury_history("none") | capture_specific_sport("basketball") | capture_training_season("in_season") | capture_games_per_week(2) | capture_user_notes("Prefers RDLs") | capture_fitness_level("intermediate") | set_vbt_capability(true/false) | generate_workout_program() | finish_program_creation()
+User answers → Call capture function → Get signal → immediately ask next question in same turn
+Every response = function call + next question.
+React briefly to each answer like a coach would — one short beat, sometimes none — then ask the next question. Never robotic back-to-back questions.
 """

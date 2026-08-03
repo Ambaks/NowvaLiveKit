@@ -468,10 +468,15 @@ class ScheduleMaintenanceAgent(BaseNovaAgent):
             if not changes:
                 return None, "You haven't made any schedule changes yet."
 
-            response = f"Here are your {len(changes)} most recent schedule changes:\n\n"
-            for i, change in enumerate(changes, 1):
+            response = f"The user's {len(changes)} most recent schedule changes, newest first:\n"
+            for change in changes:
                 formatted = format_change_for_display(change)
-                response += f"{i}. {formatted}\n"
+                response += f"{formatted}\n"
+            response += (
+                "Present this conversationally in 2-3 sentences — lead with the "
+                "most recent change, group similar ones together, and never read "
+                "the list aloud item by item."
+            )
 
             return None, response.strip()
 
@@ -493,16 +498,23 @@ class ScheduleMaintenanceAgent(BaseNovaAgent):
         try:
             analysis = analyze_schedule_recovery(db, user_id)
 
-            response = f"{analysis['analysis_summary']}\n\n"
+            response = f"Recovery analysis of the user's schedule:\n{analysis['analysis_summary']}\n"
 
             if analysis["recommendations"]:
-                response += f"I found {len(analysis['recommendations'])} recovery concerns:\n\n"
-                for i, rec in enumerate(analysis["recommendations"][:3], 1):
+                for rec in analysis["recommendations"][:3]:
                     formatted = format_recommendation_for_display(rec)
-                    response += f"{i}. {formatted}\n\n"
-                response += "Would you like me to add these rest days to your schedule?"
+                    response += f"{formatted}\n"
+                response += (
+                    "Present this conversationally in 2-3 sentences — lead with "
+                    "the overall recovery picture, mention at most two specific "
+                    "concerns, and never read the list or labels aloud. Then ask "
+                    "if they want the recommended rest days added to their schedule."
+                )
             else:
-                response += "No rest day recommendations - keep up the great work!"
+                response += (
+                    "No rest days are needed. Tell them in one short sentence that "
+                    "their schedule looks good for recovery."
+                )
 
             return None, response.strip()
 
@@ -556,14 +568,21 @@ class ScheduleMaintenanceAgent(BaseNovaAgent):
             if not needs_deload:
                 return None, f"Good news! You don't need a deload right now. {reason}"
 
-            response = "Based on your training load, I recommend a deload week:\n\n"
-            response += f"Fatigue Score: {recommendation.get('fatigue_score', 'N/A')}/100\n"
-            response += f"Recommended Week: {recommendation['week_start'].strftime('%b %d')} - {recommendation['week_end'].strftime('%b %d')}\n"
-            response += f"Intensity: {int(recommendation['intensity_modifier'] * 100)}% of normal\n\n"
-            response += "Reasons:\n"
+            response = "The user's training load analysis recommends a deload week:\n"
+            response += f"Fatigue score {recommendation.get('fatigue_score', 'unknown')} out of 100.\n"
+            response += (
+                f"Recommended week {recommendation['week_start'].strftime('%b %d')} "
+                f"to {recommendation['week_end'].strftime('%b %d')} at "
+                f"{int(recommendation['intensity_modifier'] * 100)} percent of normal intensity.\n"
+            )
             for r in recommendation['trigger_reasons']:
-                response += f"  - {r}\n"
-            response += "\nWould you like me to apply this deload week to your schedule?"
+                response += f"{r}\n"
+            response += (
+                "Present this conversationally in 2-3 sentences — lead with the "
+                "deload recommendation, mention at most two or three numbers, and "
+                "never read the list or labels aloud. Then ask if they want the "
+                "deload week applied to their schedule."
+            )
 
             return None, response.strip()
 
@@ -628,21 +647,27 @@ class ScheduleMaintenanceAgent(BaseNovaAgent):
             if not metrics:
                 return None, "I don't have any training load data for you yet. Complete some workouts and I'll start tracking!"
 
-            response = f"Here's your training load for the past {len(metrics)} weeks:\n\n"
+            response = f"The user's training load for the past {len(metrics)} weeks, most recent first:\n"
 
             for m in metrics:
                 week_str = m.week_start_date.strftime('%b %d')
-                response += f"Week of {week_str}:\n"
-                response += f"  - Workouts: {m.workouts_completed}\n"
-                response += f"  - Total Sets: {m.total_sets}\n"
-                response += f"  - Volume: {float(m.total_volume_kg):.0f} kg\n"
+                line = (
+                    f"Week of {week_str} — {m.workouts_completed} workouts, "
+                    f"{m.total_sets} total sets, {float(m.total_volume_kg):.0f} kg volume"
+                )
                 if m.avg_rpe:
-                    response += f"  - Avg RPE: {float(m.avg_rpe):.1f}/10\n"
+                    line += f", average RPE {float(m.avg_rpe):.1f} out of 10"
                 if m.fatigue_score:
-                    response += f"  - Fatigue Score: {float(m.fatigue_score):.1f}/100\n"
+                    line += f", fatigue score {float(m.fatigue_score):.1f} out of 100"
                 if m.velocity_decline_percent:
-                    response += f"  - Velocity Decline: {float(m.velocity_decline_percent):.1f}%\n"
-                response += "\n"
+                    line += f", velocity decline {float(m.velocity_decline_percent):.1f} percent"
+                response += line + "\n"
+
+            response += (
+                "Present this conversationally in 2-3 sentences — lead with the "
+                "overall trend, mention at most two or three numbers, and never "
+                "read the list or labels aloud."
+            )
 
             return None, response.strip()
 

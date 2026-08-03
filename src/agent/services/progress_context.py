@@ -34,7 +34,7 @@ def _days_ago_phrase(days_ago: int) -> str:
     return f"{days_ago} days ago"
 
 
-def _fault_label(fault_type: str) -> str:
+def fault_label(fault_type: str) -> str:
     return FAULT_LABELS.get(fault_type, fault_type.replace("_", " "))
 
 
@@ -53,7 +53,7 @@ def build_greeting_progress_line(baseline: dict | None) -> str | None:
         f"PROGRESS CONTEXT: last squat session was {_days_ago_phrase(baseline.get('days_ago', 0))}"
     ]
     if baseline.get("mean_score") is not None:
-        parts.append(f"form score {round(baseline['mean_score'] * 100)}/100")
+        parts.append(f"form score {round(baseline['mean_score'] * 100)} out of 100")
     if baseline.get("total_reps"):
         parts.append(
             f"{baseline['total_reps']} reps across {baseline.get('total_sets', 0)} sets"
@@ -61,18 +61,19 @@ def build_greeting_progress_line(baseline: dict | None) -> str | None:
     weakest = _weakest_dimension(baseline.get("per_dimension") or {})
     if weakest is not None:
         label, value = weakest
-        parts.append(f"weakest area was {label} ({round(value * 100)}/100)")
+        parts.append(f"weakest area was {label} ({round(value * 100)} out of 100)")
     if baseline.get("avg_knee_valgus_deg") is not None:
         parts.append(
             f"knees caved about {baseline['avg_knee_valgus_deg']} degrees on average"
         )
     top_faults = baseline.get("top_faults") or []
     if top_faults:
-        parts.append(f"most common fault: {_fault_label(top_faults[0]['fault_type'])}")
+        parts.append(f"most common fault: {fault_label(top_faults[0]['fault_type'])}")
     return (
         ", ".join(parts) + ". "
-        "Weave ONE brief reference to this into the greeting as today's goal "
-        "(e.g. 'last time your knee tracking was the weak spot — today we clean that up')."
+        "Weave ONE brief reference to this into the greeting as today's goal, "
+        "in your own words — a quick 'here's what we're cleaning up today' beat, "
+        "phrased differently every session."
     )
 
 
@@ -93,7 +94,7 @@ def build_progress_comparison_lines(
         current_points = round(current_mean * 100)
         lines.append(
             f"\nVS LAST SESSION ({_days_ago_phrase(baseline.get('days_ago', 0))}): "
-            f"overall {base_points} -> {current_points} "
+            f"overall {base_points} to {current_points} "
             f"({current_points - base_points:+d} points)"
         )
 
@@ -109,7 +110,7 @@ def build_progress_comparison_lines(
         current_points = round(current_value * 100)
         if abs(current_points - base_points) >= MIN_DIMENSION_DELTA_POINTS:
             dim_lines.append(
-                f"{label}: {base_points} -> {current_points} "
+                f"{label}: {base_points} to {current_points} "
                 f"({current_points - base_points:+d})"
             )
     if dim_lines:
@@ -139,14 +140,14 @@ def build_session_comparison_line(
     if delta_points > 0:
         return (
             f"Session-over-session: {delta_points} points better than last session "
-            f"({when}: {base_points} -> today: {current_points})."
+            f"({when}: {base_points}, today: {current_points})."
         )
     if delta_points < 0:
         return (
             f"Session-over-session: {abs(delta_points)} points below last session "
-            f"({when}: {base_points} -> today: {current_points})."
+            f"({when}: {base_points}, today: {current_points})."
         )
-    return f"Session-over-session: matched last session's form score ({base_points}/100)."
+    return f"Session-over-session: matched last session's form score ({base_points} out of 100)."
 
 
 def build_progress_report(
@@ -214,7 +215,7 @@ def build_progress_report(
     if baseline and baseline.get("top_faults"):
         top = baseline["top_faults"][0]
         lines.append(
-            f"Most common fault last session: {_fault_label(top['fault_type'])} "
+            f"Most common fault last session: {fault_label(top['fault_type'])} "
             f"({top['count']} reps)."
         )
     return "\n".join(lines)
@@ -257,7 +258,7 @@ def build_detailed_greeting_context(
                 faults = s.get("faults", {})
                 if faults:
                     fault_parts = [
-                        f"{_fault_label(ft)} on {cnt}" for ft, cnt in faults.items()
+                        f"{fault_label(ft)} on {cnt}" for ft, cnt in faults.items()
                     ]
                     set_lines.append(
                         f"Set {s['set_number']}: {s.get('rep_count', 0)} reps, "
@@ -275,7 +276,7 @@ def build_detailed_greeting_context(
         if profile:
             trend_lines: list[str] = []
             for entry in profile:
-                label = _fault_label(entry["fault_type"])
+                label = fault_label(entry["fault_type"])
                 trend_suffix = ""
                 if entry.get("trend") == "improving":
                     trend_suffix = " (improving)"
@@ -290,7 +291,7 @@ def build_detailed_greeting_context(
 
         chronic = fault_trends.get("chronic_faults", [])
         if chronic:
-            labels = [_fault_label(ft) for ft in chronic[:MAX_GREETING_FAULTS]]
+            labels = [fault_label(ft) for ft in chronic[:MAX_GREETING_FAULTS]]
             parts.append(f"CHRONIC FAULTS TO WATCH: {', '.join(labels)}.")
 
     if not parts:
@@ -328,7 +329,7 @@ def build_chronic_fault_celebration(
         entry = profile_lookup.get(ft)
         if not entry:
             continue
-        label = _fault_label(ft)
+        label = fault_label(ft)
         celebrations.append(
             f"CELEBRATE THIS: {label} has been a consistent issue — it appeared "
             f"in {entry['sessions_present']} of your last {n_sessions} sessions — "
@@ -361,7 +362,7 @@ def build_trend_comparison_lines(
         if not entry or entry["total_occurrences"] < 3:
             continue
         avg_per_session = round(entry["total_occurrences"] / n_sessions, 1)
-        label = _fault_label(ft)
+        label = fault_label(ft)
         if count < avg_per_session * 0.5:
             lines.append(
                 f"CROSS-SESSION TREND: {label} hit {count} reps this set vs "
