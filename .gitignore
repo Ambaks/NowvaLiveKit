@@ -190,3 +190,8 @@ deprecated/*
 # Website (Vercel frontend) — keep its image assets despite the *.png rule
 !website/**/*.png
 Nowva_Full_Rack.gltf
+
+# Promo video build artifacts and 3D models
+rack-video/out/
+*.glb
+*.webm

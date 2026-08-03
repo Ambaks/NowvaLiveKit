@@ -1,0 +1,479 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nowva rack film rig</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #09090e; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/website/node_modules/three/build/three.module.js",
+    "three/addons/": "/website/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+/* ---------------- timeline (seconds) ---------------- */
+const T_ORBIT_END = 8.0;     // orbit around closed rack
+const T_DOORS_END = 13.0;    // doors swing open
+const T_PUSH_END = 18.5;     // dolly in until screen fills frame
+const T_BOOT = 15.5;         // screen starts turning on
+const T_BOOT_DUR = 1.6;
+export const T_TOTAL = 20.0; // page keeps rendering screen-full to the end
+
+const FOV_DEG = 35;
+const BACKDROP = 0x09090e;
+
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+const easeInOutCubic = (u) => (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2);
+const easeInOutSine = (u) => -(Math.cos(Math.PI * u) - 1) / 2;
+const smooth = (t, a, b) => easeInOutCubic(clamp01((t - a) / (b - a)));
+
+/* ---------------- renderer / scene ---------------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(BACKDROP);
+
+const camera = new THREE.PerspectiveCamera(
+  FOV_DEG, window.innerWidth / window.innerHeight, 0.05, 50);
+
+/* website intro light rig */
+scene.add(new THREE.HemisphereLight(0x5b4a91, 0x09090e, 0.35));
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(3.5, 4.2, 2.5);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xc4b5fd, 0.5);
+fill.position.set(-4, 1.5, 2);
+scene.add(fill);
+const rim = new THREE.DirectionalLight(0x7c3aed, 1.8);
+rim.position.set(-1.5, 3, -4);
+scene.add(rim);
+
+/* environment: replicate the two drei Lightformers with a PMREM scene */
+{
+  const envScene = new THREE.Scene();
+  const mk = (color, intensity, sx, sy, px, py, pz, rx = 0) => {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(sx, sy),
+      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    m.material.color.multiplyScalar(intensity);
+    m.position.set(px, py, pz);
+    m.rotation.x = rx;
+    envScene.add(m);
+  };
+  mk(0xffffff, 2.0, 4, 2, 0, 4, 0, -Math.PI / 2);
+  mk(0x7c3aed, 1.5, 6, 1, 0, 1.5, -4);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+  pmrem.dispose();
+}
+
+/* soft fake contact shadow */
+function addGroundShadow(groundY, radius) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 512;
+  const ctx = c.getContext("2d");
+  const g = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
+  g.addColorStop(0, "rgba(0,0,0,0.55)");
+  g.addColorStop(0.6, "rgba(0,0,0,0.25)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 512, 512);
+  const tex = new THREE.CanvasTexture(c);
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(radius * 3.2, radius * 3.2),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = groundY + 0.001;
+  scene.add(mesh);
+}
+
+/* ---------------- model loading ---------------- */
+const loader = new GLTFLoader();
+const loadGlb = (url) => new Promise((res, rej) => loader.load(url, res, undefined, rej));
+
+const [closedGltf, openGltf] = await Promise.all([
+  loadGlb("/NOWVA_ASSEMBLY_CLOSED.glb"),
+  loadGlb("/NOWVA_ASSEMBLY_OPEN.glb"),
+]);
+
+/* wrapper owns the Z-up fix; children keep baked transforms */
+const modelGroup = new THREE.Group();
+modelGroup.rotation.x = -Math.PI / 2;
+modelGroup.add(closedGltf.scene);
+scene.add(modelGroup);
+
+/* material tune (raw Onshape export ships flat roughness) */
+closedGltf.scene.traverse((o) => {
+  if (o.isMesh && o.material) {
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (m.isMeshStandardMaterial) {
+        m.roughness = 0.45;
+        m.metalness = 0.2;
+        m.envMapIntensity = 0.6;
+      }
+    }
+  }
+});
+
+/* center on origin, measure framing */
+modelGroup.updateWorldMatrix(true, true);
+const box = new THREE.Box3().setFromObject(modelGroup);
+const size = box.getSize(new THREE.Vector3());
+const center = box.getCenter(new THREE.Vector3());
+modelGroup.position.sub(center);
+modelGroup.updateWorldMatrix(true, true);
+const framing = {
+  height: size.y,
+  radius: size.length() / 2,
+  groundY: -size.y / 2,
+};
+addGroundShadow(framing.groundY, framing.radius);
+
+/* ---------------- door rig ----------------
+   Match door occurrence nodes by name in both files; recover the screw
+   motion (hinge axis + pivot) from closed->open local matrices. */
+function findOccurrence(root, part) {
+  let hit = null;
+  root.traverse((o) => {
+    if (!hit && o.name.includes(part) && o.name.toLowerCase().includes("occurrence"))
+      hit = o;
+  });
+  if (!hit) root.traverse((o) => { if (!hit && o.name.includes(part)) hit = o; });
+  return hit;
+}
+
+function makeDoorRig(part) {
+  const node = findOccurrence(closedGltf.scene, part);
+  const openNode = findOccurrence(openGltf.scene, part);
+  if (!node || !openNode) { console.error("door not found:", part); return null; }
+  node.updateMatrix();
+  openNode.updateMatrix();
+  const Lc = node.matrix.clone();
+  const Lo = openNode.matrix.clone();
+  const D = Lo.clone().multiply(Lc.clone().invert());
+  const R = new THREE.Matrix4().extractRotation(D);
+  const q = new THREE.Quaternion().setFromRotationMatrix(R);
+  const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
+  const axis = new THREE.Vector3(q.x, q.y, q.z);
+  if (axis.lengthSq() < 1e-12) axis.set(0, 0, 1); else axis.normalize();
+  if (q.w < 0) axis.negate();
+  const t = new THREE.Vector3().setFromMatrixPosition(D);
+  const tPar = axis.clone().multiplyScalar(t.dot(axis));
+  const tPerp = t.clone().sub(tPar);
+  /* pivot for rotation-about-line: p = (t_perp + cot(a/2) * (axis x t_perp)) / 2 */
+  const pivot = tPerp.clone()
+    .add(new THREE.Vector3().crossVectors(axis, tPerp).multiplyScalar(1 / Math.tan(angle / 2)))
+    .multiplyScalar(0.5);
+  node.matrixAutoUpdate = false;
+  return { node, Lc, axis, angle, pivot, slide: tPar };
+}
+
+function setDoor(rig, s) {
+  if (!rig) return;
+  const a = rig.angle * s;
+  const M = new THREE.Matrix4().makeTranslation(rig.pivot.x, rig.pivot.y, rig.pivot.z)
+    .multiply(new THREE.Matrix4().makeRotationAxis(rig.axis, a))
+    .multiply(new THREE.Matrix4().makeTranslation(-rig.pivot.x, -rig.pivot.y, -rig.pivot.z));
+  const slide = new THREE.Matrix4().makeTranslation(
+    rig.slide.x * s, rig.slide.y * s, rig.slide.z * s);
+  rig.node.matrix.copy(slide.clone().multiply(M).multiply(rig.Lc));
+  rig.node.matrixWorldNeedsUpdate = true;
+}
+
+const leftDoor = makeDoorRig("LEFT_DOOR");
+const rightDoor = makeDoorRig("RIGHT_DOOR");
+
+/* ---------------- bench fade ----------------
+   The stowed bench sits between the doorway and the screen; dissolve it
+   during the push-in so it never blocks the frame. Materials are cloned
+   per-mesh so the fade can't bleed into parts sharing the same material. */
+let benchRoot = null;
+const benchMats = [];
+closedGltf.scene.traverse((o) => {
+  if (!benchRoot && o.name.includes("FOLDABLE")) benchRoot = o;
+});
+if (benchRoot) {
+  benchRoot.traverse((o) => {
+    if (o.isMesh && o.material) {
+      const mats = (Array.isArray(o.material) ? o.material : [o.material]).map((m) => {
+        const c = m.clone();
+        c.transparent = true;
+        return c;
+      });
+      o.material = Array.isArray(o.material) ? mats : mats[0];
+      benchMats.push(...mats);
+    }
+  });
+}
+
+function setBenchOpacity(alpha) {
+  if (!benchRoot) return;
+  benchRoot.visible = alpha > 0.001;
+  for (const m of benchMats) m.opacity = alpha;
+}
+
+/* ---------------- screen rig ----------------
+   Read the 4-vertex SCREEN quad in world space, overlay our own plane. */
+let screenRig = null;
+{
+  let mesh = null;
+  closedGltf.scene.traverse((o) => {
+    if (!mesh && o.isMesh && o.name.includes("SCREEN")) mesh = o;
+  });
+  if (!mesh) {
+    closedGltf.scene.traverse((o) => {
+      if (!mesh && o.isMesh && o.parent && o.parent.name.includes("SCREEN")) mesh = o;
+    });
+  }
+  if (mesh) {
+    mesh.updateWorldMatrix(true, false);
+    const pos = mesh.geometry.attributes.position;
+    const pts = [];
+    for (let i = 0; i < pos.count; i++)
+      pts.push(new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld));
+    const c = pts.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / pts.length);
+    /* orthonormal frame from the quad */
+    const e1 = pts[1].clone().sub(pts[0]);
+    const e2 = pts[2].clone().sub(pts[0]);
+    let normal = new THREE.Vector3().crossVectors(e1, e2).normalize();
+    /* the screen faces the door opening: aim the normal at the doors */
+    const doorCenter = new THREE.Vector3();
+    let doorCount = 0;
+    for (const rig of [leftDoor, rightDoor]) {
+      if (!rig) continue;
+      const b = new THREE.Box3().setFromObject(rig.node);
+      doorCenter.add(b.getCenter(new THREE.Vector3()));
+      doorCount++;
+    }
+    if (doorCount > 0) {
+      doorCenter.multiplyScalar(1 / doorCount);
+      if (normal.dot(doorCenter.clone().sub(c)) < 0) normal.negate();
+    }
+    let up = new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+    up = new THREE.Vector3().crossVectors(normal, right).normalize();
+    /* extents along frame axes */
+    let w = 0, h = 0;
+    for (const p of pts) {
+      const d = p.clone().sub(c);
+      w = Math.max(w, Math.abs(d.dot(right)) * 2);
+      h = Math.max(h, Math.abs(d.dot(up)) * 2);
+    }
+    mesh.visible = false;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1640; canvas.height = 1025;
+    const ctx = canvas.getContext("2d");
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    const basis = new THREE.Matrix4().makeBasis(right, up, normal);
+    plane.quaternion.setFromRotationMatrix(basis);
+    plane.position.copy(c).add(normal.clone().multiplyScalar(0.002));
+    modelGroup.localToWorld; /* plane lives in world space (model already centered) */
+    scene.add(plane);
+    screenRig = { plane, canvas, ctx, tex, center: plane.position.clone(), normal, w, h };
+  } else {
+    console.error("SCREEN mesh not found");
+  }
+}
+
+/* screen content: video if provided, else drawn placeholder */
+let uiVideo = null;
+window.setUiVideo = (url) => new Promise((resolve) => {
+  uiVideo = document.createElement("video");
+  uiVideo.muted = true;
+  uiVideo.src = url;
+  uiVideo.addEventListener("loadeddata", () => resolve(uiVideo.duration), { once: true });
+});
+
+function drawScreen(t) {
+  if (!screenRig) return;
+  const { ctx, canvas, tex } = screenRig;
+  const boot = smooth(t, T_BOOT, T_BOOT + T_BOOT_DUR);
+  ctx.fillStyle = "#050508";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (boot > 0) {
+    if (uiVideo && uiVideo.readyState >= 2) {
+      ctx.globalAlpha = boot;
+      ctx.drawImage(uiVideo, 0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 1;
+    } else {
+      /* placeholder: the display page's idle orb look */
+      const cx = canvas.width / 2, cy = canvas.height / 2;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 260);
+      g.addColorStop(0, `rgba(124, 58, 237, ${0.9 * boot})`);
+      g.addColorStop(0.55, `rgba(91, 74, 145, ${0.45 * boot})`);
+      g.addColorStop(1, "rgba(5, 5, 8, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(cx, cy, 260, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(235, 233, 245, ${boot})`;
+      ctx.font = "600 44px -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.letterSpacing = "14px";
+      ctx.fillText("NOWVA AI", cx, cy + 380);
+    }
+  }
+  /* glass sheen so the panel reads as a screen even when off */
+  const sheen = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  sheen.addColorStop(0, "rgba(255,255,255,0.05)");
+  sheen.addColorStop(0.35, "rgba(255,255,255,0.0)");
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  tex.needsUpdate = true;
+}
+
+/* ---------------- camera choreography ---------------- */
+function fitDistance(radius, aspect) {
+  const fovV = (FOV_DEG * Math.PI) / 180;
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect);
+  return radius / Math.sin(Math.min(fovV, fovH) / 2);
+}
+
+/* screen-facing end pose: camera sits on the screen normal at the distance
+   where the screen slightly overfills the frame */
+function screenPose(aspect) {
+  const { center, normal, w, h } = screenRig;
+  const fovV = (FOV_DEG * Math.PI) / 180;
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect);
+  const dH = (h / 2) / Math.tan(fovV / 2);
+  const dW = (w / 2) / Math.tan(fovH / 2);
+  const d = Math.min(dH, dW) * 0.985; /* overfill: no background at edges */
+  return {
+    pos: center.clone().add(normal.clone().multiplyScalar(d)),
+    target: center.clone(),
+  };
+}
+
+/* front azimuth = direction the screen faces */
+function frontAzimuth() {
+  if (!screenRig) return 0;
+  return Math.atan2(screenRig.normal.x, screenRig.normal.z);
+}
+
+function setCamera(t) {
+  const aspect = camera.aspect;
+  const fit = fitDistance(framing.radius, aspect);
+  const front = frontAzimuth();
+
+  /* phase 1+2: one continuous orbit ending at the front */
+  const uOrbit = clamp01(t / T_DOORS_END);
+  const az = front + Math.PI * 1.65 * (1 - easeInOutSine(uOrbit));
+  const dist = fit * (1.28 - 0.18 * easeInOutSine(uOrbit));
+  const camY = framing.groundY + framing.height * (0.32 + 0.30 * easeInOutSine(uOrbit));
+  const targetY = framing.groundY + framing.height * 0.52;
+
+  let pos = new THREE.Vector3(
+    Math.sin(az) * dist, 0, Math.cos(az) * dist);
+  pos.y = camY;
+  let target = new THREE.Vector3(0, targetY, 0);
+
+  /* phase 3: blend into the screen-facing pose */
+  if (screenRig && t > T_DOORS_END) {
+    const s = smooth(t, T_DOORS_END, T_PUSH_END);
+    const end = screenPose(aspect);
+    pos = pos.lerp(end.pos, s);
+    target = target.lerp(end.target, s);
+  }
+  camera.position.copy(pos);
+  camera.lookAt(target);
+}
+
+/* ---------------- deterministic seek API ---------------- */
+window.seek = (t) => {
+  const doorS = smooth(t, T_ORBIT_END, T_DOORS_END);
+  setDoor(leftDoor, doorS);
+  setDoor(rightDoor, doorS);
+  setBenchOpacity(1 - smooth(t, T_DOORS_END + 0.2, T_DOORS_END + 2.2));
+  drawScreen(t);
+  if (uiVideo && uiVideo.readyState >= 2) {
+    /* video time is aligned so boot start == video start */
+    const vt = Math.max(0, t - T_BOOT);
+    if (Math.abs(uiVideo.currentTime - vt) > 0.001) {
+      return new Promise((resolve) => {
+        uiVideo.addEventListener("seeked", () => {
+          drawScreen(t); setCamera(t); renderer.render(scene, camera); resolve();
+        }, { once: true });
+        uiVideo.currentTime = vt;
+      });
+    }
+  }
+  setCamera(t);
+  renderer.render(scene, camera);
+};
+
+/* debug: rig numbers + screen corners projected to NDC */
+window.rigInfo = () => {
+  const out = {
+    aspect: camera.aspect,
+    camPos: camera.position.toArray(),
+    framing,
+  };
+  if (screenRig) {
+    const { plane, w, h } = screenRig;
+    out.screen = { w, h, center: screenRig.center.toArray(), normal: screenRig.normal.toArray() };
+    plane.updateWorldMatrix(true, false);
+    out.corners = [];
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const p = new THREE.Vector3((sx * w) / 2, (sy * h) / 2, 0)
+        .applyMatrix4(plane.matrixWorld).project(camera);
+      out.corners.push([+p.x.toFixed(3), +p.y.toFixed(3), +p.z.toFixed(3)]);
+    }
+  }
+  return out;
+};
+
+/* debug: hide nodes whose name matches (case-insensitive); "__RESET__" restores */
+window.hideMatching = (needle) => {
+  let n = 0;
+  closedGltf.scene.traverse((o) => {
+    if (needle === "__RESET__") { o.visible = true; return; }
+    if (needle !== "NONE" && o.name.toLowerCase().includes(needle.toLowerCase())) {
+      o.visible = false; n++;
+    }
+  });
+  return n;
+};
+
+/* debug: view from a fixed azimuth after seeking to t */
+window.debugOrbit = async (azDeg, t, distMul = 1.3) => {
+  await window.seek(t);
+  const fit = fitDistance(framing.radius, camera.aspect) * distMul;
+  const az = (azDeg * Math.PI) / 180;
+  camera.position.set(Math.sin(az) * fit, framing.groundY + framing.height * 0.55, Math.cos(az) * fit);
+  camera.lookAt(0, framing.groundY + framing.height * 0.5, 0);
+  renderer.render(scene, camera);
+  return { screenNormal: screenRig ? screenRig.normal.toArray() : null,
+           frontAz: (frontAzimuth() * 180 / Math.PI).toFixed(1) };
+};
+
+window.addEventListener("resize", () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+await window.seek(0);
+window.rigReady = true;
+</script>
+</body>
+</html>

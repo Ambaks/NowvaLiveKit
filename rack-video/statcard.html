@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nowva stat end card</title>
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; background: #09090e;
+    font-family: -apple-system, "SF Pro Display", "Segoe UI", sans-serif;
+    overflow: hidden; }
+  #glow { position: absolute; left: 50%; top: 42%; width: 1400px; height: 900px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse, rgba(124, 58, 237, 0.16) 0%, rgba(9, 9, 14, 0) 62%); }
+  #card { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 72px; }
+  #overline { color: #a78bfa; font-size: 22px; font-weight: 600;
+    letter-spacing: 0.42em; text-transform: uppercase; }
+  #headline { color: #f4f2fb; font-size: 64px; font-weight: 700;
+    letter-spacing: -0.01em; margin-top: -40px; }
+  #tiles { display: flex; gap: 56px; }
+  .tile { width: 420px; padding: 52px 44px 46px; border-radius: 22px;
+    background: rgba(255, 255, 255, 0.028);
+    border: 1px solid rgba(167, 139, 250, 0.14);
+    display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .tile .accent { width: 34px; height: 4px; border-radius: 2px; background: #7c3aed; }
+  .tile .value { color: #f4f2fb; font-size: 118px; font-weight: 650; line-height: 1;
+    letter-spacing: -0.02em; margin-top: 10px; }
+  .tile .label { color: #9a94ad; font-size: 23px; font-weight: 500; line-height: 1.45;
+    text-align: center; max-width: 320px; }
+  #logo { position: absolute; inset: 0; display: flex; flex-direction: column;
+    gap: 26px; align-items: center; justify-content: center; }
+  #logo img { width: 210px; }
+  #logo .word { color: #f4f2fb; font-size: 34px; font-weight: 600;
+    letter-spacing: 0.5em; text-indent: 0.5em; }
+</style>
+</head>
+<body>
+<div id="glow"></div>
+<div id="card">
+  <div id="overline">Early access results</div>
+  <div id="headline">Real users. Real form fixes.</div>
+  <div id="tiles">
+    <div class="tile" id="t1">
+      <div class="accent"></div>
+      <div class="value" data-target="5" data-suffix="">0</div>
+      <div class="label">users have tested and trained with Nowva</div>
+    </div>
+    <div class="tile" id="t2">
+      <div class="accent"></div>
+      <div class="value" data-target="100" data-suffix="%">0%</div>
+      <div class="label">improved their form in their first workout</div>
+    </div>
+    <div class="tile" id="t3">
+      <div class="accent"></div>
+      <div class="value" data-target="100" data-suffix="%">0%</div>
+      <div class="label">said they would use Nowva again</div>
+    </div>
+  </div>
+</div>
+<div id="logo">
+  <img src="/src/visual/logo-white.png" alt="">
+  <div class="word">NOWVA AI</div>
+</div>
+<script>
+const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+const easeOut = (u) => 1 - (1 - u) ** 3;
+const rise = (t, a, d) => easeOut(clamp01((t - a) / d));
+
+const card = document.getElementById("card");
+const glow = document.getElementById("glow");
+const logo = document.getElementById("logo");
+const tiles = [
+  { el: document.getElementById("t1"), at: 0.7 },
+  { el: document.getElementById("t2"), at: 1.15 },
+  { el: document.getElementById("t3"), at: 1.6 },
+];
+
+window.seek = (t) => {
+  const head = rise(t, 0.1, 0.7);
+  document.getElementById("overline").style.opacity = head;
+  document.getElementById("headline").style.opacity = rise(t, 0.25, 0.7);
+  document.getElementById("headline").style.transform =
+    `translateY(${(1 - rise(t, 0.25, 0.7)) * 24}px)`;
+  glow.style.opacity = rise(t, 0, 1.2);
+
+  for (const { el, at } of tiles) {
+    const u = rise(t, at, 0.8);
+    el.style.opacity = u;
+    el.style.transform = `translateY(${(1 - u) * 34}px)`;
+    const value = el.querySelector(".value");
+    const count = easeOut(clamp01((t - at - 0.15) / 1.1));
+    value.textContent =
+      Math.round(Number(value.dataset.target) * count) + value.dataset.suffix;
+  }
+
+  /* outro: card gives way to the logo */
+  const out = rise(t, 5.2, 0.8);
+  card.style.opacity = 1 - out;
+  card.style.transform = `scale(${1 - out * 0.03})`;
+  const lin = rise(t, 5.7, 0.9);
+  logo.style.opacity = lin;
+  logo.style.transform = `scale(${0.96 + lin * 0.04})`;
+};
+
+window.seek(0);
+window.rigReady = true;
+</script>
+</body>
+</html>
