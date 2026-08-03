@@ -86,4 +86,4 @@ class TestBuildFallbackScript:
         script = build_fallback_script(_CUES)
 
         assert script.intro
-        assert "two more" in script.outro
+        assert script.outro

@@ -5,6 +5,7 @@ ProgramCreationAgent - Handles program creation (10-question capture flow) and p
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 from livekit.agents import RunContext
@@ -32,6 +33,9 @@ SUMMARY_TRIGGER_TOKENS = int(MAX_CONTEXT_TOKENS * SUMMARY_TRIGGER_RATIO)
 KEEP_LAST_TURNS = 4
 SUMMARY_MODEL = os.getenv("CONTEXT_SUMMARY_MODEL", "gpt-4o-mini")
 
+# Seconds of build wait before speaking a single mid-wait filler line
+MID_BUILD_FILLER_DELAY_S = 45.0
+
 
 class ProgramCreationAgent(BaseNovaAgent):
     """Handles program creation (10-question capture) and program updates."""
@@ -47,7 +51,7 @@ class ProgramCreationAgent(BaseNovaAgent):
             program_name = state.get("program_update.selected_program_name", "your program")
             name = state.get_user().get("name", "there")
             return (
-                f"You are Nova, an AI fitness coach helping the user update their '{program_name}' program. "
+                f"You are helping the user update their '{program_name}' program. "
                 f"Ask what they want to change about the program, then call capture_program_change_request() "
                 f"with their description. Be conversational and helpful."
             )
@@ -831,8 +835,11 @@ class ProgramCreationAgent(BaseNovaAgent):
 
         # Speak hold message and suppress VAD so user speech doesn't interrupt polling
         await self._say(
-            "Alright, I've got everything I need. Building your custom program now — this usually takes about 30 seconds. Hang tight!",
-            wait=True, restore=False
+            "Tell the user you've got everything you need and you're building "
+            "their custom program right now — it takes about thirty seconds. "
+            "One or two sentences, your own words, vary it between sessions.",
+            wait=True,
+            restore=False,
         )
 
         try:
@@ -864,8 +871,19 @@ class ProgramCreationAgent(BaseNovaAgent):
 
             # Poll for completion internally — never ask the LLM to poll
             final_status = None
+            poll_started = time.monotonic()
+            filler_spoken = False
             for attempt in range(1, 25):
                 await asyncio.sleep(5.0)
+                if not filler_spoken and time.monotonic() - poll_started >= MID_BUILD_FILLER_DELAY_S:
+                    filler_spoken = True
+                    self.session.generate_reply(
+                        instructions=(
+                            "One short reassuring line, your own words: the "
+                            "program build is still running and almost done."
+                        ),
+                        tool_choice="none",
+                    )
                 try:
                     async with httpx.AsyncClient() as client:
                         status_resp = await client.get(
@@ -1135,8 +1153,11 @@ class ProgramCreationAgent(BaseNovaAgent):
 
         # Speak hold message and suppress VAD so user speech doesn't interrupt polling
         await self._say(
-            f"Perfect, I'm updating your {program_name} program now. This usually takes about a minute. Hang tight!",
-            wait=True, restore=False
+            f"Tell the user you're updating their {program_name} program now — "
+            f"it takes about a minute. One or two sentences, your own words, "
+            f"vary it between sessions.",
+            wait=True,
+            restore=False,
         )
 
         try:

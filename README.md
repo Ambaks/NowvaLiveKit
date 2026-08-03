@@ -52,6 +52,7 @@
 - **Enhanced Rep Scoring:** Refactored scoring logic to track temporal consistency, depth variability, and rep quality metrics. Detailed evidence tracking for each rep (depth achieved, trunk control, asymmetry). New `SessionTracker` for multi-set aggregation with phase-aware state management.
 - **Coaching Orchestrator Overhaul:** Unified priority queue (fault cues > rep counts > progress > LLM) with audio ducking — LLM pauses while cached cues play. Centralized routing between biomechanics pipeline IPC and voice agent.
 - **Voice Agent Coaching Loop:** WorkoutAgent now manages active session state, integrates progress context into LLM prompts, and sequences intra-set cues (pre-cached TTS) with post-set LLM summaries. Setup assessment captures stance/toe angle before first rep.
+- **Agent Persona Overhaul:** Refactored all agent prompts (onboarding, main menu, workout, schedule, program creation, coaching) from prescriptive, scripted instructions to natural, conversational guidance. Nova identity and spoken-output rules now centralized (`base_prompt.py`). Added TTS normalizer (`tts_normalizer.py`) to strip markdown, emoji, and symbols from agent speech before audio synthesis. All agents now encouraged to vary responses, avoid repetition, and sound like a real person — not a script.
 
 ### YC Application Readiness
 - Core demo loop: webcam → real-time 3D skeleton → fault detection → voice cue (all on-device, <50ms latency).

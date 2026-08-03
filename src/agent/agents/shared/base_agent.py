@@ -6,6 +6,7 @@ import logging
 from livekit.agents import Agent
 from agent.core.agent_state import AgentState
 from agent.agents.prompts.base_prompt import BASE_PROMPT
+from agent.services.tts_normalizer import normalize_stream
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,10 @@ class BaseNovaAgent(Agent):
         self.state = state
         self.userdata = userdata
         super().__init__(instructions=f"{BASE_PROMPT}\n\n{instructions}")
+
+    def tts_node(self, text, model_settings):
+        """Strip written-text artifacts (emoji, markdown, symbols) before TTS."""
+        return super().tts_node(normalize_stream(text), model_settings)
 
     @property
     def user_id(self) -> str:

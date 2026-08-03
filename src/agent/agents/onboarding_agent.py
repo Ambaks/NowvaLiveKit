@@ -11,6 +11,7 @@ from livekit.agents.llm import function_tool
 from auth.user_management import create_user_account
 from agent.agents.prompts import BASE_PROMPT, ONBOARDING_TASK_INSTRUCTIONS
 from agent.agents.shared.base_agent import BaseNovaAgent
+from agent.services.tts_normalizer import normalize_stream
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,19 @@ class CollectOnboardingDataTask(AgentTask):
         self.state = state
         self.userdata = userdata
 
+    def tts_node(self, text, model_settings):
+        """Strip written-text artifacts (emoji, markdown, symbols) before TTS."""
+        return super().tts_node(normalize_stream(text), model_settings)
+
     async def on_enter(self):
         await self.session.generate_reply(
             instructions=(
-                "Greet the user warmly. Introduce yourself as Nova, their AI coach "
+                "This is the user's first-ever conversation with you — be "
+                "genuinely warm, and let one light human beat land as you "
+                "react to meeting them. "
+                "Greet them and introduce yourself as Nova, their AI coach "
                 "for the Nowva smart rack. Then ask for their first name. "
-                "Keep it energetic but brief."
+                "Keep it brief."
             )
         )
 
@@ -104,7 +112,12 @@ class CollectOnboardingDataTask(AgentTask):
         logger.debug(f"[DEBUG] First name was incorrect, retry attempt {self.userdata.first_name_retry_count}/{self.userdata.max_retries}")
 
         if self.userdata.first_name_retry_count >= self.userdata.max_retries:
-            return None, "Too many retry attempts. Say something like: 'Having trouble with the name. Let's try text input instead - what's your name?' (This should trigger fallback to text mode)"
+            # No text-input fallback exists yet — stay in the voice flow.
+            return None, (
+                "You've missed their name several times now. Own it lightly — "
+                "you're having trouble catching it — and ask them to say it "
+                "one more time, slowly. One or two sentences."
+            )
 
         if corrected_name:
             self.userdata.temp_first_name = corrected_name.strip()
@@ -121,7 +134,11 @@ class CollectOnboardingDataTask(AgentTask):
             self.userdata.temp_first_name = None
             self.userdata.first_name_confirmed = False
             logger.debug(f"[DEBUG] User said name was incorrect, asking again...")
-            return None, "The user said their name was not correct. Say 'No problem!' and ask for their name again."
+            return None, (
+                "The user said their name was not correct. Acknowledge lightly "
+                "with varied phrasing — never the same opener as a previous "
+                "retry — then ask for their name again."
+            )
 
     @function_tool
     async def capture_email(self, context: RunContext, email: str):
@@ -209,7 +226,12 @@ class CollectOnboardingDataTask(AgentTask):
         logger.debug(f"[DEBUG] Email was incorrect, retry attempt {self.userdata.email_retry_count}/{self.userdata.max_retries}")
 
         if self.userdata.email_retry_count >= self.userdata.max_retries:
-            return None, "Too many retry attempts. Say something like: 'Having trouble with the email. Let's try text input instead - what's your email?' (This should trigger fallback to text mode)"
+            # No text-input fallback exists yet — stay in the voice flow.
+            return None, (
+                "You've missed their email several times now. Own it lightly — "
+                "you're having trouble catching it — and ask them to say it "
+                "one more time, slowly. One or two sentences."
+            )
 
         if corrected_email:
             normalized_email = corrected_email.strip().lower()
@@ -229,4 +251,8 @@ class CollectOnboardingDataTask(AgentTask):
             self.userdata.temp_email = None
             self.userdata.email_confirmed = False
             logger.debug(f"[DEBUG] User said email was incorrect, asking again...")
-            return None, "The user said their email was not correct. Say 'No worries!' and ask for their email again."
+            return None, (
+                "The user said their email was not correct. Acknowledge lightly "
+                "with varied phrasing — never the same opener as a previous "
+                "retry — then ask for their email again."
+            )

@@ -55,7 +55,7 @@ class TestGreetingProgressLine:
     def test_full_baseline_mentions_key_facts(self):
         line = build_greeting_progress_line(_baseline())
         assert "3 days ago" in line
-        assert "72/100" in line
+        assert "72 out of 100" in line
         assert "knee tracking" in line
         assert "14.2 degrees" in line
         assert "knees caving in" in line
@@ -87,14 +87,14 @@ class TestProgressComparisonLines:
     def test_overall_delta_computed(self):
         lines = build_progress_comparison_lines(_baseline(), _scoring(mean_score=0.78))
         joined = " ".join(lines)
-        assert "72 -> 78" in joined
+        assert "72 to 78" in joined
         assert "+6 points" in joined
 
     def test_dimension_deltas_above_threshold_included(self):
         lines = build_progress_comparison_lines(_baseline(), _scoring())
         joined = " ".join(lines)
         # knee_tracking moved 0.60 -> 0.74 (+14): included
-        assert "knee tracking: 60 -> 74 (+14)" in joined
+        assert "knee tracking: 60 to 74 (+14)" in joined
         # depth moved 0.80 -> 0.78 (-2 < 3-point threshold): excluded
         assert "depth: 80" not in joined
 
@@ -105,14 +105,14 @@ class TestProgressComparisonLines:
             _baseline(mean_score=0.716), _scoring(mean_score=0.784)
         )
         joined = " ".join(lines)
-        assert "72 -> 78" in joined
+        assert "72 to 78" in joined
         assert "+6 points" in joined
 
     def test_missing_dimensions_skipped(self):
         scoring = {"mean_score": 0.7, "per_dimension": {}}
         lines = build_progress_comparison_lines(_baseline(), scoring)
         joined = " ".join(lines)
-        assert "72 -> 70" in joined
+        assert "72 to 70" in joined
         assert "Changed vs last session" not in joined
 
 

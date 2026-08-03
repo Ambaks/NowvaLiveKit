@@ -25,7 +25,17 @@ _SCRIPT_PROMPT = (
     "has exactly one line per issue, in the given order, each under "
     f"{DEMO_LINE_WORD_LIMIT} words, naming the fix and referencing what is moving on "
     "screen. outro is one short sentence telling them to squat again with "
-    "these fixes. Sound human and encouraging, never robotic."
+    "these fixes. Sound human and encouraging, never robotic. "
+    "Every line is spoken aloud: plain speakable text only — no emojis, no "
+    "markdown, no symbols."
+)
+
+# Fallback cue lines cycle through these so back-to-back cues don't repeat.
+_FALLBACK_CUE_TEMPLATES = (
+    "Next one — {magnitude}. Watch the highlighted joints.",
+    "Now this one: {magnitude}. Eyes on the joints lighting up.",
+    "Here's another — {magnitude}. Follow the highlighted joints on screen.",
+    "And this — {magnitude}. See where the highlighted joints move.",
 )
 
 
@@ -37,9 +47,10 @@ class DemoScript(BaseModel):
 
 def build_fallback_script(cues: list[dict]) -> DemoScript:
     cue_lines = [
-        f"Next one — {cue.get('magnitude_text', 'a small adjustment')}. "
-        "Watch the highlighted joints."
-        for cue in cues
+        _FALLBACK_CUE_TEMPLATES[index % len(_FALLBACK_CUE_TEMPLATES)].format(
+            magnitude=cue.get("magnitude_text", "a small adjustment")
+        )
+        for index, cue in enumerate(cues)
     ]
     return DemoScript(
         intro="Take a look at the screen real quick. This is you at the bottom of your squat.",

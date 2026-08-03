@@ -810,7 +810,7 @@ class TestDiagnosisData:
             )
             await orch._dispatch(event)
             call_args = cbs["generate_llm_reply_fn"].call_args[0][0]
-            assert "FORM SCORE: 72/100" in call_args
+            assert "FORM SCORE: 72 out of 100" in call_args
             assert "TREND: improving" in call_args
             assert "stance" in call_args.lower()
             assert "biomechanics analysis" in call_args
@@ -899,8 +899,8 @@ class TestDiagnosisData:
             await orch._dispatch(event)
             call_args = cbs["generate_llm_reply_fn"].call_args[0][0]
             assert "Form score progression" in call_args
-            assert "Set 1: 65/100" in call_args
-            assert "Set 2: 78/100" in call_args
+            assert "Set 1: 65 out of 100" in call_args
+            assert "Set 2: 78 out of 100" in call_args
             assert "improved by 13 points" in call_args
             assert "biomechanics analysis" in call_args
 

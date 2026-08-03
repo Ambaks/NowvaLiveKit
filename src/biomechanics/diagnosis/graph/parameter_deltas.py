@@ -24,6 +24,10 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
+def _unit(value: int, unit: str) -> str:
+    return unit if value == 1 else f"{unit}s"
+
+
 def expected_trunk_lean_geometric(anthro: dict) -> float:
     femur_torso_ratio = anthro.get("femur_torso_ratio", 1.0)
     return 30.0 + (femur_torso_ratio - 1.0) * 120.0
@@ -140,7 +144,7 @@ def magnitude_widen_foot_angle(parameter_delta: dict) -> str | None:
     degrees = round(math.degrees(abs(float(radians))))
     if degrees <= 0:
         return None
-    return f"toes turned out about {degrees} more degrees"
+    return f"toes turned out about {degrees} more {_unit(degrees, 'degree')}"
 
 
 def delta_brace_trunk(
@@ -181,7 +185,7 @@ def magnitude_knees_out(parameter_delta: dict) -> str | None:
     degrees = round(math.degrees(abs(float(radians))))
     if degrees <= 0:
         return None
-    return f"knees pushed out about {degrees} degrees more"
+    return f"knees pushed out about {degrees} {_unit(degrees, 'degree')} more"
 
 
 def delta_center_weight(
@@ -203,7 +207,7 @@ def magnitude_center_weight(parameter_delta: dict) -> str | None:
     shift_cm = round(abs(float(shift_m)) * 100.0)
     if shift_cm <= 0:
         return None
-    return f"weight centered by about {shift_cm} centimeters"
+    return f"weight centered by about {shift_cm} {_unit(shift_cm, 'centimeter')}"
 
 
 def delta_increase_depth(

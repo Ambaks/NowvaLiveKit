@@ -28,9 +28,17 @@ from biomechanics.coaching.cue_cache import (
 from agent.services.progress_context import (
     build_progress_comparison_lines,
     build_session_comparison_line,
+    fault_label,
 )
 
 logger = logging.getLogger(__name__)
+
+# A cached cue played within this window is included in motivation context
+# so the LLM does not contradict a correction the athlete just heard.
+RECENT_CUE_CONTEXT_WINDOW_S = 10.0
+
+# Below this diagnosis confidence, the recap prompt asks the LLM to hedge.
+LOW_CONFIDENCE_THRESHOLD = 0.5
 
 # Intra-set stance/toe-out adjustment monitoring (Feature 2).
 # Stance is in shoulder-width multiples; toe-out in degrees of external rotation.
@@ -51,7 +59,7 @@ class CuePriority(enum.IntEnum):
     LLM_SET_RECAP = 3
     LLM_EXERCISE_RECAP = 4
     POSITIVE_CUE = 6
-    FAULT_CUE = 7  # testing: demoted to lowest priority
+    FAULT_CUE = 7  # intentional, validated live — fault cues yield to everything else; do not restore to top priority
 
 
 # =============================================================================
@@ -812,6 +820,13 @@ class CoachingOrchestrator:
         if self._set_target_reps:
             reps_remaining = self._set_target_reps - rep_number
 
+        last_cue_text = None
+        if self._last_cue_context:
+            cue_age = time.time() - self._last_cue_context.get("timestamp", 0)
+            if cue_age < RECENT_CUE_CONTEXT_WINDOW_S:
+                from agent.services.coaching_constants import CUE_TEXT_MAP
+                last_cue_text = CUE_TEXT_MAP.get(self._last_cue_context.get("cue_key", ""))
+
         return {
             "rep_number": rep_number,
             "reps_remaining": reps_remaining,
@@ -820,6 +835,7 @@ class CoachingOrchestrator:
             "recent_faults": list(set(self._recent_faults[-5:])),
             "last_depth": depth,
             "last_clean": is_clean,
+            "last_cue_text": last_cue_text,
         }
 
     # ------------------------------------------------------------------
@@ -1102,18 +1118,22 @@ class CoachingOrchestrator:
         if reps_remaining is not None and reps_remaining > 0:
             parts.append(f"{reps_remaining} reps to go.")
         if clean_streak >= 2:
-            parts.append(f"{clean_streak} clean reps in a row!")
+            parts.append(f"{clean_streak} clean reps in a row.")
         if recent_faults:
-            parts.append(f"Recent Faults: {', '.join(recent_faults[-2:])}.")
+            labels = ", ".join(fault_label(ft) for ft in recent_faults[-2:])
+            parts.append(f"Recent issues: {labels}.")
+        last_cue_text = context.get("last_cue_text")
+        if last_cue_text:
+            parts.append(
+                f"You just told them: '{last_cue_text}' — don't contradict it; reinforcing it is fine."
+            )
 
         context_str = " ".join(parts)
 
         instructions = (
-            f"You are in the middle of a set and you are giving your athlete some motivation you have about one and a half seconds to say something."
-            f"Give a SHORT (2-5 words MAX) motivational push. "
-            f"Here is the data:"
-            f"{context_str} "
-            
+            "Mid-set. Shout one short motivational push — 2 to 5 words, nothing more. "
+            "React to the data below. No humor mid-set. "
+            f"Here is the data: {context_str}"
         )
 
         logger.info(f"[ORCHESTRATOR] LLM motivation instructions: {instructions[:100]}...")
@@ -1159,25 +1179,21 @@ class CoachingOrchestrator:
                 f"(never reached parallel) — those did not go toward the rep total."
             )
         if avg_depth:
-            parts.append(f"Average depth: {avg_depth}° (consistency stdev: {depth_consistency}°).")
+            parts.append(
+                f"Average depth: {avg_depth} degrees, varying about "
+                f"{depth_consistency} degrees rep to rep."
+            )
         if avg_duration_ms:
-            parts.append(f"Average rep tempo: {avg_duration_ms}ms.")
+            parts.append(
+                f"Average rep tempo: about {avg_duration_ms / 1000:.1f} seconds per rep."
+            )
         if fault_summary:
             fault_lines = []
             for fault_type, stats in fault_summary.items():
                 count = stats.get("count", 0)
-                pct = stats.get("pct", 0)
-                fault_lines.append(f"{fault_type}: {count}/{total_reps} reps ({pct}%)")
+                fault_lines.append(f"{fault_label(fault_type)} on {count} of {total_reps} reps")
             parts.append(f"Faults: {'; '.join(fault_lines)}.")
-        if per_rep:
-            rep_lines = []
-            for r in per_rep:
-                faults_str = f" faults={r['faults']}" if r.get("faults") else ""
-                rep_lines.append(
-                    f"  Rep {r['rep']}: {r['depth']} ({r['depth_angle']}°) "
-                    f"{'clean' if r['clean'] else 'fault'}{faults_str}"
-                )
-            parts.append("Per-rep breakdown:\n" + "\n".join(rep_lines))
+        parts.extend(self._build_rep_highlights(per_rep))
 
         # Enrich with diagnosis data if available
         if diagnosis and scoring:
@@ -1215,24 +1231,27 @@ class CoachingOrchestrator:
 
         context_str = " ".join(parts)
 
+        humor_line = self._humor_line(total_reps, clean_reps, shallow_reps)
+
         if diagnosis and scoring:
             instructions = (
                 f"Your athlete just finished a set. Here's their biomechanics analysis and rep data. "
-                f"Give honest, encouraging feedback (2-3 sentences). "
-                f"Lead with the form score, give the ONE specific adjustment from the analysis, "
-                f"end on what went well. You have {self._rest_seconds - 5} seconds. "
-                f"Here is the data: "
-                f"{context_str}"
+                f"Give honest, encouraging feedback in 2-3 short sentences. "
+                f"Cover the form score, the ONE adjustment from the analysis, and something that "
+                f"genuinely went well — in whatever order feels natural. "
+                f"Open differently than you did after the last set. "
+                f"If one rep stands out in the data, mentioning it by number is good coaching. "
+                f"{humor_line} "
+                f"Here is the data: {context_str}"
             )
         else:
             instructions = (
-                f"Your athlete just finished a set. You are giving them feedback on what they just did using the data. "
-                f"Give honest feedback. You have {self._rest_seconds - 5} seconds to make your point. "
-                f"Highlight what went well. If recurring faults, "
-                f"give ONE specific coaching tip for the next set. "
-                f"Be encouraging — reference the numbers. "
-                f"Here is the data: "
-                f"{context_str}"
+                f"Your athlete just finished a set. Give them honest feedback on it in 2-3 short sentences. "
+                f"Highlight what genuinely went well, and if a fault kept repeating, give ONE specific "
+                f"tip for the next set. Reference the numbers like a coach would say them out loud. "
+                f"Open differently than you did after the last set. "
+                f"{humor_line} "
+                f"Here is the data: {context_str}"
             )
 
         logger.info(f"[ORCHESTRATOR] LLM set recap instructions: {instructions[:120]}...")
@@ -1273,6 +1292,37 @@ class CoachingOrchestrator:
                 self.reset_set(self._set_target_reps, self._positive_cue_keys)
 
     @staticmethod
+    def _humor_line(total_reps: int, clean_reps: int, shallow_reps: int) -> str:
+        """Machine-checked humor gate: only allow humor after a genuinely good set."""
+        good_set = (
+            total_reps > 0
+            and shallow_reps == 0
+            and clean_reps >= max(1, round(total_reps * 0.6))
+        )
+        if good_set:
+            return "A light touch of dry humor is welcome if it comes naturally — never forced."
+        return "No humor in this reply — keep it straight, supportive, and forward-looking."
+
+    @staticmethod
+    def _build_rep_highlights(per_rep: list) -> List[str]:
+        """Compress the per-rep dump into best/roughest highlight lines."""
+        highlights: List[str] = []
+        if not per_rep:
+            return highlights
+        clean = [r for r in per_rep if r.get("clean")]
+        if clean:
+            best = max(clean, key=lambda r: r.get("depth_angle", 0))
+            highlights.append(
+                f"Best rep: rep {best['rep']} — {best.get('depth_angle', 0)} degrees, clean."
+            )
+        faulted = [r for r in per_rep if r.get("faults")]
+        if faulted:
+            worst = max(faulted, key=lambda r: len(r.get("faults", [])))
+            labels = ", ".join(fault_label(ft) for ft in worst.get("faults", []))
+            highlights.append(f"Roughest rep: rep {worst['rep']} — {labels}.")
+        return highlights
+
+    @staticmethod
     def _build_diagnosis_context(diagnosis: dict, scoring: dict) -> List[str]:
         """Build diagnosis-enriched context lines for the LLM prompt."""
         parts: List[str] = []
@@ -1288,7 +1338,7 @@ class CoachingOrchestrator:
             f"{label}: {round(dims[key] * 100)}"
             for label, key in dim_labels if key in dims
         )
-        parts.append(f"\nFORM SCORE: {mean_pct}/100 ({dim_str})")
+        parts.append(f"\nFORM SCORE: {mean_pct} out of 100 ({dim_str})")
 
         slope = scoring.get("trend_slope", 0)
         if slope > 0.01:
@@ -1305,15 +1355,21 @@ class CoachingOrchestrator:
             parts.append(f"TOP ISSUE: {top.get('explanation', 'N/A')}")
             delta = top.get("parameter_delta")
             if delta:
-                delta_str = ", ".join(f"{k}: {v}" for k, v in delta.items())
-                parts.append(f"ADJUSTMENT: {delta_str}")
+                from biomechanics.diagnosis.demo_builder import summarize_cue_magnitude
+                parts.append(
+                    f"ADJUSTMENT: {summarize_cue_magnitude(top.get('cause_id', ''), delta)}"
+                )
 
         session_causes = diagnosis.get("session_causes", [])
         if session_causes:
             parts.append(f"SESSION PATTERN: {session_causes[0].get('explanation', '')}")
 
         confidence = diagnosis.get("confidence", 0)
-        parts.append(f"Analysis confidence: {round(confidence * 100)}%")
+        if confidence < LOW_CONFIDENCE_THRESHOLD:
+            parts.append(
+                "This analysis is low-confidence — hedge the adjustment (say it 'looked like'), "
+                "and never mention confidence or percentages."
+            )
 
         return parts
 
@@ -1356,11 +1412,14 @@ class CoachingOrchestrator:
             tr = s.get("total_reps", 0)
             cr = s.get("clean_reps", 0)
             ad = s.get("avg_depth", 0)
-            depth_str = f", avg depth {ad}°" if ad else ""
+            depth_str = f", avg depth {ad} degrees" if ad else ""
             faults_in_set = s.get("fault_summary", {})
             fault_str = ""
             if faults_in_set:
-                fault_parts = [f"{ft}: {st['count']}x" for ft, st in faults_in_set.items()]
+                fault_parts = [
+                    f"{fault_label(ft)} {st['count']} times"
+                    for ft, st in faults_in_set.items()
+                ]
                 fault_str = f", faults: {'; '.join(fault_parts)}"
             per_set_lines.append(f"Set {sn}: {tr} reps, {cr} clean{depth_str}{fault_str}")
 
@@ -1368,21 +1427,25 @@ class CoachingOrchestrator:
 
         parts = [
             f"Exercise complete! {total_sets} sets finished.",
-            f"Total: {total_reps} reps, {total_clean} clean ({clean_pct}%).",
+            f"Total: {total_reps} reps, {total_clean} clean ({clean_pct} percent).",
         ]
         if total_shallow:
             parts.append(
                 f"{total_shallow} attempts across the session were too shallow to count."
             )
         if overall_avg_depth:
-            parts.append(f"Overall average depth: {overall_avg_depth}°.")
+            parts.append(f"Overall average depth: {overall_avg_depth} degrees.")
         if overall_avg_tempo:
-            parts.append(f"Overall average tempo: {overall_avg_tempo}ms per rep.")
+            parts.append(
+                f"Overall average tempo: about {overall_avg_tempo / 1000:.1f} seconds per rep."
+            )
         if per_set_lines:
             parts.append(f"Per-set breakdown: {'; '.join(per_set_lines)}.")
         if all_faults:
             top_faults = sorted(all_faults.items(), key=lambda x: x[1], reverse=True)[:3]
-            fault_str = ", ".join(f"{ft}: {cnt}x across all sets" for ft, cnt in top_faults)
+            fault_str = ", ".join(
+                f"{fault_label(ft)} {cnt} times across all sets" for ft, cnt in top_faults
+            )
             parts.append(f"Most common faults: {fault_str}.")
 
         # Diagnosis progression across sets
@@ -1393,7 +1456,7 @@ class CoachingOrchestrator:
             for s in diagnosed_sets:
                 sn = s["set_number"]
                 mean_pct = round(s["scoring"].get("mean_score", 0) * 100)
-                score_lines.append(f"Set {sn}: {mean_pct}/100")
+                score_lines.append(f"Set {sn}: {mean_pct} out of 100")
             parts.append(f"Form score progression: {'; '.join(score_lines)}.")
 
             if len(diagnosed_sets) >= 2:
@@ -1452,21 +1515,25 @@ class CoachingOrchestrator:
 
         context_str = " ".join(parts)
 
+        humor_line = self._humor_line(total_reps, total_clean, total_shallow)
+
         if has_diagnosis:
             instructions = (
                 f"Your athlete just finished their entire exercise. Here's their comprehensive biomechanics analysis. "
                 f"{context_str} "
-                f"Give honest, encouraging feedback (3-5 sentences). "
+                f"Give honest, encouraging feedback in 3-5 short sentences, in whatever order feels natural. "
                 f"Reference the form score progression, highlight the specific improvement or issue, "
                 f"and give one key takeaway for next session. "
+                f"{humor_line} "
                 f"End on a high note — they just finished!"
             )
         else:
             instructions = (
-                f"Your athlete just finished their entire exercise. Give them a comprehensive recap. "
+                f"Your athlete just finished their entire exercise. Give them a recap. "
                 f"{context_str} "
-                f"Give honest, encouraging feedback (3-5 sentences). "
+                f"Give honest, encouraging feedback in 3-5 short sentences, in whatever order feels natural. "
                 f"Highlight overall performance, progression across sets, and one key takeaway. "
+                f"{humor_line} "
                 f"End on a high note — they just finished!"
             )
 

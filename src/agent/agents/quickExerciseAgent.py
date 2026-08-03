@@ -12,6 +12,7 @@ from agent.agents.shared.helpers import check_calibration, start_calibration_mod
 from agent.agents.teaching_agent import TeachingAgent
 from agent.agents.workout_agent import WorkoutAgent
 from agent.core.workout_session import WorkoutSession
+from agent.services.tts_normalizer import normalize_stream
 
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,10 @@ class CollectExerciseInfoTask(AgentTask):
             check_calibration(user_id, exercise_name)
         )
 
+    def tts_node(self, text, model_settings):
+        """Strip written-text artifacts (emoji, markdown, symbols) before TTS."""
+        return super().tts_node(normalize_stream(text), model_settings)
+
     def _publish_visual(self, event: dict) -> None:
         bridge = getattr(self.userdata, "visual_bridge", None)
         if bridge is not None:
@@ -132,7 +137,11 @@ class CollectExerciseInfoTask(AgentTask):
             )
         else:
             await self.session.generate_reply(
-                instructions="You are transitionning smoothly from the main menu into collecting the required information for the quick exercise."
+                instructions=(
+                    "Acknowledge the switch in a few words, then ask for the "
+                    "missing details in one natural question. One or two "
+                    "sentences total."
+                )
             )
 
     @function_tool
