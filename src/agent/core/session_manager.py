@@ -1,7 +1,9 @@
 """
 Session Management
-Handles local session storage with encryption
+Handles local session storage with encryption and user profile switching.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -15,17 +17,11 @@ class SessionManager:
     """Manages encrypted user sessions stored locally"""
 
     def __init__(self, session_file: str = ".session.dat", key_file: str = ".session.key"):
-        """
-        Initialize session manager with encryption
-
-        Args:
-            session_file: Path to encrypted session file (relative to src/)
-            key_file: Path to encryption key file (relative to src/)
-        """
         # Store in src/ directory (core/ → agent/ → src/)
         src_dir = Path(__file__).parent.parent.parent
         self.session_file = src_dir / session_file
         self.key_file = src_dir / key_file
+        self._profiles_dir = src_dir / ".profiles"
 
         # Load or generate encryption key
         if self.key_file.exists():
@@ -123,7 +119,63 @@ class SessionManager:
         session = self.load_session()
         return session.get("user_id") if session else None
 
-    def get_username(self) -> Optional[str]:
+    def get_username(self) -> str | None:
         """Get username from current session"""
         session = self.load_session()
         return session.get("username") if session else None
+
+    # ── Profile switching ────────────────────────────────────────────
+
+    def _ensure_profiles_dir(self) -> Path:
+        self._profiles_dir.mkdir(parents=True, exist_ok=True)
+        return self._profiles_dir
+
+    def save_profile(self, name: str) -> bool:
+        """Copy current .session.dat to a named profile file."""
+        if not self.session_exists():
+            print("No active session to save as a profile.")
+            return False
+        dest = self._ensure_profiles_dir() / f"{name}.profile"
+        dest.write_bytes(self.session_file.read_bytes())
+        print(f"Profile '{name}' saved.")
+        return True
+
+    def load_profile(self, name: str) -> bool:
+        """Replace .session.dat with a previously saved profile."""
+        src = self._profiles_dir / f"{name}.profile"
+        if not src.exists():
+            print(f"Profile '{name}' not found.")
+            return False
+        self.session_file.write_bytes(src.read_bytes())
+        session = self.load_session()
+        if session:
+            print(f"Switched to profile '{name}' (user: {session.get('username')})")
+        return True
+
+    def list_profiles(self) -> list[dict[str, str]]:
+        """Return [{name, username, email}] for every saved profile."""
+        if not self._profiles_dir.exists():
+            return []
+        profiles: list[dict[str, str]] = []
+        for path in sorted(self._profiles_dir.glob("*.profile")):
+            try:
+                data = self.fernet.decrypt(path.read_bytes())
+                info = json.loads(data.decode())
+                profiles.append({
+                    "name": path.stem,
+                    "username": info.get("username", "?"),
+                    "email": info.get("email", "?"),
+                })
+            except (InvalidToken, json.JSONDecodeError):
+                profiles.append({"name": path.stem, "username": "?", "email": "?"})
+        return profiles
+
+    def delete_profile(self, name: str) -> bool:
+        """Remove a saved profile file."""
+        path = self._profiles_dir / f"{name}.profile"
+        if not path.exists():
+            print(f"Profile '{name}' not found.")
+            return False
+        path.unlink()
+        print(f"Profile '{name}' deleted.")
+        return True

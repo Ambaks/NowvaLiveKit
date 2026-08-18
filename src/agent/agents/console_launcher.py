@@ -167,6 +167,7 @@ async def run_console_voice_onboarding(
         voice_agent_path = Path(__file__).parent / 'voice_agent.py'
 
         env = _build_subprocess_env(state_notify_fd)
+        env["NOWVA_FRESH_ONBOARDING"] = "1"
         pass_fds: tuple = ()
         if state_notify_fd is not None:
             pass_fds = (state_notify_fd,)

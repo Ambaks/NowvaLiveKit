@@ -27,6 +27,7 @@ dist-ssr/
 .session.key
 session.dat
 session.key
+.profiles/
 
 # Agent state files (user-specific data)
 .agent_state_*.json

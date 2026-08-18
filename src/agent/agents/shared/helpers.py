@@ -85,6 +85,12 @@ def normalize_exercise_name(raw_name: str) -> Optional[str]:
         "barbell front squat": "Barbell Front Squat",
         "goblet squat": "Goblet Squat",
         "goblet squats": "Goblet Squat",
+        "bodyweight squat": "Barbell Back Squat",
+        "bodyweight squats": "Barbell Back Squat",
+        "bw squat": "Barbell Back Squat",
+        "bw squats": "Barbell Back Squat",
+        "air squat": "Barbell Back Squat",
+        "air squats": "Barbell Back Squat",
         "deadlift": "Barbell Deadlift",
         "deadlifts": "Barbell Deadlift",
         "barbell deadlift": "Barbell Deadlift",
@@ -110,6 +116,10 @@ async def check_calibration(user_id: str, exercise_name: str) -> Optional[dict]:
     canonical = normalize_exercise_name(exercise_name) or exercise_name
     pattern = get_movement_pattern(canonical)
     if not pattern:
+        logger.warning(
+            f"[CALIBRATION] No movement pattern for exercise_name={exercise_name!r} "
+            f"(canonical={canonical!r}) — calibration lookup skipped"
+        )
         return None
 
     def _query():

@@ -64,7 +64,8 @@ async def entrypoint(ctx: agents.JobContext):
     user_id = ctx.room.metadata.get('user_id') if ctx.room.metadata else None
     logger.info(f"[NOVA] user_id from metadata: {user_id}")
 
-    if not user_id:
+    fresh_onboarding = os.environ.get("NOWVA_FRESH_ONBOARDING") == "1"
+    if not user_id and not fresh_onboarding:
         logger.info("[NOVA] Searching for state files...")
         # Anchor to the project root — AgentState writes there regardless of CWD
         state_files = glob.glob(str(PROJECT_ROOT / '.agent_state_*.json'))
@@ -73,6 +74,8 @@ async def entrypoint(ctx: agents.JobContext):
             latest_state = max(state_files, key=os.path.getmtime)
             user_id = Path(latest_state).name.replace('.agent_state_', '').replace('.json', '')
             logger.info(f"[NOVA] Found recent state file for user: {user_id}")
+    elif fresh_onboarding:
+        logger.info("[NOVA] Fresh onboarding — skipping state file scan")
 
     # Initialize state
     logger.info(f"[NOVA] Creating AgentState with user_id: {user_id}...")

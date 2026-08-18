@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+    background: #060609; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  .blob { position: absolute; border-radius: 50%; filter: blur(120px); }
+  #b1 { width: 900px; height: 900px; left: -260px; top: -320px;
+    background: radial-gradient(circle, rgba(124,58,237,.16), transparent 65%); }
+  #b2 { width: 1100px; height: 1100px; right: -380px; bottom: -460px;
+    background: radial-gradient(circle, rgba(91,74,145,.13), transparent 65%); }
+  #wrap { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; }
+  #kicker { color: #67e8f9; font-size: 26px; font-weight: 600;
+    letter-spacing: .42em; text-indent: .42em; text-transform: uppercase; }
+  #title { margin-top: 34px; font-size: 96px; font-weight: 800; letter-spacing: -0.5px;
+    background: linear-gradient(180deg, #ffffff 55%, #c4b5fd 130%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  #bar { margin-top: 40px; width: 96px; height: 5px; border-radius: 3px;
+    background: linear-gradient(90deg, #7c3aed, #22d3ee); transform-origin: left center; }
+  #sub { margin-top: 36px; color: #8b8b9e; font-size: 32px; font-weight: 500; }
+</style>
+<div class="blob" id="b1"></div>
+<div class="blob" id="b2"></div>
+<div id="wrap">
+  <div id="kicker">__KICKER__</div>
+  <div id="title">__TITLE__</div>
+  <div id="bar"></div>
+  <div id="sub">__SUB__</div>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+  const ease = (v) => 1 - Math.pow(1 - clamp01(v), 3);
+  window.seek = (t) => {
+    const k = ease((t - 0.05) / 0.55);
+    $("kicker").style.opacity = k;
+    const a = ease((t - 0.18) / 0.6);
+    $("title").style.opacity = a;
+    $("title").style.transform = `translateY(${(1 - a) * 34}px)`;
+    const b = ease((t - 0.55) / 0.55);
+    $("bar").style.transform = `scaleX(${b})`;
+    const s = ease((t - 0.75) / 0.55);
+    $("sub").style.opacity = s;
+    $("sub").style.transform = `translateY(${(1 - s) * 18}px)`;
+    $("wrap").style.transform = `scale(${1 + t * 0.007})`;
+    $("b1").style.transform = `translate(${t * 14}px, ${t * 9}px)`;
+    $("b2").style.transform = `translate(${t * -12}px, ${t * -7}px)`;
+  };
+  window.seek(0);
+  window.rigReady = true;
+</script>

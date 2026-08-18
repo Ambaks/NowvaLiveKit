@@ -15,7 +15,7 @@ import { launch } from "./browser.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = path.join(ROOT, "rack-video", "out");
-const T_TOTAL = 13.0;
+const T_TOTAL = 8.8;
 
 const MIME = {
   ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript",

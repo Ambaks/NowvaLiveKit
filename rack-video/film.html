@@ -22,12 +22,12 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 /* ---------------- timeline (seconds) ---------------- */
-const T_ORBIT_END = 5.0;     // orbit around closed rack
-const T_DOORS_END = 8.2;     // doors swing open
-const T_PUSH_END = 11.7;     // dolly in until screen fills frame
-const T_BOOT = 9.8;          // screen starts turning on
+const T_ORBIT_END = 2.0;     // orbit around closed rack, camera parks at the front
+const T_DOORS_END = 4.0;     // doors swing open (camera stationary)
+const T_PUSH_END = 7.5;      // dolly in until screen fills frame
+const T_BOOT = 5.6;          // screen starts turning on
 const T_BOOT_DUR = 1.4;
-export const T_TOTAL = 13.0; // page keeps rendering screen-full to the end
+export const T_TOTAL = 8.8;  // page keeps rendering screen-full to the end
 
 const FOV_DEG = 35;
 const BACKDROP = 0x09090e;
@@ -378,8 +378,8 @@ function setCamera(t) {
   const fit = fitDistance(framing.radius, aspect);
   const front = frontAzimuth();
 
-  /* phase 1+2: one continuous orbit ending at the front */
-  const uOrbit = clamp01(t / T_DOORS_END);
+  /* phase 1: orbit to the front, then hold stationary while the doors open */
+  const uOrbit = clamp01(t / T_ORBIT_END);
   const az = front + Math.PI * 1.65 * (1 - easeInOutSine(uOrbit));
   const dist = fit * (1.28 - 0.18 * easeInOutSine(uOrbit));
   const camY = framing.groundY + framing.height * (0.32 + 0.30 * easeInOutSine(uOrbit));

@@ -1272,6 +1272,10 @@ async def main():
     parser.add_argument("--inspect", action="store_true",
                         help="Record all pipeline stages (raw vs filtered skeletons, "
                              "joint angles) and generate a scrubbable HTML debug viewer")
+    parser.add_argument("--user", type=str, default=None,
+                        help="Switch to a saved user profile before launch. "
+                             "Use 'new' to save current session and start fresh onboarding. "
+                             "Use 'list' to show saved profiles and exit.")
     args = parser.parse_args()
 
     if args.profile:
@@ -1282,6 +1286,44 @@ async def main():
         os.environ["NOWVA_VALGUS_DEBUG"] = "1"
     if args.inspect:
         os.environ["NOWVA_PIPELINE_INSPECT"] = "1"
+
+    # ── User profile switching ───────────────────────────────────
+    if args.user is not None:
+        sm = SessionManager()
+        if args.user == "list":
+            profiles = sm.list_profiles()
+            active = sm.load_session()
+            print("\n  Saved profiles:")
+            for p in profiles:
+                print(f"    • {p['name']}  ({p['username']} / {p['email']})")
+            if not profiles:
+                print("    (none)")
+            if active:
+                print(f"\n  Active session: {active['username']} ({active['email']})")
+            else:
+                print("\n  Active session: none (next launch triggers onboarding)")
+            return
+        elif args.user == "new":
+            if sm.session_exists():
+                session = sm.load_session()
+                if session:
+                    name = session["username"]
+                    sm.save_profile(name)
+                    print(f"Current session saved as profile '{name}'.")
+                sm.clear_session()
+            print("Session cleared. Next launch will start onboarding for a new user.")
+            return
+        else:
+            if sm.session_exists():
+                session = sm.load_session()
+                if session:
+                    sm.save_profile(session["username"])
+            if sm.load_profile(args.user):
+                print(f"Profile '{args.user}' loaded. Launching...")
+            else:
+                available = [p["name"] for p in sm.list_profiles()]
+                print(f"Available profiles: {', '.join(available) if available else '(none)'}")
+                return
 
     app = NowvaApp()
     app.simulate_mode = args.simulate

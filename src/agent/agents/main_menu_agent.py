@@ -12,7 +12,7 @@ from livekit.agents.llm import function_tool
 from agent.agents.quickExerciseAgent import CollectExerciseInfoTask
 from agent.agents.prompts import get_main_menu_prompt
 from agent.agents.shared.base_agent import BaseNovaAgent
-from agent.agents.shared.helpers import check_calibration, start_calibration_mode
+from agent.agents.shared.helpers import check_calibration, normalize_exercise_name, start_calibration_mode
 from db.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,7 @@ class MainMenuAgent(BaseNovaAgent):
             weight: Weight in lbs, if the user mentioned it. Use 0 for bodyweight.
             rest_seconds: Rest between sets in seconds, if the user mentioned it
         """
+        exercise_name = normalize_exercise_name(exercise_name) or exercise_name
         logger.info(
             f"[MAIN MENU] User wants quick exercise: {exercise_name} "
             f"(sets={sets}, reps={reps}, weight={weight}, rest={rest_seconds})"
