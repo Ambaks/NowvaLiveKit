@@ -74,6 +74,7 @@ class MultiCameraPoseProvider:
             confidence_threshold=self._confidence_threshold,
             model_path=self._model_path,
             keypoint_format="halpe26",
+            batch_size=len(self._device_ids),
         )
         self._estimator.initialize()
         self._initialized = True
@@ -181,8 +182,11 @@ class MultiCameraPoseProvider:
         views: dict[str, Skeleton2D] = {}
         primary_skeleton_2d: Skeleton2D | None = None
 
-        for cam_id, frame in synced_frames.items():
-            skeleton_2d = self._estimator.estimate(frame)
+        cam_ids = list(synced_frames.keys())
+        skeletons = self._estimator.estimate_batch(
+            [synced_frames[cam_id] for cam_id in cam_ids]
+        )
+        for cam_id, skeleton_2d in zip(cam_ids, skeletons):
             if skeleton_2d is not None:
                 views[cam_id] = skeleton_2d
                 if cam_id == primary_id:

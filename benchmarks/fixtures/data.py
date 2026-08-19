@@ -128,6 +128,8 @@ def load_video_frames(n_frames: int = 100) -> list[np.ndarray]:
                     ret, frame = cap.read()
                     if not ret:
                         break
+                if frame.shape[:2] != (720, 1280):
+                    frame = cv2.resize(frame, (1280, 720))
                 frames.append(frame)
             cap.release()
             if frames:

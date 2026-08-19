@@ -66,65 +66,85 @@ class DLTTriangulator:
             Skeleton3D in world coordinates (Y-down, origin at hip midpoint),
             or None if insufficient views.
         """
-        points_3d = []
-        any_valid = False
+        cam_ids = [cid for cid in self._cam_ids if cid in multi_view.views]
 
-        for kpt_idx in range(NUM_KEYPOINTS):
-            pts_2d = {}
-            confs = {}
+        # Pull keypoint data out of the Pydantic skeletons once; all math
+        # below runs on plain arrays.
+        n_cams = len(cam_ids)
+        xy = np.zeros((n_cams, NUM_KEYPOINTS, 2), dtype=np.float64)
+        conf = np.zeros((n_cams, NUM_KEYPOINTS), dtype=np.float64)
+        for cam_idx, cam_id in enumerate(cam_ids):
+            keypoints = multi_view.views[cam_id].keypoints
+            for kpt_idx in range(min(NUM_KEYPOINTS, len(keypoints))):
+                kp = keypoints[kpt_idx]
+                xy[cam_idx, kpt_idx, 0] = kp.x
+                xy[cam_idx, kpt_idx, 1] = kp.y
+                conf[cam_idx, kpt_idx] = kp.confidence
 
-            for cam_id in self._cam_ids:
-                if cam_id not in multi_view.views:
-                    continue
-
-                skeleton = multi_view.views[cam_id]
-                if kpt_idx >= len(skeleton.keypoints):
-                    continue
-
-                kp = skeleton.keypoints[kpt_idx]
-                if kp.confidence >= self._min_confidence:
-                    pts_2d[cam_id] = np.array([kp.x, kp.y], dtype=np.float64)
-                    confs[cam_id] = kp.confidence
-
-            if len(pts_2d) >= self._min_views:
-                point_3d, reproj_err = self._triangulate_point(pts_2d)
-
-                conf = min(confs.values())
-                if reproj_err < self._max_reproj_error:
-                    conf *= (1.0 - reproj_err / self._max_reproj_error)
-                else:
-                    conf *= 0.1
-
-                points_3d.append(Point3D(
-                    x=float(point_3d[0]),
-                    y=float(point_3d[1]),
-                    z=float(point_3d[2]),
-                    confidence=max(0.0, min(1.0, conf)),
-                ))
-                any_valid = True
-            else:
-                points_3d.append(Point3D(x=0.0, y=0.0, z=0.0, confidence=0.0))
-
-        if not any_valid:
+        valid = conf >= self._min_confidence
+        triangulable = valid.sum(axis=0) >= self._min_views
+        if not triangulable.any():
             return None
 
+        pts = np.zeros((NUM_KEYPOINTS, 3), dtype=np.float64)
+        confs_out = np.zeros(NUM_KEYPOINTS, dtype=np.float64)
+
+        # Group keypoints by which cameras see them, so each group
+        # triangulates in one batched call instead of per-keypoint.
+        groups: Dict[Tuple[int, ...], list] = {}
+        for kpt_idx in np.nonzero(triangulable)[0]:
+            key = tuple(np.nonzero(valid[:, kpt_idx])[0])
+            groups.setdefault(key, []).append(int(kpt_idx))
+
+        for cam_indices, kpt_list in groups.items():
+            kpt_arr = np.array(kpt_list)
+            cams = list(cam_indices)
+            pts_2d = xy[np.ix_(cams, kpt_arr)]  # (V, n, 2)
+            proj = np.stack(
+                [self._proj_matrices[cam_ids[c]] for c in cams]
+            ).astype(np.float64)  # (V, 3, 4)
+
+            if len(cams) == 2:
+                point_4d = cv2.triangulatePoints(
+                    proj[0], proj[1], pts_2d[0].T, pts_2d[1].T
+                )
+                pts_3d = (point_4d[:3] / point_4d[3]).T
+            else:
+                # Batched DLT: stack per-keypoint A matrices, one SVD call
+                A = np.empty((len(kpt_arr), 2 * len(cams), 4), dtype=np.float64)
+                for view_idx in range(len(cams)):
+                    P = proj[view_idx]
+                    A[:, 2 * view_idx] = pts_2d[view_idx, :, 0, None] * P[2] - P[0]
+                    A[:, 2 * view_idx + 1] = pts_2d[view_idx, :, 1, None] * P[2] - P[1]
+                _, _, Vt = np.linalg.svd(A)
+                X = Vt[:, -1, :]
+                pts_3d = X[:, :3] / X[:, 3:4]
+
+            reproj_err = self._reprojection_errors(pts_3d, pts_2d, proj)
+
+            base_conf = conf[np.ix_(cams, kpt_arr)].min(axis=0)
+            conf_scale = np.where(
+                reproj_err < self._max_reproj_error,
+                1.0 - reproj_err / self._max_reproj_error,
+                0.1,
+            )
+            confs_out[kpt_arr] = np.clip(base_conf * conf_scale, 0.0, 1.0)
+            pts[kpt_arr] = pts_3d
+
         # Re-center at hip midpoint
-        l_hip = points_3d[CK.LEFT_HIP]
-        r_hip = points_3d[CK.RIGHT_HIP]
+        if confs_out[CK.LEFT_HIP] > 0 and confs_out[CK.RIGHT_HIP] > 0:
+            center = (pts[CK.LEFT_HIP] + pts[CK.RIGHT_HIP]) / 2.0
+            pts[confs_out > 0] -= center
 
-        if l_hip.confidence > 0 and r_hip.confidence > 0:
-            cx = (l_hip.x + r_hip.x) / 2.0
-            cy = (l_hip.y + r_hip.y) / 2.0
-            cz = (l_hip.z + r_hip.z) / 2.0
-
-            for i, pt in enumerate(points_3d):
-                if pt.confidence > 0:
-                    points_3d[i] = Point3D(
-                        x=pt.x - cx,
-                        y=pt.y - cy,
-                        z=pt.z - cz,
-                        confidence=pt.confidence,
-                    )
+        points_3d = [
+            Point3D(
+                x=float(pts[i, 0]),
+                y=float(pts[i, 1]),
+                z=float(pts[i, 2]),
+                confidence=float(confs_out[i]),
+            )
+            for i in range(NUM_KEYPOINTS)
+        ]
 
         return Skeleton3D(
             keypoints=points_3d,
@@ -132,65 +152,23 @@ class DLTTriangulator:
             frame_index=multi_view.frame_index,
         )
 
-    def _triangulate_point(
-        self,
-        points_2d: Dict[str, np.ndarray],
-    ) -> Tuple[np.ndarray, float]:
-        """
-        Triangulate a single 3D point from multiple 2D observations.
+    @staticmethod
+    def _reprojection_errors(
+        pts_3d: np.ndarray,
+        pts_2d: np.ndarray,
+        proj: np.ndarray,
+    ) -> np.ndarray:
+        # Average per-keypoint reprojection error (pixels) across views.
+        # pts_3d: (n, 3), pts_2d: (V, n, 2), proj: (V, 3, 4)
+        X_h = np.hstack([pts_3d, np.ones((pts_3d.shape[0], 1))])  # (n, 4)
+        projected_h = np.einsum("vij,nj->vni", proj, X_h)  # (V, n, 3)
 
-        For 2 views: uses cv2.triangulatePoints.
-        For 3+ views: SVD-based DLT.
+        w = projected_h[:, :, 2]
+        good = np.abs(w) >= 1e-8
+        safe_w = np.where(good, w, 1.0)
+        projected = projected_h[:, :, :2] / safe_w[:, :, None]
+        errors = np.linalg.norm(projected - pts_2d, axis=2)  # (V, n)
 
-        Returns:
-            (point_3d, average_reprojection_error_in_pixels)
-        """
-        cam_ids = sorted(points_2d.keys())
-        proj_mats = [self._proj_matrices[cid] for cid in cam_ids]
-
-        if len(cam_ids) == 2:
-            pt1 = points_2d[cam_ids[0]].reshape(2, 1).astype(np.float64)
-            pt2 = points_2d[cam_ids[1]].reshape(2, 1).astype(np.float64)
-            P1 = proj_mats[0].astype(np.float64)
-            P2 = proj_mats[1].astype(np.float64)
-
-            point_4d = cv2.triangulatePoints(P1, P2, pt1, pt2)
-            point_3d = (point_4d[:3] / point_4d[3]).flatten()
-        else:
-            # SVD-based DLT for 3+ views
-            A = np.zeros((2 * len(cam_ids), 4), dtype=np.float64)
-            for i, cid in enumerate(cam_ids):
-                P = proj_mats[i]
-                x, y = points_2d[cid]
-                A[2 * i] = x * P[2] - P[0]
-                A[2 * i + 1] = y * P[2] - P[1]
-
-            _, _, Vt = np.linalg.svd(A)
-            X = Vt[-1]
-            point_3d = (X[:3] / X[3])
-
-        reproj_err = self._compute_reprojection_error(
-            point_3d, points_2d, {cid: self._proj_matrices[cid] for cid in cam_ids}
-        )
-
-        return point_3d, reproj_err
-
-    def _compute_reprojection_error(
-        self,
-        point_3d: np.ndarray,
-        points_2d: Dict[str, np.ndarray],
-        proj_matrices: Dict[str, np.ndarray],
-    ) -> float:
-        """Average reprojection error across all views in pixels."""
-        errors = []
-        X_h = np.append(point_3d, 1.0)
-
-        for cam_id, pt_2d in points_2d.items():
-            P = proj_matrices[cam_id]
-            projected_h = P @ X_h
-            if abs(projected_h[2]) < 1e-8:
-                continue
-            projected = projected_h[:2] / projected_h[2]
-            errors.append(np.linalg.norm(projected - pt_2d))
-
-        return float(np.mean(errors)) if errors else 999.0
+        n_good = good.sum(axis=0)
+        err_sum = np.where(good, errors, 0.0).sum(axis=0)
+        return np.where(n_good > 0, err_sum / np.maximum(n_good, 1), 999.0)

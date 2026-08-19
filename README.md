@@ -43,15 +43,24 @@
 
 ## Project Status
 
-**Current Focus:** Voice agent coaching integration — wake word detection, boot progress UI, and session-aware context formatting.
+**Current Focus:** Multi-camera pose estimation optimization — GPU-batched inference and vectorized DLT triangulation for edge deployment.
 
 ### Recent Changes (August 2026)
+
+#### Biomechanics Speed & Benchmarking (Session 2026-08-18/19)
+- **GPU-Batched Multi-Camera Pose Estimation:** RTMPoseEstimator now batches all camera views in one ONNX inference pass. Constant-shape padding via `_run_padded()` ensures CoreML MLProgram format compiles stably (fails on dynamic batch sizes). All 3 cameras processed in ~3ms vs ~9ms serially; full pipeline throughput ~14ms/frame (~71 FPS capacity on dev Mac).
+- **CoreML MLProgram Provider Option:** Replaced legacy NeuralNetwork format with MLProgram in initialization — ~30% faster (batch-3 inference: 15.2ms → 10.4ms) with exact keypoint-argmax parity to CPU. Production path now uses this acceleration transparently.
+- **Preprocess Rewrite:** Refactored to resize first, fold BGR→RGB into CHW transpose while uint8, fused in-place per-channel normalization (3D array broadcast over CHW planes is 7x faster than HWC). Output stable to 5e-7 vs old implementation. Time: 3.0ms → 0.7ms for 3 frames.
+- **Vectorized DLT Triangulator:** Keypoints grouped by camera-visibility sets, one `cv2.triangulatePoints()` per 2-view group, one stacked numpy SVD per 3+ views. Vectorized reprojection error. Time: 0.64ms → 0.18ms; 3D points and confidence bit-identical to old code within 5e-15.
+- **Benchmark Suite Fixes:** `bench_pose` used synthetic person-free image (MediaPipe fast-path, ~12ms vs real ~65ms) and default model_complexity=1 instead of production 2 — now uses real squat video frames normalized to 1280x720 + production config. `bench_pipeline` called `process_frame()` with no args (TypeError swallowed) — now uses `load_pipeline_config()`, `defer_capture=True`, frame injection via capture lock. `bench_bilstm` lacked required model_path — now uses config's model path/device. All now measure real end-to-end performance.
+- **New Tests:** `tests/test_biomechanics/test_rtmpose.py` — 9 tests for `estimate_batch()` with fake ONNX session, batch padding, alignment, low-confidence None, error cases. All 589 tests passing.
+
+**Validated Results:** Old single-camera MediaPipe path: 69.9ms/frame (14.7 FPS, fails 33.3ms threshold). New multi-camera GPU-batched path: ~14ms/frame (~71 FPS, large headroom for 30 FPS cameras). **5x speedup** while adding true 3-camera triangulation.
+
+#### Prior Changes (Earlier August 2026)
 - **Wake Word Detection System:** Added ONNX-based local wake word detection (`livekit-wakeword`, `pvporcupine`) to voice agent for hands-free activation without cloud STT. 16kHz audio processing with 80ms stride, multi-frame confirmation scoring to reject false positives.
 - **Display Server & Boot Progress UI:** New persistent display server (browser at http://localhost:5000) that opens on startup, shows boot progress milestones (neural cores → voice activity sensors → coaching audio → wake word sentinel → speech engine → conversational reasoning), and publishes live coaching state + biomechanics frames during workouts.
 - **Progress Context Formatting:** Pure text formatters (`progress_context.py`) turn persisted session data into natural language (e.g., "last session 2 days ago, 45 reps, form score 82/100") for the coaching LLM to cite verbatim in greetings and post-set recaps. Trend analysis over 3-4 recent sets.
-- **Enhanced Rep Scoring:** Refactored scoring logic to track temporal consistency, depth variability, and rep quality metrics. Detailed evidence tracking for each rep (depth achieved, trunk control, asymmetry). New `SessionTracker` for multi-set aggregation with phase-aware state management.
-- **Coaching Orchestrator Overhaul:** Unified priority queue (fault cues > rep counts > progress > LLM) with audio ducking — LLM pauses while cached cues play. Centralized routing between biomechanics pipeline IPC and voice agent.
-- **Voice Agent Coaching Loop:** WorkoutAgent now manages active session state, integrates progress context into LLM prompts, and sequences intra-set cues (pre-cached TTS) with post-set LLM summaries. Setup assessment captures stance/toe angle before first rep.
 - **Agent Persona Overhaul:** Refactored all agent prompts (onboarding, main menu, workout, schedule, program creation, coaching) from prescriptive, scripted instructions to natural, conversational guidance. Nova identity and spoken-output rules now centralized (`base_prompt.py`). Added TTS normalizer (`tts_normalizer.py`) to strip markdown, emoji, and symbols from agent speech before audio synthesis. All agents now encouraged to vary responses, avoid repetition, and sound like a real person — not a script.
 
 ### YC Application Readiness

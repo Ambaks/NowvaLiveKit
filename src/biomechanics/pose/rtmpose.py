@@ -47,6 +47,12 @@ HALPE26_RIGHT_BIG_TOE = 21
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
+# Fused normalization: (x/255 - mean)/std == x * SCALE - OFFSET.
+# Shaped (3, 1, 1) so the broadcast runs over contiguous CHW channel
+# planes — broadcasting over the trailing HWC axis is ~7x slower.
+IMAGENET_SCALE_CHW = (1.0 / (255.0 * IMAGENET_STD)).astype(np.float32).reshape(3, 1, 1)
+IMAGENET_OFFSET_CHW = (IMAGENET_MEAN / IMAGENET_STD).astype(np.float32).reshape(3, 1, 1)
+
 # SimCC split ratio (standard for RTMPose)
 SIMCC_SPLIT_RATIO = 2.0
 
@@ -72,8 +78,12 @@ class RTMPoseEstimator(PoseEstimator):
         confidence_threshold: float = 0.3,
         model_path: Optional[str] = None,
         keypoint_format: str = "coco17",
+        batch_size: int = 1,
     ):
         super().__init__(confidence_threshold)
+
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
         if not ONNXRUNTIME_AVAILABLE:
             raise ImportError(
@@ -93,6 +103,7 @@ class RTMPoseEstimator(PoseEstimator):
         else:
             self._model_path = DEFAULT_MODEL_DIR / default_name
 
+        self._batch_size = batch_size
         self._session: Optional["ort.InferenceSession"] = None
         self._input_name: Optional[str] = None
         self._frame_index = 0
@@ -115,7 +126,12 @@ class RTMPoseEstimator(PoseEstimator):
         if "CUDAExecutionProvider" in available:
             providers.append("CUDAExecutionProvider")
         if "CoreMLExecutionProvider" in available:
-            providers.append("CoreMLExecutionProvider")
+            # MLProgram format runs ~30% faster than the legacy
+            # NeuralNetwork format and matches CPU decode results exactly.
+            providers.append((
+                "CoreMLExecutionProvider",
+                {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"},
+            ))
         providers.append("CPUExecutionProvider")
 
         logger.info("Loading RTMPose from %s", self._model_path)
@@ -160,24 +176,33 @@ class RTMPoseEstimator(PoseEstimator):
         """
         orig_h, orig_w = frame.shape[:2]
 
-        # BGR -> RGB
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Resize first so all later ops run on the small 192x256 image;
+        # BGR->RGB is folded into the CHW transpose while still uint8.
+        resized = cv2.resize(frame, (self.INPUT_WIDTH, self.INPUT_HEIGHT))
+        chw = np.ascontiguousarray(resized.transpose(2, 0, 1)[::-1])
 
-        # Resize to model input size
-        resized = cv2.resize(rgb, (self.INPUT_WIDTH, self.INPUT_HEIGHT))
-
-        # Normalize: float32, /255, ImageNet mean/std
-        blob = resized.astype(np.float32) / 255.0
-        blob = (blob - IMAGENET_MEAN) / IMAGENET_STD
-
-        # HWC -> CHW -> NCHW
-        blob = blob.transpose(2, 0, 1)
-        blob = np.expand_dims(blob, axis=0).astype(np.float32)
+        # Fused in-place normalize: (x/255 - mean)/std per channel plane
+        blob = chw.astype(np.float32)
+        blob *= IMAGENET_SCALE_CHW
+        blob -= IMAGENET_OFFSET_CHW
+        blob = blob[np.newaxis]
 
         scale_x = orig_w / self.INPUT_WIDTH
         scale_y = orig_h / self.INPUT_HEIGHT
 
         return blob, scale_x, scale_y
+
+    def _run_padded(self, batch: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        # Pad to a constant batch shape: CoreML compiles the model for the
+        # first input shape it sees and fails on any other shape afterward.
+        num_real = batch.shape[0]
+        if num_real < self._batch_size:
+            pad = np.repeat(batch[-1:], self._batch_size - num_real, axis=0)
+            batch = np.concatenate([batch, pad], axis=0)
+
+        outputs = self._session.run(None, {self._input_name: batch})
+        x_logits, y_logits = outputs[0], outputs[1]
+        return x_logits[:num_real], y_logits[:num_real]
 
     def _decode_simcc(
         self,
@@ -274,8 +299,7 @@ class RTMPoseEstimator(PoseEstimator):
 
         blob, scale_x, scale_y = self._preprocess(frame)
 
-        outputs = self._session.run(None, {self._input_name: blob})
-        x_logits, y_logits = outputs[0], outputs[1]
+        x_logits, y_logits = self._run_padded(blob)
 
         kpts = self._decode_simcc(x_logits, y_logits, scale_x, scale_y)
 
@@ -283,6 +307,54 @@ class RTMPoseEstimator(PoseEstimator):
         self._frame_index += 1
 
         return self._kpts_to_skeleton2d(kpts, timestamp)
+
+    def estimate_batch(self, frames: list[np.ndarray]) -> list[Optional[Skeleton2D]]:
+        """
+        Estimate 2D poses for multiple frames in a single GPU inference call.
+
+        Frames are stacked along the batch dimension and run through one
+        session.run(), so N camera views cost one inference instead of N.
+        len(frames) must not exceed the batch_size given at construction.
+
+        Args:
+            frames: List of BGR images, each (H, W, 3)
+
+        Returns:
+            List of Skeleton2D (or None where no person was detected),
+            aligned with the input frames. All skeletons in one batch share
+            the same timestamp and frame_index.
+        """
+        if len(frames) > self._batch_size:
+            raise ValueError(
+                f"Got {len(frames)} frames but batch_size is {self._batch_size}. "
+                f"Construct RTMPoseEstimator with batch_size >= the number of cameras."
+            )
+        if not frames:
+            return []
+
+        if not self._initialized:
+            if not self.initialize():
+                return [None] * len(frames)
+
+        blobs = []
+        scales = []
+        for frame in frames:
+            blob, scale_x, scale_y = self._preprocess(frame)
+            blobs.append(blob)
+            scales.append((scale_x, scale_y))
+
+        x_logits, y_logits = self._run_padded(np.concatenate(blobs, axis=0))
+
+        timestamp = time.time()
+        skeletons = []
+        for i, (scale_x, scale_y) in enumerate(scales):
+            kpts = self._decode_simcc(
+                x_logits[i : i + 1], y_logits[i : i + 1], scale_x, scale_y
+            )
+            skeletons.append(self._kpts_to_skeleton2d(kpts, timestamp))
+        self._frame_index += 1
+
+        return skeletons
 
     def estimate_3d(self, frame: np.ndarray) -> Optional[Skeleton3D]:
         """
